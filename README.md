@@ -1,6 +1,7 @@
 # oochat for Android
 
-[![CI](https://github.com/openonion/oochat-android/actions/workflows/ci.yml/badge.svg)](https://github.com/openonion/oochat-android/actions/workflows/ci.yml)
+[![Build & Test](https://github.com/openonion/oochat-android/actions/workflows/build.yml/badge.svg)](https://github.com/openonion/oochat-android/actions/workflows/build.yml)
+[![Pre-publication audit](https://github.com/openonion/oochat-android/actions/workflows/audit.yml/badge.svg)](https://github.com/openonion/oochat-android/actions/workflows/audit.yml)
 
 Native Android chat client for [ConnectOnion](https://docs.connectonion.com/)
 agents, built with Kotlin and Jetpack Compose. Connect to an agent by its `0x…`
@@ -108,6 +109,14 @@ Screenshot baselines are checked with
 ```bash
 ./gradlew :app:verifyRoborazziDebug
 ```
+
+> **The committed baselines are stale and CI does not check them.** A fixture in
+> `SettingsScreenshotTest` was changed during the rebrand, so the baseline images
+> no longer match what the test renders, and `verifyRoborazziDebug` is not run in
+> CI. Nothing else covers this either — baselines are PNGs, and the
+> pre-publication audit does not read images. Regenerate them with
+> `./gradlew :app:recordRoborazziDebug` on a machine with the Android SDK before
+> relying on screenshot coverage.
 
 See [INSTALL.md](INSTALL.md) for a clean-machine walkthrough and
 [USER_GUIDE.md](USER_GUIDE.md) for the app itself.

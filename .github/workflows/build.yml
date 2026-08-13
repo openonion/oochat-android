@@ -64,6 +64,22 @@ jobs:
             exit 1
           fi
 
+      # Screenshot baselines are NOT verified here, and that is a known gap
+      # rather than an oversight.
+      #
+      # `verifyRoborazziDebug` would fail today: SettingsScreenshotTest's API_KEY
+      # fixture was changed during the rebrand (a value shaped like a live key was
+      # replaced with a masked one), so the committed baseline PNGs no longer match
+      # what the test renders. Regenerating them needs an Android SDK.
+      #
+      # Nothing else catches this: the baselines are PNGs, and the pre-publication
+      # audit excludes images, so the old fixture string may still exist as pixels
+      # inside them. A green run of this workflow says nothing about the baselines.
+      #
+      # To close it: run `./gradlew :app:recordRoborazziDebug` on a machine with the
+      # SDK, commit the regenerated baselines, then add a `verifyRoborazziDebug`
+      # step here — in its OWN gradlew invocation, for the reason described above.
+
       - name: Generate JaCoCo coverage report
         if: always()
         run: ./gradlew :app:jacocoTestReport
