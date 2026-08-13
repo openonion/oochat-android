@@ -1,12 +1,12 @@
 package ai.openonion.oochat.data.repository
 
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.local.db.entity.AgentEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import ai.openonion.oochat.data.protocol.SessionMessage
 import ai.openonion.oochat.data.protocol.SessionState
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals

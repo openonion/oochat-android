@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.logs
 
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.statusColors
+import ai.openonion.oochat.util.FileLogger
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -55,9 +58,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.ui.theme.statusColors
-import ai.openonion.oochat.util.FileLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

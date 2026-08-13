@@ -1,5 +1,12 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ApprovalDecision
+import ai.openonion.oochat.domain.model.BatchToolPreview
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.summarizeToolCall
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,13 +49,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ApprovalDecision
-import ai.openonion.oochat.domain.model.BatchToolPreview
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.summarizeToolCall
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull

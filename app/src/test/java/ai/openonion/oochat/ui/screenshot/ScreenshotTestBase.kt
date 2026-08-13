@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.screenshot
 
+import ai.openonion.oochat.domain.model.ThemeMode
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
@@ -7,8 +9,6 @@ import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
-import ai.openonion.oochat.domain.model.ThemeMode
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.rules.ExternalResource
 import java.util.Locale
 import java.util.TimeZone

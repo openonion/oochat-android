@@ -1,5 +1,12 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.data.repository.EncryptedPreferencesConnectionConfigRepository
+import ai.openonion.oochat.ui.chat.ChatScreen
+import ai.openonion.oochat.ui.chat.ChatViewModel
+import ai.openonion.oochat.ui.onboarding.OnboardingScreen
+import ai.openonion.oochat.ui.recovery.RecoveryScreen
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import android.app.Application
 import android.content.Context
 import androidx.compose.runtime.LaunchedEffect
@@ -17,13 +24,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.data.repository.EncryptedPreferencesConnectionConfigRepository
-import ai.openonion.oochat.ui.chat.ChatScreen
-import ai.openonion.oochat.ui.chat.ChatViewModel
-import ai.openonion.oochat.ui.onboarding.OnboardingScreen
-import ai.openonion.oochat.ui.recovery.RecoveryScreen
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue

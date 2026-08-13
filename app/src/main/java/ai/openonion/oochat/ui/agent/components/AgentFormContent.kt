@@ -1,5 +1,11 @@
 package ai.openonion.oochat.ui.agent.components
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.ui.components.AgentInitialsAvatar
+import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
@@ -53,12 +59,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.ui.components.AgentInitialsAvatar
-import ai.openonion.oochat.ui.components.PillTextField
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Shared 12dp rounded shape — matches the Figma design's uniform 12px-radius

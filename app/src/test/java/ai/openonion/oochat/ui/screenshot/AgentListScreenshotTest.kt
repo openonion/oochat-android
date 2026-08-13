@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.screenshot
 
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.ui.agent.AgentListScreen
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
@@ -7,8 +9,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.performClick
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.ui.agent.AgentListScreen
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

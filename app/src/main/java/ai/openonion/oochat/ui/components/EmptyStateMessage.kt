@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.components
 
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Centered empty/error-state skeleton: an [icon] slot (each feature keeps

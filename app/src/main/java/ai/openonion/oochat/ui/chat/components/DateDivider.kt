@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,7 +14,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Day separator between messages. The label ("Today"/"Yesterday"/"March 4") is

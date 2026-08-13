@@ -1,5 +1,7 @@
 package ai.openonion.oochat.network
 
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -10,8 +12,6 @@ import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.annotation.RequiresApi
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow

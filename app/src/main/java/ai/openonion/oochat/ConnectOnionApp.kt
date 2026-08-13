@@ -1,5 +1,11 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.di.appContainer
+import ai.openonion.oochat.ui.navigation.NavigationGraph
+import ai.openonion.oochat.ui.navigation.Routes
+import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.runCatchingCancellable
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -35,12 +41,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.rememberNavController
-import ai.openonion.oochat.di.appContainer
-import ai.openonion.oochat.ui.navigation.NavigationGraph
-import ai.openonion.oochat.ui.navigation.Routes
-import ai.openonion.oochat.ui.theme.Motion
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch

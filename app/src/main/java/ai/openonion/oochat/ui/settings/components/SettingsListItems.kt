@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.domain.model.ThemeMode
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,9 +41,6 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ThemeMode
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.spacing
 import java.util.Locale
 
 /**

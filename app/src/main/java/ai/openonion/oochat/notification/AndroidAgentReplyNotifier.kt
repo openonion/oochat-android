@@ -1,5 +1,8 @@
 package ai.openonion.oochat.notification
 
+import ai.openonion.oochat.MainActivity
+import ai.openonion.oochat.R
+import ai.openonion.oochat.data.local.AgentReplyNotifier
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,9 +11,6 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import ai.openonion.oochat.MainActivity
-import ai.openonion.oochat.R
-import ai.openonion.oochat.data.local.AgentReplyNotifier
 
 /** Shared with SettingsScreen's "Notification sound" row, which opens the OS's own settings for this channel. */
 const val AGENT_REPLY_CHANNEL_ID = "agent_replies"

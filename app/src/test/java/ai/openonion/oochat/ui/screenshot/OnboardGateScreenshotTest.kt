@@ -1,12 +1,12 @@
 package ai.openonion.oochat.ui.screenshot
 
+import ai.openonion.oochat.ui.chat.components.ONBOARD_VERIFY_TIMEOUT_MS
+import ai.openonion.oochat.ui.chat.components.OnboardGateCard
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
-import ai.openonion.oochat.ui.chat.components.ONBOARD_VERIFY_TIMEOUT_MS
-import ai.openonion.oochat.ui.chat.components.OnboardGateCard
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

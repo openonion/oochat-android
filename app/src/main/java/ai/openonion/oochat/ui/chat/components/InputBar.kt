@@ -1,5 +1,10 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.AgentSkill
+import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionUsageTotals
+import ai.openonion.oochat.ui.common.rememberPermissionGate
+import ai.openonion.oochat.ui.theme.spacing
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -40,11 +45,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
-import ai.openonion.oochat.domain.model.AgentSkill
-import ai.openonion.oochat.domain.model.ApprovalMode
-import ai.openonion.oochat.domain.model.SessionUsageTotals
-import ai.openonion.oochat.ui.common.rememberPermissionGate
-import ai.openonion.oochat.ui.theme.spacing
 import kotlinx.coroutines.delay
 import java.io.File
 

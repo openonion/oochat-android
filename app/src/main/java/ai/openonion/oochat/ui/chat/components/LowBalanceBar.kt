@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -24,9 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 
 /**
  * Below one dollar an agent is a turn or two from refusing, close enough that

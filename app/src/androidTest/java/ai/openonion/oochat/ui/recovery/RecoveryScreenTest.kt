@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.recovery
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.di.FakeConnectionConfigRepository
 import android.app.Application
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
@@ -7,8 +9,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.di.FakeConnectionConfigRepository
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test

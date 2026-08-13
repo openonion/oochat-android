@@ -1,14 +1,5 @@
 package ai.openonion.oochat.ui.chat
 
-import android.app.Application
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.local.AppSettings
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.local.IgnoredIdsManager
@@ -35,6 +26,15 @@ import ai.openonion.oochat.network.NetworkMonitor
 import ai.openonion.oochat.ui.perf.BodyExecutionProbe
 import ai.openonion.oochat.ui.perf.RecompositionRecorder
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import android.app.Application
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow

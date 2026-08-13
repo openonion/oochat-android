@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.ui.common.FontSizeOption
+import ai.openonion.oochat.ui.components.AssistantAvatar
+import ai.openonion.oochat.ui.theme.bubbleShape
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,10 +35,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openonion.oochat.ui.common.FontSizeOption
-import ai.openonion.oochat.ui.components.AssistantAvatar
-import ai.openonion.oochat.ui.theme.bubbleShape
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Bottom sheet with a live-preview card + slider for choosing the app's font size.

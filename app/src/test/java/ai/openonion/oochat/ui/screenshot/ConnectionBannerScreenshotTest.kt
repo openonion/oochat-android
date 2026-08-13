@@ -1,9 +1,9 @@
 package ai.openonion.oochat.ui.screenshot
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import ai.openonion.oochat.domain.model.ConnectionState
 import ai.openonion.oochat.ui.components.ConnectionBanner
+import androidx.compose.ui.test.junit4.createComposeRule
+import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

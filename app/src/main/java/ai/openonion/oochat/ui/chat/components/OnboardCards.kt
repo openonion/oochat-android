@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -49,8 +51,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.ui.theme.spacing
 import kotlinx.coroutines.delay
 
 /**

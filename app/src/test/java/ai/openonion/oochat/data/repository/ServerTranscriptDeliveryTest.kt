@@ -1,6 +1,5 @@
 package ai.openonion.oochat.data.repository
 
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.protocol.FileAttachment
 import ai.openonion.oochat.data.protocol.SessionState
@@ -9,6 +8,7 @@ import ai.openonion.oochat.network.AgentConnection
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.network.QueuedMessage
 import ai.openonion.oochat.network.WebSocketFactory
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

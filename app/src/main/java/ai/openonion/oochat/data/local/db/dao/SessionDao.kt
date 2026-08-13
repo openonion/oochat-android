@@ -1,10 +1,10 @@
 package ai.openonion.oochat.data.local.db.dao
 
+import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao

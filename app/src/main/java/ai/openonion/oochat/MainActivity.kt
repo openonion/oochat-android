@@ -1,5 +1,11 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.data.local.ThemePreferences
+import ai.openonion.oochat.domain.model.ThemeMode
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import ai.openonion.oochat.ui.theme.LocalThemeController
+import ai.openonion.oochat.ui.theme.ThemeController
+import ai.openonion.oochat.util.FileLogger
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,12 +16,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import ai.openonion.oochat.data.local.ThemePreferences
-import ai.openonion.oochat.domain.model.ThemeMode
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
-import ai.openonion.oochat.ui.theme.LocalThemeController
-import ai.openonion.oochat.ui.theme.ThemeController
-import ai.openonion.oochat.util.FileLogger
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {

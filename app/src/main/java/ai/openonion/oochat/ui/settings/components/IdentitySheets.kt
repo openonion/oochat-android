@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -42,9 +45,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.spacing
 import kotlinx.coroutines.delay
 
 /**

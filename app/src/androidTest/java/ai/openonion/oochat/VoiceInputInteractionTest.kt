@@ -1,5 +1,9 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.ui.chat.components.InputBar
+import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
+import ai.openonion.oochat.ui.chat.components.VoiceInputState
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasContentDescription
@@ -8,10 +12,6 @@ import androidx.compose.ui.test.isNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import ai.openonion.oochat.ui.chat.components.InputBar
-import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
-import ai.openonion.oochat.ui.chat.components.VoiceInputState
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

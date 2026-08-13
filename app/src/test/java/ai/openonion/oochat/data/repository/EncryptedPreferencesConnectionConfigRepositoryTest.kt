@@ -1,7 +1,7 @@
 package ai.openonion.oochat.data.repository
 
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.local.ConnectionConfig
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals

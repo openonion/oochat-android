@@ -1,11 +1,11 @@
 package ai.openonion.oochat.network
 
-import android.util.Base64
 import ai.openonion.oochat.Constants
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.di.sharedHttpClient
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName

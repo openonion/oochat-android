@@ -1,8 +1,5 @@
 package ai.openonion.oochat.ui.agent
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.AgentDiscoveryRepository
 import ai.openonion.oochat.data.repository.AgentRepository
@@ -17,6 +14,9 @@ import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.ui.common.launchScoped
 import ai.openonion.oochat.util.runCatchingCancellable
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow

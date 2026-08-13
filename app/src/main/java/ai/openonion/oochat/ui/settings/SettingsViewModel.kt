@@ -1,12 +1,5 @@
 package ai.openonion.oochat.ui.settings
 
-import android.Manifest
-import android.app.Application
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
@@ -17,6 +10,13 @@ import ai.openonion.oochat.di.appContainer
 import ai.openonion.oochat.ui.common.launchScoped
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
+import android.Manifest
+import android.app.Application
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted

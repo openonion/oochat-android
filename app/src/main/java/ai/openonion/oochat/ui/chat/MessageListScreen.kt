@@ -1,5 +1,11 @@
 package ai.openonion.oochat.ui.chat
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.ui.chat.components.ChatItemBubble
+import ai.openonion.oochat.ui.chat.components.DateDivider
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -33,12 +39,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ThinkingStatus
-import ai.openonion.oochat.domain.model.UserMessageState
-import ai.openonion.oochat.ui.chat.components.ChatItemBubble
-import ai.openonion.oochat.ui.chat.components.DateDivider
-import ai.openonion.oochat.ui.theme.spacing
 import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.time.LocalDate

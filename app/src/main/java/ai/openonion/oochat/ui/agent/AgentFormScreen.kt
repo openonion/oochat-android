@@ -1,5 +1,21 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.domain.model.AgentLiveProfile
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.domain.model.AppError
+import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
+import ai.openonion.oochat.ui.agent.components.AgentFormContent
+import ai.openonion.oochat.ui.agent.components.AgentFormState
+import ai.openonion.oochat.ui.agent.components.EmbeddedDiscoveryPanel
+import ai.openonion.oochat.ui.agent.components.FormFieldShape
+import ai.openonion.oochat.ui.agent.components.formFieldColors
+import ai.openonion.oochat.ui.agent.components.formFieldTextStyle
+import ai.openonion.oochat.ui.components.BackTopAppBar
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.DangerConfirmActions
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -36,22 +52,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.AgentLiveProfile
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.domain.model.AppError
-import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
-import ai.openonion.oochat.ui.agent.components.AgentFormContent
-import ai.openonion.oochat.ui.agent.components.AgentFormState
-import ai.openonion.oochat.ui.agent.components.EmbeddedDiscoveryPanel
-import ai.openonion.oochat.ui.agent.components.FormFieldShape
-import ai.openonion.oochat.ui.agent.components.formFieldColors
-import ai.openonion.oochat.ui.agent.components.formFieldTextStyle
-import ai.openonion.oochat.ui.components.BackTopAppBar
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Screen for adding or editing an agent.

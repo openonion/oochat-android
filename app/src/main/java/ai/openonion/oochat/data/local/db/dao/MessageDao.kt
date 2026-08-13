@@ -1,10 +1,10 @@
 package ai.openonion.oochat.data.local.db.dao
 
+import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 
 @Dao
 interface MessageDao {

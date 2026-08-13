@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.loading
 
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -63,9 +66,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.Motion
-import ai.openonion.oochat.ui.theme.spacing
 
 /** How long the success checkmark is held before handing off to the chat route. */
 private const val SUCCESS_HOLD_MS = 250L

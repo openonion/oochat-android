@@ -1,8 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
-import androidx.compose.runtime.Composable
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import androidx.compose.runtime.Composable
 
 @Composable
 internal fun ChatItemBubble(

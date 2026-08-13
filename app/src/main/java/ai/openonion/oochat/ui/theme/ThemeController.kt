@@ -1,7 +1,7 @@
 package ai.openonion.oochat.ui.theme
 
-import androidx.compose.runtime.staticCompositionLocalOf
 import ai.openonion.oochat.domain.model.ThemeMode
+import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
  * Holds the current [ThemeMode] and a setter, exposed via [LocalThemeController]

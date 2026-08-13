@@ -1,9 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

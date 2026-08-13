@@ -1,8 +1,8 @@
 package ai.openonion.oochat.di
 
+import ai.openonion.oochat.data.local.SafePreferencesWrapper
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import ai.openonion.oochat.data.local.SafePreferencesWrapper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull

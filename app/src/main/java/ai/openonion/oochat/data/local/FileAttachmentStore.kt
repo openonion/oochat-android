@@ -1,13 +1,13 @@
 package ai.openonion.oochat.data.local
 
+import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Base64OutputStream
-import ai.openonion.oochat.domain.model.OutgoingFileAttachment
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream

@@ -1,5 +1,14 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ToolStatus
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.statusColors
+import ai.openonion.oochat.util.DiffLineType
+import ai.openonion.oochat.util.DiffUtil
+import ai.openonion.oochat.util.GrepResultParser
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,15 +34,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ToolStatus
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.ui.theme.statusColors
-import ai.openonion.oochat.util.DiffLineType
-import ai.openonion.oochat.util.DiffUtil
-import ai.openonion.oochat.util.GrepResultParser
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Tool-name dispatch for [ChatItem.ToolCall], mirroring oo-chat-web's

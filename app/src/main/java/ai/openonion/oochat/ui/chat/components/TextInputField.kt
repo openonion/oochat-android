@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.InputBarToken
+import ai.openonion.oochat.ui.theme.chatBody
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -31,9 +34,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openonion.oochat.ui.theme.InputBarToken
-import ai.openonion.oochat.ui.theme.chatBody
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Default action, so enter stays a newline: Send is in the pill in every state,

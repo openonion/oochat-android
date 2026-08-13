@@ -1,12 +1,12 @@
 package ai.openonion.oochat.data.local.db
 
+import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
 import android.content.Context
 import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
-import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals

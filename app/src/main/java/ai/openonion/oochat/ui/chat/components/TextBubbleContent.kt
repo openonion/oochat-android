@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.chat.markdown.MarkdownRenderer
+import ai.openonion.oochat.ui.theme.MessageBubbleToken
+import ai.openonion.oochat.ui.theme.bubbleShape
+import ai.openonion.oochat.ui.theme.chatBody
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -11,10 +15,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.chat.markdown.MarkdownRenderer
-import ai.openonion.oochat.ui.theme.MessageBubbleToken
-import ai.openonion.oochat.ui.theme.bubbleShape
-import ai.openonion.oochat.ui.theme.chatBody
 
 @Composable
 internal fun TextBubbleContent(

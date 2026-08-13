@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.DangerConfirmActions
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Button
@@ -14,9 +17,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.theme.spacing
 
 /** Bottom sheet with a free-text field for custom AI instructions. */
 @OptIn(ExperimentalMaterial3Api::class)

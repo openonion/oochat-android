@@ -1,7 +1,5 @@
 package ai.openonion.oochat.domain.usecase
 
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.local.db.entity.AgentEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
@@ -17,6 +15,8 @@ import ai.openonion.oochat.domain.model.sessionUsageTotals
 import ai.openonion.oochat.domain.model.stableAssistantId
 import ai.openonion.oochat.network.ConnectionEvent
 import ai.openonion.oochat.network.ProtocolParser
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher

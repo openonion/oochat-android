@@ -1,12 +1,12 @@
 package ai.openonion.oochat.ui.screenshot
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.test.core.app.ApplicationProvider
-import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.ui.recovery.RecoveryScreen
 import ai.openonion.oochat.ui.recovery.RecoveryViewModel
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.core.app.ApplicationProvider
+import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Rule

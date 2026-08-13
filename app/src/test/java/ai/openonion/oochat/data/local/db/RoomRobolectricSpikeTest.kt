@@ -1,8 +1,8 @@
 package ai.openonion.oochat.data.local.db
 
+import ai.openonion.oochat.data.local.db.entity.AgentEntity
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
-import ai.openonion.oochat.data.local.db.entity.AgentEntity
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals

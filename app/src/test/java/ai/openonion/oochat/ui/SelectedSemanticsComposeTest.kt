@@ -1,11 +1,5 @@
 package ai.openonion.oochat.ui
 
-import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.isNotSelected
-import androidx.compose.ui.test.isSelected
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
 import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ThemeMode
@@ -14,6 +8,12 @@ import ai.openonion.oochat.ui.agent.components.ModeToggleButton
 import ai.openonion.oochat.ui.chat.components.ApprovalModeSheet
 import ai.openonion.oochat.ui.settings.components.ThemeModeRow
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.isNotSelected
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

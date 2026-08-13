@@ -1,6 +1,5 @@
 package ai.openonion.oochat.domain.usecase
 
-import androidx.room.withTransaction
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.local.db.dao.MessageDao
 import ai.openonion.oochat.data.local.db.dao.SessionDao
@@ -9,6 +8,7 @@ import ai.openonion.oochat.data.local.mapper.MessageMapper
 import ai.openonion.oochat.data.local.mapper.TranscriptItemCodec
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.Role
+import androidx.room.withTransaction
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 

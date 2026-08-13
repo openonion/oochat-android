@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.ImageGridToken
+import ai.openonion.oochat.ui.theme.MessageBubbleToken
+import ai.openonion.oochat.ui.theme.bubbleShape
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import android.util.Base64
@@ -21,9 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import ai.openonion.oochat.ui.theme.ImageGridToken
-import ai.openonion.oochat.ui.theme.MessageBubbleToken
-import ai.openonion.oochat.ui.theme.bubbleShape
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 

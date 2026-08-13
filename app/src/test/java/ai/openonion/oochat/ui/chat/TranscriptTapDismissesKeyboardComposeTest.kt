@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.chat
 
+import ai.openonion.oochat.domain.model.ChatItem
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.requiredHeight
@@ -23,7 +24,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

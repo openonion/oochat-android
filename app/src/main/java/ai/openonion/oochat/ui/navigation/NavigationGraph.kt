@@ -1,5 +1,20 @@
 package ai.openonion.oochat.ui.navigation
 
+import ai.openonion.oochat.network.AgentDiscoveryService
+import ai.openonion.oochat.ui.agent.AgentDiscoveryScreenWrapper
+import ai.openonion.oochat.ui.agent.AgentEditScreenWrapper
+import ai.openonion.oochat.ui.agent.AgentListScreenWrapper
+import ai.openonion.oochat.ui.chat.ChatScreen
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.DangerConfirmActions
+import ai.openonion.oochat.ui.dashboard.DashboardScreenWrapper
+import ai.openonion.oochat.ui.loading.LoadingScreen
+import ai.openonion.oochat.ui.logs.LogsScreen
+import ai.openonion.oochat.ui.onboarding.OnboardingScreen
+import ai.openonion.oochat.ui.recovery.RecoveryScreen
+import ai.openonion.oochat.ui.settings.SettingsScreen
+import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.util.truncateMiddle
 import android.net.Uri
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
@@ -29,21 +44,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
-import ai.openonion.oochat.network.AgentDiscoveryService
-import ai.openonion.oochat.ui.agent.AgentDiscoveryScreenWrapper
-import ai.openonion.oochat.ui.agent.AgentEditScreenWrapper
-import ai.openonion.oochat.ui.agent.AgentListScreenWrapper
-import ai.openonion.oochat.ui.chat.ChatScreen
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.dashboard.DashboardScreenWrapper
-import ai.openonion.oochat.ui.loading.LoadingScreen
-import ai.openonion.oochat.ui.logs.LogsScreen
-import ai.openonion.oochat.ui.onboarding.OnboardingScreen
-import ai.openonion.oochat.ui.recovery.RecoveryScreen
-import ai.openonion.oochat.ui.settings.SettingsScreen
-import ai.openonion.oochat.ui.theme.Motion
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Navigation routes for the application.

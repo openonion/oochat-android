@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,8 +17,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test

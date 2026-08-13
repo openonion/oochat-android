@@ -1,5 +1,14 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.ui.components.AgentInitialsAvatar
+import ai.openonion.oochat.ui.components.BackTopAppBar
+import ai.openonion.oochat.ui.components.EmptyStateMessage
+import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.sectionOverline
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -66,15 +75,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.ui.components.AgentInitialsAvatar
-import ai.openonion.oochat.ui.components.BackTopAppBar
-import ai.openonion.oochat.ui.components.EmptyStateMessage
-import ai.openonion.oochat.ui.components.PillTextField
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.sectionOverline
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 import java.util.Locale
 
 /**

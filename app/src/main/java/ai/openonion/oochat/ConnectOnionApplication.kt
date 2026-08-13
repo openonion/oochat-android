@@ -1,13 +1,13 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.di.AppContainer
+import ai.openonion.oochat.di.DefaultAppContainer
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.memory.MemoryCache
-import ai.openonion.oochat.di.AppContainer
-import ai.openonion.oochat.di.DefaultAppContainer
 
 /**
  * Named `ConnectOnionApplication` (not `ConnectOnionApp`) to avoid colliding

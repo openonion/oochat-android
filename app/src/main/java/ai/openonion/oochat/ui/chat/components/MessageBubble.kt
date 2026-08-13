@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatFileAttachment
+import ai.openonion.oochat.ui.components.AssistantAvatar
+import ai.openonion.oochat.ui.theme.MessageBubbleToken
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
@@ -21,10 +25,6 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatFileAttachment
-import ai.openonion.oochat.ui.components.AssistantAvatar
-import ai.openonion.oochat.ui.theme.MessageBubbleToken
-import ai.openonion.oochat.ui.theme.spacing
 import kotlin.math.roundToInt
 
 /**

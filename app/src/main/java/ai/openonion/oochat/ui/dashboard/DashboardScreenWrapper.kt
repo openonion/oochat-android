@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.dashboard
 
+import ai.openonion.oochat.ui.chat.ChatViewModel
 import android.app.Application
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -9,7 +10,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ai.openonion.oochat.ui.chat.ChatViewModel
 
 /**
  * Binds [DashboardScreen] to the chat this dashboard belongs to.

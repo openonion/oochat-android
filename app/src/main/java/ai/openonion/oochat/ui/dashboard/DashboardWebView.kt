@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.dashboard
 
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.annotation.SuppressLint
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -11,8 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 
 /**
  * Hosts one agent-authored dashboard in a locked-down [WebView].

@@ -1,5 +1,15 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.domain.model.AgentStatus
+import ai.openonion.oochat.ui.common.rememberClipboard
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.DangerConfirmActions
+import ai.openonion.oochat.ui.components.EmptyStateMessage
+import ai.openonion.oochat.ui.components.agentStatusColor
+import ai.openonion.oochat.ui.theme.sectionOverline
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -68,16 +78,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.domain.model.AgentStatus
-import ai.openonion.oochat.ui.common.rememberClipboard
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.components.EmptyStateMessage
-import ai.openonion.oochat.ui.components.agentStatusColor
-import ai.openonion.oochat.ui.theme.sectionOverline
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState

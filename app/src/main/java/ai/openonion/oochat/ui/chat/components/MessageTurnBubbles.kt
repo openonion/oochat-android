@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,10 +35,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ThinkingStatus
-import ai.openonion.oochat.domain.model.UserMessageState
-import ai.openonion.oochat.ui.theme.spacing
 
 @Composable
 internal fun UserBubble(

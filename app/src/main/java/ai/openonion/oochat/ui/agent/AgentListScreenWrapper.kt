@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.di.appContainer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -22,8 +24,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.di.appContainer
 import kotlinx.coroutines.launch
 
 /**

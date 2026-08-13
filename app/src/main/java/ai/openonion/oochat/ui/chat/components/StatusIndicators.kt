@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.statusColors
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -21,8 +23,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.ui.theme.statusColors
 
 /**
  * The 3 states shared by [ToolStatus]/[ThinkingStatus]/etc.-driven

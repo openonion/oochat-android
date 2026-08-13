@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.components.AssistantAvatar
+import ai.openonion.oochat.ui.theme.bubbleShape
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
@@ -29,9 +32,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.components.AssistantAvatar
-import ai.openonion.oochat.ui.theme.bubbleShape
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * "Agent is typing" indicator: avatar + label + a pill bubble with 3 dots

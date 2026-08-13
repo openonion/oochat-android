@@ -1,13 +1,13 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

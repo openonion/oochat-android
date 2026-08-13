@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import android.text.InputType
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -21,7 +22,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull

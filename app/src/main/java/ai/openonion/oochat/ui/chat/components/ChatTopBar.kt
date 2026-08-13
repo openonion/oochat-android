@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.ConnectionStatusDot
+import ai.openonion.oochat.ui.components.DangerConfirmActions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,10 +41,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ConnectionState
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.ConnectionStatusDot
-import ai.openonion.oochat.ui.components.DangerConfirmActions
 
 /**
  * Header mirrors Figma: hamburger opens the drawer, title row (status dot +

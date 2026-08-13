@@ -1,7 +1,5 @@
 package ai.openonion.oochat.data.repository
 
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.protocol.FileAttachment
@@ -9,6 +7,8 @@ import ai.openonion.oochat.network.AgentConnection
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.network.QueuedMessage
 import ai.openonion.oochat.network.WebSocketFactory
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import okhttp3.Request
 import okhttp3.WebSocket

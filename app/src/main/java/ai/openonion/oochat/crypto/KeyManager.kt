@@ -1,5 +1,8 @@
 package ai.openonion.oochat.crypto
 
+import ai.openonion.oochat.data.local.SafePreferencesWrapper
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.content.Context
 import android.content.SharedPreferences
 import cash.z.ecc.android.bip39.Mnemonics
@@ -7,9 +10,6 @@ import cash.z.ecc.android.bip39.toSeed
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import com.goterl.lazysodium.interfaces.Sign
-import ai.openonion.oochat.data.local.SafePreferencesWrapper
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull

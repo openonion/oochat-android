@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.recovery
 
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.background
@@ -40,8 +42,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.spacing
 
 // "below" would be wrong now that the saved config sits behind a "View saved
 // config" toggle rather than in a card under this message.

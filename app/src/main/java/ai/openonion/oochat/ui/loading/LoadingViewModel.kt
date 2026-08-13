@@ -1,8 +1,5 @@
 package ai.openonion.oochat.ui.loading
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import ai.openonion.oochat.data.local.toConnectTarget
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.di.appContainer
@@ -12,6 +9,9 @@ import ai.openonion.oochat.domain.model.ConnectionState
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.ResumableConversationLookup
 import ai.openonion.oochat.domain.usecase.ResumableConversationUseCase
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async

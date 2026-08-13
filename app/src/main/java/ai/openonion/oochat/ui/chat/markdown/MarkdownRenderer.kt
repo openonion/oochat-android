@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.chat.markdown
 
+import ai.openonion.oochat.ui.theme.chatBody
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,7 +33,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.chatBody
 
 object MarkdownRenderer {
     @Composable

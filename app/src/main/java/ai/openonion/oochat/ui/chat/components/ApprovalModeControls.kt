@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,9 +57,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ApprovalMode
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * The tool-approval mode control that sits above the chat input.

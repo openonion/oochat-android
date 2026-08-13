@@ -1,5 +1,8 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.data.repository.EncryptedPreferencesConnectionConfigRepository
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import android.content.Context
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -8,9 +11,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.data.repository.EncryptedPreferencesConnectionConfigRepository
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import kotlinx.coroutines.runBlocking
 import okhttp3.Response
 import okhttp3.WebSocket

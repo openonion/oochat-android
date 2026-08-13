@@ -1,5 +1,19 @@
 package ai.openonion.oochat.ui.chat
 
+import ai.openonion.oochat.domain.model.AgentSkill
+import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionUsageTotals
+import ai.openonion.oochat.ui.chat.components.ChatTopBar
+import ai.openonion.oochat.ui.chat.components.InputBar
+import ai.openonion.oochat.ui.chat.components.LowBalanceBar
+import ai.openonion.oochat.ui.chat.components.VoiceInputState
+import ai.openonion.oochat.ui.common.appViewModel
+import ai.openonion.oochat.ui.components.ConnectionBanner
+import ai.openonion.oochat.ui.navigation.DrawerAgentSection
+import ai.openonion.oochat.ui.navigation.NavDrawer
+import ai.openonion.oochat.ui.navigation.NavDrawerWidth
+import ai.openonion.oochat.ui.theme.LocalThemeController
+import ai.openonion.oochat.util.SoundEffectPlayer
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -47,20 +61,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import ai.openonion.oochat.domain.model.AgentSkill
-import ai.openonion.oochat.domain.model.ApprovalMode
-import ai.openonion.oochat.domain.model.SessionUsageTotals
-import ai.openonion.oochat.ui.chat.components.ChatTopBar
-import ai.openonion.oochat.ui.chat.components.InputBar
-import ai.openonion.oochat.ui.chat.components.LowBalanceBar
-import ai.openonion.oochat.ui.chat.components.VoiceInputState
-import ai.openonion.oochat.ui.common.appViewModel
-import ai.openonion.oochat.ui.components.ConnectionBanner
-import ai.openonion.oochat.ui.navigation.DrawerAgentSection
-import ai.openonion.oochat.ui.navigation.NavDrawer
-import ai.openonion.oochat.ui.navigation.NavDrawerWidth
-import ai.openonion.oochat.ui.theme.LocalThemeController
-import ai.openonion.oochat.util.SoundEffectPlayer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 

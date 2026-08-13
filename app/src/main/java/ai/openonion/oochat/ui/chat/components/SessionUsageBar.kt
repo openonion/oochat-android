@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.SessionUsageTotals
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -8,8 +10,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import ai.openonion.oochat.domain.model.SessionUsageTotals
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Session-wide token/cost/context summary — the Android counterpart to

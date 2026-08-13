@@ -1,10 +1,10 @@
 package ai.openonion.oochat.data.local.db.dao
 
+import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
 
 /**
  * DAO for protocol-layer session state, one row per local conversation —

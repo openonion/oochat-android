@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.AgentSkill
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,8 +20,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.AgentSkill
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * The `/skill` palette, sitting directly above the composer's field.

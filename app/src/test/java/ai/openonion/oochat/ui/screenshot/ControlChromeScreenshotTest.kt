@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.screenshot
 
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,8 +16,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.spacing
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

@@ -1,5 +1,14 @@
 package ai.openonion.oochat.ui
 
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.ui.agent.AgentItem
+import ai.openonion.oochat.ui.chat.components.InputBar
+import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
+import ai.openonion.oochat.ui.chat.components.VoiceInputState
+import ai.openonion.oochat.ui.components.ConnectionBanner
+import ai.openonion.oochat.ui.settings.components.IdentityRow
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -12,15 +21,6 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.domain.model.ConnectionState
-import ai.openonion.oochat.ui.agent.AgentItem
-import ai.openonion.oochat.ui.chat.components.InputBar
-import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
-import ai.openonion.oochat.ui.chat.components.VoiceInputState
-import ai.openonion.oochat.ui.components.ConnectionBanner
-import ai.openonion.oochat.ui.settings.components.IdentityRow
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test

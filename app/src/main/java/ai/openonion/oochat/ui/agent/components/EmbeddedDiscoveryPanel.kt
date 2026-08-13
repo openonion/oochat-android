@@ -1,5 +1,14 @@
 package ai.openonion.oochat.ui.agent.components
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.domain.model.AppError
+import ai.openonion.oochat.ui.agent.DiscoveredAgentItem
+import ai.openonion.oochat.ui.agent.DiscoveryPhase
+import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -55,15 +64,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.domain.model.AgentProfile
-import ai.openonion.oochat.domain.model.AppError
-import ai.openonion.oochat.ui.agent.DiscoveredAgentItem
-import ai.openonion.oochat.ui.agent.DiscoveryPhase
-import ai.openonion.oochat.ui.components.PillTextField
-import ai.openonion.oochat.ui.theme.Motion
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.spacing
 import java.util.Locale
 
 /**

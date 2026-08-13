@@ -1,7 +1,5 @@
 package ai.openonion.oochat.domain.usecase
 
-import android.app.Application
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.protocol.SessionState
@@ -18,6 +16,8 @@ import ai.openonion.oochat.network.AgentConnection
 import ai.openonion.oochat.network.WebSocketFactory
 import ai.openonion.oochat.ui.loading.LoadingOutcome
 import ai.openonion.oochat.ui.loading.LoadingViewModel
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

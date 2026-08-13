@@ -1,12 +1,12 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ThinkingStatus
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test

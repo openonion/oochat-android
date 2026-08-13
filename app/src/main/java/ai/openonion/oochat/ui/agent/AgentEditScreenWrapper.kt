@@ -1,11 +1,11 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.ui.common.appViewModel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import ai.openonion.oochat.ui.common.appViewModel
 import kotlinx.coroutines.launch
 
 /**

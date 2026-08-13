@@ -1,12 +1,12 @@
 package ai.openonion.oochat.ui.agent
 
-import android.app.Application
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.AgentDiscoveryRepository
 import ai.openonion.oochat.data.repository.AgentRepository
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.data.repository.DefaultAgentRepositoryContract
 import ai.openonion.oochat.domain.model.AgentProfile
+import android.app.Application
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow

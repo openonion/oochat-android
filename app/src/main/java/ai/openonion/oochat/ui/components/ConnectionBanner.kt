@@ -1,5 +1,8 @@
 package ai.openonion.oochat.ui.components
 
+import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
@@ -33,9 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ConnectionState
-import ai.openonion.oochat.ui.theme.Motion
-import ai.openonion.oochat.ui.theme.spacing
 import kotlinx.coroutines.delay
 
 /**

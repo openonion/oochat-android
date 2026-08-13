@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.ui.common.rememberClipboard
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,10 +44,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openonion.oochat.ui.common.rememberClipboard
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Warning shown when [ai.openonion.oochat.data.local.SafePreferencesWrapper]

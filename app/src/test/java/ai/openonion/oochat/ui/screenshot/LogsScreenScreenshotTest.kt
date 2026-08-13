@@ -1,11 +1,11 @@
 package ai.openonion.oochat.ui.screenshot
 
+import ai.openonion.oochat.ui.logs.LogsScreen
+import ai.openonion.oochat.util.FileLogger
 import android.content.Context
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
-import ai.openonion.oochat.ui.logs.LogsScreen
-import ai.openonion.oochat.util.FileLogger
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test

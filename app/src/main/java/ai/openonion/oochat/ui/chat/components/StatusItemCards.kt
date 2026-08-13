@@ -1,5 +1,15 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.CompactStatus
+import ai.openonion.oochat.domain.model.EvalStatus
+import ai.openonion.oochat.domain.model.IntentStatus
+import ai.openonion.oochat.domain.model.ReceivedFile
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.statusColors
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,16 +54,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.CompactStatus
-import ai.openonion.oochat.domain.model.EvalStatus
-import ai.openonion.oochat.domain.model.IntentStatus
-import ai.openonion.oochat.domain.model.ReceivedFile
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.ui.theme.statusColors
-import ai.openonion.oochat.util.truncateMiddle
 import kotlin.math.roundToInt
 
 /**

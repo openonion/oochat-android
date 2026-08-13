@@ -1,6 +1,5 @@
 package ai.openonion.oochat.ui.chat
 
-import android.app.Application
 import ai.openonion.oochat.data.local.AppSettings
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.local.IgnoredIdsManager
@@ -38,6 +37,7 @@ import ai.openonion.oochat.network.SpeechRecognitionEvent
 import ai.openonion.oochat.network.SpeechRecognitionService
 import ai.openonion.oochat.network.VoiceTranscriptionService
 import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
+import android.app.Application
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.BufferOverflow

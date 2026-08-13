@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.common
 
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,8 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 
 /**
  * A single "check permission → show rationale once → request it → say so if

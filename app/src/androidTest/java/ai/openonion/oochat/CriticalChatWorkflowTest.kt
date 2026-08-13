@@ -1,5 +1,8 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.ui.chat.ChatScreen
+import ai.openonion.oochat.ui.chat.ChatViewModel
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import android.app.Application
 import android.content.Context
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -12,9 +15,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import ai.openonion.oochat.ui.chat.ChatScreen
-import ai.openonion.oochat.ui.chat.ChatViewModel
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Ignore

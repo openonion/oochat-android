@@ -1,5 +1,15 @@
 package ai.openonion.oochat.ui.onboarding
 
+import ai.openonion.oochat.Constants
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.ui.agent.AgentViewModel
+import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
+import ai.openonion.oochat.ui.agent.components.AgentFormState
+import ai.openonion.oochat.ui.agent.components.EmbeddedDiscoveryPanel
+import ai.openonion.oochat.ui.common.appViewModel
+import ai.openonion.oochat.ui.common.rememberPermissionGate
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.spacing
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
@@ -43,16 +53,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.Constants
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.ui.agent.AgentViewModel
-import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
-import ai.openonion.oochat.ui.agent.components.AgentFormState
-import ai.openonion.oochat.ui.agent.components.EmbeddedDiscoveryPanel
-import ai.openonion.oochat.ui.common.appViewModel
-import ai.openonion.oochat.ui.common.rememberPermissionGate
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.spacing
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 

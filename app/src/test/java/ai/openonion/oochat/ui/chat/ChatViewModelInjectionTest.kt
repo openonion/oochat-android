@@ -1,10 +1,10 @@
 package ai.openonion.oochat.ui.chat
 
-import android.app.Application
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.repository.AgentRepository
 import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.network.AgentDiscoveryService
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test

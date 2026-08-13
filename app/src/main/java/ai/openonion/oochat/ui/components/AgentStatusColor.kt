@@ -1,9 +1,9 @@
 package ai.openonion.oochat.ui.components
 
+import ai.openonion.oochat.domain.model.AgentStatus
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import ai.openonion.oochat.domain.model.AgentStatus
 
 /**
  * Single source of truth for status color, shared by the agent list and nav

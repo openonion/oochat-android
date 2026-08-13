@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui
 
+import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
+import ai.openonion.oochat.ui.agent.components.AgentAddressField
+import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -13,10 +17,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
-import ai.openonion.oochat.ui.agent.components.AgentAddressField
-import ai.openonion.oochat.ui.components.PillTextField
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test

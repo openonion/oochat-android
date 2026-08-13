@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.theme
 
+import ai.openonion.oochat.R
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
@@ -8,7 +9,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import ai.openonion.oochat.R
 
 /**
  * Manrope, bundled as a single variable font (res/font/manrope.ttf). Each weight is

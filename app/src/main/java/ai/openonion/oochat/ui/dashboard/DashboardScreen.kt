@@ -1,5 +1,10 @@
 package ai.openonion.oochat.ui.dashboard
 
+import ai.openonion.oochat.ui.components.BackTopAppBar
+import ai.openonion.oochat.ui.components.EmptyStateMessage
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.LogTags
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -34,11 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.components.BackTopAppBar
-import ai.openonion.oochat.ui.components.EmptyStateMessage
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.FileLogger
-import ai.openonion.oochat.util.LogTags
 
 /**
  * The connected agent's Home page: the `dashboard.html` it wrote for itself,

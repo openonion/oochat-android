@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +16,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import ai.openonion.oochat.ui.theme.spacing
 
 /**
  * Shared bottom-sheet shell for settings choice/preference sheets.

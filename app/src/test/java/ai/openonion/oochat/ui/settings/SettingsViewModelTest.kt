@@ -1,6 +1,5 @@
 package ai.openonion.oochat.ui.settings
 
-import android.app.Application
 import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
@@ -11,6 +10,7 @@ import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.data.repository.SessionRepository
 import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.UserProfile
+import android.app.Application
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow

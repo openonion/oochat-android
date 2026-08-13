@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.InputBarToken
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.tabularFigures
+import ai.openonion.oochat.util.formatVoiceDuration
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -44,10 +48,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.ui.theme.InputBarToken
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.ui.theme.tabularFigures
-import ai.openonion.oochat.util.formatVoiceDuration
 import kotlinx.coroutines.delay
 
 /**

@@ -1,5 +1,17 @@
 package ai.openonion.oochat.ui.navigation
 
+import ai.openonion.oochat.R
+import ai.openonion.oochat.domain.model.AgentStatus
+import ai.openonion.oochat.domain.model.ThemeMode
+import ai.openonion.oochat.ui.components.AgentInitialsAvatar
+import ai.openonion.oochat.ui.components.ConfirmationSheet
+import ai.openonion.oochat.ui.components.DangerConfirmActions
+import ai.openonion.oochat.ui.components.agentStatusColor
+import ai.openonion.oochat.ui.theme.ButtonToken
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import ai.openonion.oochat.ui.theme.sectionLabel
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -65,18 +77,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.R
-import ai.openonion.oochat.domain.model.AgentStatus
-import ai.openonion.oochat.domain.model.ThemeMode
-import ai.openonion.oochat.ui.components.AgentInitialsAvatar
-import ai.openonion.oochat.ui.components.ConfirmationSheet
-import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.components.agentStatusColor
-import ai.openonion.oochat.ui.theme.ButtonToken
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
-import ai.openonion.oochat.ui.theme.sectionLabel
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.truncateMiddle
 
 /**
  * Width of the drawer panel. Shared with ChatScreen, which reserves the same

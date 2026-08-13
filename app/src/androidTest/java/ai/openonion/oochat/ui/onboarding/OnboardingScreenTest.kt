@@ -1,5 +1,11 @@
 package ai.openonion.oochat.ui.onboarding
 
+import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.di.FakeAgentDiscoveryRepository
+import ai.openonion.oochat.di.FakeAgentRepository
+import ai.openonion.oochat.di.FakeConnectionConfigRepository
+import ai.openonion.oochat.di.FakeDefaultAgentRepository
+import ai.openonion.oochat.ui.agent.AgentViewModel
 import android.app.Application
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
@@ -8,12 +14,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
-import ai.openonion.oochat.data.local.ConnectionConfig
-import ai.openonion.oochat.di.FakeAgentDiscoveryRepository
-import ai.openonion.oochat.di.FakeAgentRepository
-import ai.openonion.oochat.di.FakeConnectionConfigRepository
-import ai.openonion.oochat.di.FakeDefaultAgentRepository
-import ai.openonion.oochat.ui.agent.AgentViewModel
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Rule

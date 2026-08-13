@@ -1,5 +1,9 @@
 package ai.openonion.oochat.ui.chat
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.ToolStatus
+import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,10 +17,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ThinkingStatus
-import ai.openonion.oochat.domain.model.ToolStatus
-import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test

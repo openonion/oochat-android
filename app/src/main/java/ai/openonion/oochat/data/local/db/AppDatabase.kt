@@ -1,11 +1,5 @@
 package ai.openonion.oochat.data.local.db
 
-import android.content.Context
-import androidx.room.Database
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
 import ai.openonion.oochat.data.local.db.dao.AgentDao
 import ai.openonion.oochat.data.local.db.dao.MessageDao
 import ai.openonion.oochat.data.local.db.dao.PendingMessageDao
@@ -16,6 +10,12 @@ import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import ai.openonion.oochat.data.local.db.entity.PendingMessageEntity
 import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Versions 1-4 predate schema export, so an upgrade from one of those still

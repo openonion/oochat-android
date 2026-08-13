@@ -1,5 +1,10 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.ToolStatus
+import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.util.summarizeToolCall
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,11 +20,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ChatItem
-import ai.openonion.oochat.domain.model.ThinkingStatus
-import ai.openonion.oochat.domain.model.ToolStatus
-import ai.openonion.oochat.ui.theme.spacing
-import ai.openonion.oochat.util.summarizeToolCall
 
 @Composable
 internal fun ThinkingBubble(item: ChatItem.Thinking, timestamp: String? = null, onRetry: (() -> Unit)? = null) {

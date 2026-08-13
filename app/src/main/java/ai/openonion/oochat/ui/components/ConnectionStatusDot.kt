@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.components
 
+import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.ui.theme.statusColors
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -21,8 +23,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import ai.openonion.oochat.domain.model.ConnectionState
-import ai.openonion.oochat.ui.theme.statusColors
 
 /**
  * Small color-coded connection dot — colour and pulse only, no label. Lives

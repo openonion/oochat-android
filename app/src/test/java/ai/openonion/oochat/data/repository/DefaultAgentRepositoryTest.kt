@@ -1,8 +1,8 @@
 package ai.openonion.oochat.data.repository
 
-import androidx.test.core.app.ApplicationProvider
 import ai.openonion.oochat.data.local.SafePreferencesWrapper
 import ai.openonion.oochat.domain.model.AgentProfile
+import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
