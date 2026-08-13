@@ -1,0 +1,88 @@
+# Publishes an installable APK to a GitHub Release, so a marker has one
+# stable link instead of a 90-day workflow artifact behind the Actions UI.
+#
+# Deliberately workflow_dispatch only. Every push building a release would
+# churn tags and Releases for no reader; this is run by hand when there is
+# something worth handing over.
+
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0-submission)'
+        required: true
+        default: 'v0.1.0-submission'
+      prerelease:
+        description: 'Mark the release as a pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # The debug variant, not release. `assembleRelease` emits
+      # app-release-unsigned.apk, and Android refuses to install an unsigned
+      # APK — handing a marker one would be handing them a file they cannot
+      # open. Debug is signed with the standard Android debug key, which is
+      # what makes it installable on any device without shipping our own
+      # signing key. It is a marking build, not a Play Store build.
+      - name: Build installable APK
+        run: ./gradlew assembleDebug
+
+      - name: Name the artifact after the tag
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "dist/connectonion-${{ inputs.tag }}.apk"
+          sha256sum "dist/connectonion-${{ inputs.tag }}.apk" \
+            > "dist/connectonion-${{ inputs.tag }}.apk.sha256"
+
+      # Same suite the Build & Test workflow runs. Repeated here rather than
+      # depended on: a Release is a claim that this commit works, and the
+      # evidence for that claim should be in the run that made it.
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Publish the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ConnectOnion Android ${{ inputs.tag }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            dist/connectonion-${{ inputs.tag }}.apk
+            dist/connectonion-${{ inputs.tag }}.apk.sha256
+          body: |
+            Installable debug-signed APK for marking and manual testing.
+
+            - `minSdk` 26 (Android 8.0), `targetSdk` 36
+            - Install: `adb install -r connectonion-${{ inputs.tag }}.apk`,
+              or copy it to the device and open it (allow install from unknown
+              sources when prompted).
+            - Verify the download against the `.sha256` alongside it.
+
+            See `INSTALL.md` in the repository root for the full setup guide,
+            including how to build from source and how to run the test suite.

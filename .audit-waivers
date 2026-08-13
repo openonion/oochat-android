@@ -1,0 +1,14 @@
+# Reviewed exceptions to the pre-publication audit.
+#
+# Format:  <path-prefix>  <rule-keyword>  # <reason>
+#
+# BOTH fields are required. A path-only waiver would hide every other rule on
+# that path, which defeats the point of the audit.
+# Waived hits are still printed; they only stop blocking.
+
+app/src/test/         endpoint  # ConnectionConfigTest asserts how a serverUrl is displayed.
+                                # The loopback address is the input to the assertion, not a
+                                # shipped endpoint.
+app/src/androidTest/  endpoint  # Instrumented tests bind a MockWebServer on an ephemeral
+                                # port allocated at run time; nothing is hardcoded into the
+                                # app.
