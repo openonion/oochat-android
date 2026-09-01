@@ -46,7 +46,7 @@ Then, with a device connected over USB (debugging enabled) or an emulator
 running:
 
 ```bash
-adb install -r connectonion-*.apk
+adb install -r openonion-android-*.apk
 ```
 
 On an emulator you can skip `adb` entirely and drag the APK file onto the
@@ -67,9 +67,10 @@ If `adb install` fails with no message (seen on some Huawei devices), see
 [§6](#6-troubleshooting).
 
 **How the APK is produced.** `.github/workflows/release-apk.yml` builds it,
-runs the unit suite against the same commit, attaches the APK and its SHA-256
-to a Release. It is `workflow_dispatch` only — run by hand when there is
-something worth releasing, rather than on every push.
+runs the audit, formatting and unit-test gates against the same commit, then
+attaches the APK and its SHA-256 to a Release when a matching `v*` tag is
+pushed. A manual run is a dry run and retains the same files as Actions
+artifacts without creating a tag or Release.
 
 ---
 

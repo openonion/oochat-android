@@ -151,6 +151,13 @@ directly. If you restructure, that test is where the rules are written down.
 See [docs/architecture.md](docs/architecture.md) and
 [docs/protocol.md](docs/protocol.md).
 
+## Releases
+
+Installable debug-signed APKs are published from semantic version tags. See
+[the release guide](docs/RELEASE.md) for the version bump, dry-run and tagging
+procedure, and [INSTALL.md](INSTALL.md) for installation and checksum
+verification.
+
 ## Contributing
 
 Issues and pull requests are welcome at
