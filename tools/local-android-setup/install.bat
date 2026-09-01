@@ -1,5 +1,5 @@
 @echo off
-rem ConnectOnion Android - environment setup for assessment (Windows).
+rem ConnectOnion Android - local environment setup (Windows).
 rem
 rem This is a launcher. The work is in install.ps1 beside it, which prints what
 rem it is about to do and waits for confirmation before changing anything.

@@ -29,7 +29,7 @@ fi
 
 SDK_REUSED=0
 APP_ID="ai.openonion.oochat"
-AVD_NAME="connectonion-tutor"
+AVD_NAME="openonion-android"
 if [ -f "$ENV_FILE" ]; then
   # shellcheck source=/dev/null
   . "$ENV_FILE"
@@ -41,7 +41,7 @@ fi
 SIZE="$(du -sh "$LOCAL_DIR" 2>/dev/null | cut -f1 || echo '?')"
 
 clear 2>/dev/null || true
-bold "ConnectOnion Android — remove the assessment setup"
+bold "ConnectOnion Android — remove the local setup"
 echo
 bold "What will be deleted"
 info "$LOCAL_DIR  ($SIZE)"
@@ -109,5 +109,5 @@ info "Removed."
 echo
 bold "Done"
 info "This folder now holds only the scripts themselves."
-info "Delete tools/tutor-setup/ to remove those too."
+info "Delete tools/local-android-setup/ to remove those too."
 echo

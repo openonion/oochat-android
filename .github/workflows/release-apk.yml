@@ -1,9 +1,9 @@
-# Publishes an installable APK to a GitHub Release, so a marker has one
-# stable link instead of a 90-day workflow artifact behind the Actions UI.
+# Publishes an installable APK to a GitHub Release with a stable link instead
+# of a 90-day workflow artifact behind the Actions UI.
 #
 # Deliberately workflow_dispatch only. Every push building a release would
 # churn tags and Releases for no reader; this is run by hand when there is
-# something worth handing over.
+# something worth releasing.
 
 name: Release APK
 
@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.0-submission)'
+        description: 'Release tag (e.g. v0.1.1)'
         required: true
-        default: 'v0.1.0-submission'
+        default: 'v0.1.1'
       prerelease:
         description: 'Mark the release as a pre-release'
         type: boolean
@@ -44,10 +44,9 @@ jobs:
 
       # The debug variant, not release. `assembleRelease` emits
       # app-release-unsigned.apk, and Android refuses to install an unsigned
-      # APK — handing a marker one would be handing them a file they cannot
-      # open. Debug is signed with the standard Android debug key, which is
-      # what makes it installable on any device without shipping our own
-      # signing key. It is a marking build, not a Play Store build.
+      # APK. Debug is signed with the standard Android debug key, which makes it
+      # installable without shipping a private signing key. This is a
+      # sideloading build, not a Play Store artifact.
       - name: Build installable APK
         run: ./gradlew assembleDebug
 
@@ -76,7 +75,7 @@ jobs:
             dist/connectonion-${{ inputs.tag }}.apk
             dist/connectonion-${{ inputs.tag }}.apk.sha256
           body: |
-            Installable debug-signed APK for marking and manual testing.
+            Installable debug-signed APK for sideloading and manual testing.
 
             - `minSdk` 26 (Android 8.0), `targetSdk` 36
             - Install: `adb install -r connectonion-${{ inputs.tag }}.apk`,

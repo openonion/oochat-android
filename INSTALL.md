@@ -2,70 +2,51 @@
 
 **oochat for Android** — native ConnectOnion client.
 
-> Assessing rather than installing? [`TUTOR.md`](TUTOR.md) is the shorter way
-> in: ten minutes to a running app, then a map of where everything is.
-
-Native Android build. **Docker exemption applies**: the deliverable is an APK
-run by the Android runtime on a device or emulator, which a container cannot
-host. There is no separate backend of ours to containerise either — the app
-speaks WebSocket to a ConnectOnion relay that the project does not own or
-deploy. Native build steps are given in full below in place of a Dockerfile.
+This is a native Android application. It runs on a device or emulator and talks
+to a ConnectOnion relay over WebSocket; there is no separate application backend
+to run locally and no Docker image is required.
 
 ## Two ways to install — pick one
 
 | | What you do | When to use it |
 |---|---|---|
 | **Approach A — pre-built APK** *(fastest — no toolchain)* | Download and `adb install`. See [§0](#0-install-the-pre-built-apk-no-build-required). | You want to test the app, not the build. |
-| **Approach B — build from source** | JDK 17 + Android SDK, then `./gradlew`. See [§1](#1-environment-and-prerequisites) onward. On a machine with no SDK at all, `tools/tutor-setup/` fetches one — `./install.sh` then `./run.sh --build`. | You are assessing the build, the code, or the tests. |
+| **Approach B — build from source** | JDK 17 + Android SDK, then `./gradlew`. See [§1](#1-environment-and-prerequisites) onward. On a machine with no SDK at all, `tools/local-android-setup/` fetches one — `./install.sh` then `./run.sh --build`. | You want to modify the app or verify the build and tests. |
 
 Both produce the same application. Approach A takes about a minute; Approach B takes about four on a cold
 Gradle cache.
 
-**On a machine with no Android tooling at all**, `tools/tutor-setup/` automates
+**On a machine with no Android tooling at all**, `tools/local-android-setup/` automates
 Approach A end to end — it installs a private SDK and emulator, creates a virtual
 device, installs the app and launches it, then removes all of it on request:
 
 ```bash
-cd tools/tutor-setup && ./install.sh && ./run.sh    # Windows: install.bat, run.bat
+cd tools/local-android-setup && ./install.sh && ./run.sh    # Windows: install.bat, run.bat
 ```
 
 Each script states what it will download, how big it is and where it goes, then
-waits for confirmation. Everything lands in `tools/tutor-setup/.local/` — no
+waits for confirmation. Everything lands in `tools/local-android-setup/.local/` — no
 `PATH` change, no shell profile edit, nothing outside that directory — and
 `./uninstall.sh` deletes the lot. See
-[`tools/tutor-setup/README.md`](tools/tutor-setup/README.md). The rest of this
+[`tools/local-android-setup/README.md`](tools/local-android-setup/README.md). The rest of this
 document is the manual equivalent.
 
 ---
 
 ## 0. Install the pre-built APK (no build required)
 
-The APK is provided in **two** places:
+Installable APKs are attached to GitHub Releases:
 
-**1. Inside the submitted zip** — the single `.apk` in the `apk/` folder, next
-to this manual. This is the copy to use: it is the build that corresponds to the
-submission, and it needs no network access and no GitHub account.
+> [**the latest release**](https://github.com/openonion/oochat-android/releases/latest)
 
-> **`apk/` exists only in the submitted zip, not in the git repository.** APKs
-> are git-ignored, so a `git clone` of this project has no `apk/` folder and the
-> command below will not match anything. Working from a clone, use the Release
-> link under (2), or build one yourself with [§3](#3-build-and-run) — about four
-> minutes.
-
-**2. Attached to the GitHub Release**, as a fallback if the zip is unavailable:
-
-> [**the latest release**](../../releases/latest)
-
-Download the `.apk` from that release's assets list. Both copies of this
-repository are private, so you will need to be signed in to a GitHub account
-with access to the one you were given. The `.sha256` beside each asset lets you
-confirm it matches the copy in the zip.
+Download the `.apk` from the release assets. The `.sha256` file beside it lets
+you verify that the download is intact.
 
 Then, with a device connected over USB (debugging enabled) or an emulator
 running:
 
 ```bash
-adb install -r apk/*.apk
+adb install -r connectonion-*.apk
 ```
 
 On an emulator you can skip `adb` entirely and drag the APK file onto the
@@ -88,7 +69,7 @@ If `adb install` fails with no message (seen on some Huawei devices), see
 **How the APK is produced.** `.github/workflows/release-apk.yml` builds it,
 runs the unit suite against the same commit, attaches the APK and its SHA-256
 to a Release. It is `workflow_dispatch` only — run by hand when there is
-something to hand over, rather than on every push.
+something worth releasing, rather than on every push.
 
 ---
 
@@ -122,9 +103,8 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 17)   # macOS
 **1.** Clone and enter the repository:
 
 ```bash
-# Whichever copy you were given — see HANDOVER.md §0 for both URLs.
-git clone <repository-url>
-cd <repository-directory>
+git clone https://github.com/openonion/oochat-android.git
+cd oochat-android
 ```
 
 **2.** Point the build at your Android SDK — one of these, not both:
@@ -360,7 +340,7 @@ Installing it is not the same as knowing what it does. Once §5 passes:
 | Go to | For |
 |---|---|
 | [`USER_GUIDE.md`](USER_GUIDE.md) | **How to use the app.** Written for someone holding the phone: connecting, slash commands, dictation, attachments, the permission modes, conversations, and what each error message means. Start at [§1 Connecting to an agent](USER_GUIDE.md#1-connecting-to-an-agent). |
-| [`TUTOR.md`](TUTOR.md) | **Where everything is.** A map of the codebase for assessment — what to read for each part of the system, which claims are backed by which file, and what is knowingly unfinished. |
+| [`docs/architecture.md`](docs/architecture.md) | **Where everything is.** Module boundaries, data flow, and the architectural rules enforced by tests. |
 | [`README.md`](README.md) | **How it is built.** Tech stack, module layout, protocol notes, CI, and the testing approach in full. |
 
 Two behaviours that read as faults on a first run are explained at the end of

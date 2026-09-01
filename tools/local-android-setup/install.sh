@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# ConnectOnion Android — one-shot environment setup for assessment (macOS/Linux).
+# ConnectOnion Android — one-shot local environment setup (macOS/Linux).
 #
-# Everything this installs lands under tools/tutor-setup/.local/. No PATH is
+# Everything this installs lands under tools/local-android-setup/.local/. No PATH is
 # modified and no shell profile is touched. ANDROID_USER_HOME and (in run.sh)
 # GRADLE_USER_HOME are redirected into .local/ as well, so the SDK tools and
 # Gradle do not write to ~/.android or ~/.gradle either — without that,
@@ -15,7 +15,7 @@ REPO_ROOT="$(cd "$SETUP_DIR/../.." && pwd)"
 LOCAL_DIR="$SETUP_DIR/.local"
 SDK_DIR="$LOCAL_DIR/android-sdk"
 AVD_DIR="$LOCAL_DIR/avd"
-AVD_NAME="connectonion-tutor"
+AVD_NAME="openonion-android"
 ANDROID_API="${ANDROID_API:-36}"
 CMDLINE_BUILD="13114758"
 
@@ -114,7 +114,7 @@ fi
 clear 2>/dev/null || true
 bold "ConnectOnion Android — environment setup"
 echo
-echo "This prepares a machine to install and run the app for assessment."
+echo "This prepares a machine to install and run the app locally."
 echo "Read this before answering; nothing has been downloaded or changed yet."
 echo
 bold "What gets installed"

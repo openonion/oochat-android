@@ -1,4 +1,4 @@
-# Automated setup for assessment
+# Automated local Android setup
 
 Three scripts that take a machine with no Android tooling on it and end with the
 app running, then remove every trace on request. Nothing here needs an
@@ -12,7 +12,7 @@ is, [`INSTALL.md`](../../INSTALL.md) covers the same ground manually.
 **macOS / Linux**
 
 ```bash
-cd tools/tutor-setup
+cd tools/local-android-setup
 ./install.sh
 ./run.sh
 ```
@@ -20,7 +20,7 @@ cd tools/tutor-setup
 **Windows**
 
 ```
-cd tools\tutor-setup
+cd tools\local-android-setup
 install.bat
 run.bat
 ```
@@ -43,7 +43,7 @@ having changed anything. Pass `-y` to skip the prompt.
 Everything lands in one directory:
 
 ```
-tools/tutor-setup/.local/
+tools/local-android-setup/.local/
 ├── android-sdk/      the SDK, platform-tools, emulator, system image
 ├── avd/              the virtual device
 ├── android-home/     the SDK tools' own per-user state, incl. adb's keypair

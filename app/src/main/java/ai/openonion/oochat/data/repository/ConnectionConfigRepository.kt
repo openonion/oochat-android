@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Repository interface for managing server connection configuration.
  *
- * Designed for single server configuration in Sprint 1.
+ * Stores the app's current single-server configuration.
  * Interface allows future extension for multiple server profiles
  * without major refactoring.
  *

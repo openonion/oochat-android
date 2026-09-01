@@ -4,11 +4,9 @@
     python3 tools/check-doc-links.py          # exits non-zero on any problem
 
 Checked against `git ls-files`, deliberately, **not** against the working copy.
-A reader meets these documents in a clone or in the submitted zip, and both
-contain only what is committed. A link verified with `os.path.exists` is
-verified in the one place nobody stands: this repository's `docs/` holds 78
-files on the author's disk and 5 in git, so a filesystem check passed nine
-links that were dead for every reader.
+A reader meets these documents in a clone, which contains only what is
+committed. A link verified with `os.path.exists` can still point at an untracked
+local file and be broken for everyone else.
 
 Covers:
   - relative file and directory targets  -> must be tracked by git
@@ -26,7 +24,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DOCS = ["README.md", "TUTOR.md", "INSTALL.md", "USER_GUIDE.md", "HANDOVER.md"]
+DOCS = ["README.md", "INSTALL.md", "USER_GUIDE.md"]
 
 LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 BARE = re.compile(r"`(docs/[^`]+)`")

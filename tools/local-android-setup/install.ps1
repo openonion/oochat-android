@@ -1,6 +1,6 @@
-# ConnectOnion Android - one-shot environment setup for assessment (Windows).
+# ConnectOnion Android - one-shot local environment setup (Windows).
 #
-# Everything this installs lands under tools\tutor-setup\.local\. No PATH is
+# Everything this installs lands under tools\local-android-setup\.local\. No PATH is
 # modified, no environment variable is set outside this process, nothing needs
 # an administrator. ANDROID_USER_HOME and (in run.ps1) GRADLE_USER_HOME are
 # redirected into .local\ too, so the SDK tools and Gradle do not write to
@@ -21,7 +21,7 @@ $RepoRoot = (Resolve-Path (Join-Path $SetupDir '..\..')).Path
 $LocalDir = Join-Path $SetupDir '.local'
 $SdkDir   = Join-Path $LocalDir 'android-sdk'
 $AvdDir   = Join-Path $LocalDir 'avd'
-$AvdName  = 'connectonion-tutor'
+$AvdName  = 'openonion-android'
 $CmdlineBuild = '13114758'
 
 function Write-Bold($text) { Write-Host $text -ForegroundColor White }
@@ -86,7 +86,7 @@ Write-Bold '================================================================'
 Write-Bold '  ConnectOnion Android - environment setup'
 Write-Bold '================================================================'
 Write-Host ''
-Write-Host 'This prepares a machine to install and run the app for assessment.'
+Write-Host 'This prepares a machine to install and run the app locally.'
 Write-Host 'Read this before answering; nothing has been downloaded or changed yet.'
 Write-Host ''
 Write-Bold 'WHAT GETS INSTALLED'

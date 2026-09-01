@@ -20,7 +20,7 @@ if (-not (Test-Path $LocalDir)) {
 }
 
 $AppId     = 'ai.openonion.oochat'
-$AvdName   = 'connectonion-tutor'
+$AvdName   = 'openonion-android'
 $SdkReused = $false
 if (Test-Path $EnvFile) { . $EnvFile }
 
@@ -33,7 +33,7 @@ try {
 
 Clear-Host
 Write-Bold '================================================================'
-Write-Bold '  ConnectOnion Android - remove the assessment setup'
+Write-Bold '  ConnectOnion Android - remove the local setup'
 Write-Bold '================================================================'
 Write-Host ''
 Write-Bold 'WHAT WILL BE DELETED'
@@ -124,5 +124,5 @@ Write-Info 'Removed.'
 Write-Host ''
 Write-Bold 'DONE'
 Write-Info 'This folder now holds only the scripts themselves.'
-Write-Info 'Delete tools\tutor-setup\ to remove those too.'
+Write-Info 'Delete tools\local-android-setup\ to remove those too.'
 Write-Host ''

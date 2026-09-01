@@ -31,7 +31,7 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** Instrumentation coverage for the Sprint 2 critical chat workflows. */
+/** Instrumentation coverage for the app's critical chat workflows. */
 /**
  * DISABLED 2026-08-02. This class has never once executed successfully.
  *
@@ -121,7 +121,7 @@ class CriticalChatWorkflowTest {
             val recreatedViewModel = newViewModel()
             showChat(recreatedViewModel)
 
-            // Sprint 2 acceptance criterion: persisted conversation history is
+            // Persistence invariant: conversation history is
             // restored after the ViewModel/UI owner is recreated.
             composeTestRule.onNode(hasText(USER_MESSAGE)).assertExists()
             composeTestRule.onNode(hasText(AGENT_REPLY)).assertExists()
