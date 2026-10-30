@@ -18,9 +18,17 @@ import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ChatListFlags
 import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionActivity
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.domain.model.canonicalAgentAddress
 import ai.openonion.oochat.domain.model.createError
 import ai.openonion.oochat.domain.model.dedupeUI
 import ai.openonion.oochat.domain.model.isInProgress
@@ -38,6 +46,12 @@ import ai.openonion.oochat.network.offlineSustainedFor
 import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
 import ai.openonion.oochat.ui.chat.components.VoiceInputState
 import ai.openonion.oochat.ui.common.launchScoped
+import ai.openonion.oochat.ui.controlcenter.ControlCenterActionRejected
+import ai.openonion.oochat.ui.controlcenter.ControlCenterActions
+import ai.openonion.oochat.ui.controlcenter.ControlCenterCancelled
+import ai.openonion.oochat.ui.controlcenter.ControlCenterConversation
+import ai.openonion.oochat.ui.controlcenter.ControlCenterSnapshot
+import ai.openonion.oochat.ui.controlcenter.controlCenterSkillMessage
 import ai.openonion.oochat.ui.navigation.DrawerAgentSection
 import ai.openonion.oochat.ui.navigation.DrawerEntry
 import ai.openonion.oochat.util.FileLogger
@@ -54,14 +68,21 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -70,6 +91,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 
 /**
  * How long an unproven recognizer gets to say anything at all before the
@@ -286,6 +308,13 @@ open class ChatViewModel @JvmOverloads constructor(
         .map { it.error }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    // Direct EXEC commands have their own short-lived UI list rather than
+    // becoming ordinary chat transcript items. Each item keeps its execId so
+    // concurrent commands can complete in any order without updating the
+    // wrong result card.
+    private val _execItems = MutableStateFlow<List<ExecUiItem>>(emptyList())
+    val execItems: StateFlow<List<ExecUiItem>> = _execItems.asStateFlow()
+
     // Connection state from use case (single source of truth)
     val connectionState: StateFlow<ConnectionState> = connectUseCase.connectionState
 
@@ -303,11 +332,22 @@ open class ChatViewModel @JvmOverloads constructor(
     // we asked for — see ConnectionRepository.modePending's doc.
     val modePending: StateFlow<Boolean> = connectUseCase.modePending
 
+    // Which modes the chip and sheet may offer, and whether the Host owns
+    // them — see ConnectionRepository.sessionModes.
+    val sessionModes: StateFlow<SessionModes> = connectUseCase.sessionModes
+
     // The agent's own Home page, or null when it hasn't sent one for this
     // connection — which is also what gates the top bar's entry point, since
     // nothing on the wire says "this agent has no dashboard". Untrusted
     // agent-authored HTML; see ConnectionRepository.dashboardHtml.
     val dashboardHtml: StateFlow<String?> = connectUseCase.dashboardHtml
+
+    // See ConnectionRepository.controlCenterApp.
+    val controlCenterApp: StateFlow<ControlCenterApp?> = connectUseCase.controlCenterApp
+
+    // The agent's current Todo List for this conversation, rendered as a
+    // panel above the transcript; see ConnectionRepository.plan.
+    val plan: StateFlow<List<PlanEntry>> = connectUseCase.plan
 
     // Settings' "Custom instructions" free text — silently prepended to
     // every outgoing prompt in sendMessage(), never to the displayed/
@@ -375,6 +415,8 @@ open class ChatViewModel @JvmOverloads constructor(
     val hapticFeedbackEnabled: StateFlow<Boolean> = appSettings.hapticFeedback
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val soundEffectsEnabled: StateFlow<Boolean> = appSettings.soundEffects
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+    val developerToolsEnabled: StateFlow<Boolean> = appSettings.developerToolsEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     // Backing var kept for the many internal reads below (unchanged call
@@ -564,7 +606,153 @@ open class ChatViewModel @JvmOverloads constructor(
      */
     private val serverTurnActive = MutableStateFlow(false)
 
+    /**
+     * Which message started each turn and how each turn ended, so a Control Center action can
+     * wait for its own turn. A StateFlow collector can miss a turn that starts and ends quickly;
+     * a subscriber to this cannot. Declared above [init] for the same reason as [serverTurnActive].
+     */
+    private val turnEvents = MutableSharedFlow<TurnEvent>(extraBufferCapacity = 16)
+
+    private sealed interface TurnEvent {
+        data class Started(val messageId: String) : TurnEvent
+        data class Ended(val how: TurnEnd) : TurnEvent
+    }
+
+    private enum class TurnEnd { OUTPUT, ERROR, CONNECTION_LOST, INTERRUPTED, NOT_SENT }
+
+    /** Stop was pressed and the stopped turn's closing reply has not arrived yet. */
+    private val interruptPending = MutableStateFlow(false)
+
+    /** A Control Center action is between its idle check and the end of its turn. */
+    private val controlCenterTurnInFlight = MutableStateFlow(false)
+
+    /** Set when the message goes out, so a cancel sees a start its action has not collected yet. */
+    private var lastStartedMessageId: String? = null
+
+    /** A Control Center message the app cancelled while it was still being sent. */
+    private var interruptWhenStarted: String? = null
+
+    private fun turnEnded(how: TurnEnd) {
+        if (how != TurnEnd.INTERRUPTED) interruptPending.value = false
+        turnEvents.tryEmit(TurnEvent.Ended(how))
+    }
+
+    /**
+     * The top bar's status line: running, waiting for you, idle, or session not found. See
+     * [SessionActivity.of] for how this screen's own knowledge and the Host's last word
+     * ([ConnectToAgentUseCaseContract.hostSessionStatus]: CONNECTED's status and each
+     * SESSION_STATUS reply) combine. Null while not connected.
+     *
+     * Declared below [serverTurnActive], which it reads, and eager for the same reason as
+     * [isAgentWorking].
+     */
+    val sessionActivity: StateFlow<SessionActivity?> = combine(
+        connectionState,
+        serverTurnActive,
+        isAgentWorking,
+        chatAwaitsUser,
+        connectUseCase.hostSessionStatus
+    ) { state, ownTurn, onScreen, awaitsUser, host ->
+        SessionActivity.of(
+            connected = state is ConnectionState.Connected,
+            turnRunning = ownTurn || onScreen,
+            awaitsUser = awaitsUser,
+            host = host
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * What the Control Center app is told about the chat. The session id is read when the
+     * connection, status or profile changes. Declared below [sessionActivity], which it reads.
+     */
+    val controlCenterSnapshot: StateFlow<ControlCenterSnapshot> = combine(
+        combine(
+            connectionState,
+            sessionActivity,
+            agentProfile,
+            controlCenterTurnInFlight,
+            interruptPending
+        ) { state, activity, profile, actionInFlight, stopping ->
+            Triple(state, if (activity != null && (actionInFlight || stopping)) SessionActivity.RUNNING else activity, profile)
+        },
+        // Only a trigger: a conversation switch changes the session id but often nothing above.
+        conversationHistory.activeSessionId
+    ) { (state, shown, profile), _ ->
+        controlCenterSnapshotOf(state, shown, profile)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        controlCenterSnapshotOf(connectionState.value, null, agentProfile.value)
+    )
+
+    private fun controlCenterSnapshotOf(
+        state: ConnectionState,
+        activity: SessionActivity?,
+        profile: AgentLiveProfile?
+    ): ControlCenterSnapshot {
+        val address = (state as? ConnectionState.Connected)?.address ?: _targetAgentAddress
+        return ControlCenterSnapshot.of(
+            sessionId = controlCenterSessionId(address),
+            agentAddress = address,
+            activity = activity,
+            connection = state,
+            skills = profile?.skills.orEmpty()
+        )
+    }
+
+    private fun controlCenterSessionId(address: String): String? =
+        conversationHistory.conversationId ?: address.takeIf { it.isNotBlank() }?.let(connectUseCase::liveSessionIdFor)
+
+    /**
+     * The messages handed to the connection while the socket was down. The connection parks them in
+     * its outbox and flushes it the moment CONNECTED lands, so their bubbles say "Waiting to send…"
+     * until the next Connected, which is when they go out. Touched only on the main dispatcher.
+     *
+     * Declared above [init] for the same reason as [serverTurnActive].
+     */
+    private val outboxedMessageIds = mutableSetOf<String>()
+
+    /**
+     * The one message sent into a running turn that the host has not answered
+     * yet, or null.
+     *
+     * A runtime INPUT is answered with `RUNTIME_INPUT_ACK` or
+     * `RUNTIME_INPUT_REJECTED`, and neither carries the `input_id` we sent (see
+     * [ConnectionEvent.RuntimeInputAcknowledged][ai.openonion.oochat.network.ConnectionEvent.RuntimeInputAcknowledged]),
+     * so a reply can only be linked to its message by there being exactly one
+     * candidate. That is why the send path holds [outgoingSendLock] until this
+     * is answered: the next message cannot go out while an answer is owed, so a
+     * reply can never be handed to the wrong message — even when this client was
+     * wrong about whether a turn was running and no reply ever comes.
+     *
+     * Registered *before* the INPUT leaves, because the host answers the moment
+     * it reads it and a reply that beat the registration would find nobody
+     * waiting. Touched only on the main dispatcher.
+     *
+     * Declared above [init] for the same reason as [serverTurnActive]: the
+     * connection-state collector started there completes this on its very first
+     * emission, and a property declared further down is still null by then.
+     */
+    private var pendingRuntimeInput: PendingRuntimeInput? = null
+
+    /**
+     * Each user message's "failed after a restart" verdict, in the order its
+     * state changed — see [setUserMessageState]. One consumer writes them, so a
+     * quick QUEUED → SENT cannot land in Room the other way round and leave a
+     * delivered message saved as failed.
+     *
+     * Declared above [init] for the same reason as [serverTurnActive]: the
+     * consumer is started there.
+     */
+    private val failedToSendWrites = Channel<Pair<String, Boolean>>(Channel.UNLIMITED)
+
     init {
+        viewModelScope.launch {
+            for ((messageId, failedToSend) in failedToSendWrites) {
+                conversationHistory.saveFailedToSend(messageId, failedToSend)
+            }
+        }
+
         // Initial state stays ChatUiState's own default (""), so there is
         // nothing to flash or reflow when the real address lands a few
         // milliseconds later. Resolving it on IO also dodges the `by lazy`
@@ -601,7 +789,13 @@ open class ChatViewModel @JvmOverloads constructor(
 
         // Collect connection state changes ONCE
         viewModelScope.launch {
+            // A StateFlow hands a new collector its current value first. That
+            // value is how the shared connection already stood when this screen
+            // was created, not something that just happened to it (W16AAPPLE-74).
+            var alreadyCurrent = true
             connectionState.collect { state ->
+                val atCreation = alreadyCurrent
+                alreadyCurrent = false
                 when (state) {
                     is ConnectionState.Connected -> {
                         FileLogger.i(LogTags.CHAT_VM, "Connected to ${state.addressOrNull()?.take(16)}")
@@ -611,6 +805,7 @@ open class ChatViewModel @JvmOverloads constructor(
                         // agent we're for — connectToAgent() runs this itself
                         // once the target is known.
                         if (_targetAgentAddress.isNotBlank()) onConnectedTo(_targetAgentAddress, null)
+                        settleOutboxedMessages()
                         // Only fires when the previous Disconnected transition
                         // force-failed a still-in-flight Thinking item (see
                         // failRunningThinking's fromDisconnect branch) — a
@@ -627,8 +822,18 @@ open class ChatViewModel @JvmOverloads constructor(
                         // not a server-sent ERROR frame (those route to
                         // ChatEvent.ConnectionErrorOccurred instead).
                         // Stale-session errors auto-recovery is invisible, so
-                        // skip persisting the transient error.
-                        if (!StaleSessionDetector.isStaleSessionError(state.message)) {
+                        // skip persisting the transient error. Only a retryable
+                        // one can be that: a non-retryable error is final and is
+                        // the one thing the user must see, and its text can carry
+                        // the Host's own words (the OIP version rejection), which
+                        // must not be able to match the detector and hide it.
+                        //
+                        // Not for an error that was already current when this
+                        // screen was created: the screen that was open when it
+                        // happened already reported it, and the banner still
+                        // shows it. Adding it again put a second copy beside
+                        // any new one (W16AAPPLE-74).
+                        if (!atCreation && (!state.retryable || !StaleSessionDetector.isStaleSessionError(state.message))) {
                             if (!failRunningThinking(content = state.message)) {
                                 appendStandaloneError(state.message)
                             }
@@ -651,6 +856,11 @@ open class ChatViewModel @JvmOverloads constructor(
                         // into a turn the server is still running, which the
                         // server merges; leaving it shut hangs the composer.
                         serverTurnActive.value = false
+                        turnEnded(TurnEnd.CONNECTION_LOST)
+                        // No reply to a mid-turn send can arrive on a dead
+                        // socket, and whether the host queued it is unknown.
+                        // Say it did not go, and let the user resend it.
+                        answerPendingRuntimeInput(RuntimeInputReply.CONNECTION_LOST)
                     }
                     else -> {}
                 }
@@ -702,6 +912,8 @@ open class ChatViewModel @JvmOverloads constructor(
                         offscreen.itemToPersist?.let { item ->
                             conversationHistory.persistMessage(item, owner)
                         }
+                        if (event is ChatEvent.OutputReceived) turnEnded(TurnEnd.OUTPUT)
+                        if (event is ChatEvent.ConnectionErrorOccurred) turnEnded(TurnEnd.ERROR)
                         return@collect
                     }
 
@@ -738,6 +950,24 @@ open class ChatViewModel @JvmOverloads constructor(
                         event is ChatEvent.ConnectionErrorOccurred
                     ) {
                         serverTurnActive.value = false
+                        turnEnded(if (event is ChatEvent.OutputReceived) TurnEnd.OUTPUT else TurnEnd.ERROR)
+                    }
+                    when (event) {
+                        is ChatEvent.RuntimeInputAcknowledged ->
+                            answerPendingRuntimeInput(RuntimeInputReply.ACCEPTED, stray = "ACK")
+                        is ChatEvent.RuntimeInputRejected -> answerPendingRuntimeInput(
+                            if (event.retryable) RuntimeInputReply.REFUSED_RETRYABLE else RuntimeInputReply.REFUSED,
+                            stray = "REJECTED"
+                        )
+                        // The host answers a runtime INPUT the moment it reads
+                        // it, so a message still unanswered when the turn ends
+                        // was not runtime input at all: it reached an agent that
+                        // had just gone idle and started a turn of its own.
+                        is ChatEvent.OutputReceived -> answerPendingRuntimeInput(RuntimeInputReply.TURN_ENDED)
+                        // A generic ERROR frame is deliberately not handled: it
+                        // says nothing about whether the host took our message,
+                        // and the host's own refusal arrives as its own event.
+                        else -> {}
                     }
                     if (event is ChatEvent.ServerTranscriptReceived) {
                         // The reducer deliberately no-ops on this; only the
@@ -909,7 +1139,83 @@ open class ChatViewModel @JvmOverloads constructor(
         val forceNew = startFreshOnNextConnect
         startFreshOnNextConnect = false
         restoreLocalSession(agentAddress, forceNew)
-        _awaitingOnboardCode.value = false
+        // Only once the agent has let us in. connect() also returns true when
+        // ONBOARD_REQUIRED won its race, and clearing this then put the banner
+        // back to "Connecting to agent…" over a gate still waiting for a code
+        // (W16AAPPLE-80). The Connected transition reaches here again.
+        if (connectionState.value is ConnectionState.Connected) _awaitingOnboardCode.value = false
+        // And only now, with the conversation resolved above, can the Host's answer be matched to it.
+        (connectionState.value as? ConnectionState.Connected)?.let { actOnHostAnswer(it) }
+    }
+
+    /**
+     * Act, once, on what the Host's CONNECTED said about the session just joined. Reached from both
+     * callers of [onConnectedTo], so it covers a socket opened for this screen and a live one it joined.
+     * The answer is released afterwards: it describes the moment of the CONNECT, and the connection
+     * would hand it to the next screen created on the same socket as if it were news.
+     */
+    private fun actOnHostAnswer(joined: ConnectionState.Connected) {
+        when (joined.status) {
+            ServerSessionStatus.RUNNING -> onHostTurnRunning()
+            ServerSessionStatus.CONNECTED -> onHostIdle()
+            ServerSessionStatus.NEW -> onHostHasNoRecord()
+            else -> return
+        }
+        connectUseCase.releaseSessionStatus()
+    }
+
+    /**
+     * The Host is idle on this session, so nothing it was running is still running. Whatever this
+     * screen still shows in progress was left that way by a turn that ended while the app could not
+     * hear it (the process died, or the socket dropped), and no frame will ever finish it. Settle it
+     * the way the OUTPUT would have, and save the result so the spinner does not come back with the
+     * next launch.
+     *
+     * Only what is in progress is settled. A turn the drop already failed is not, and must stay failed
+     * until the SESSION_STATUS reply ([ChatEvent.SessionStatusReceived]) says whether its answer
+     * arrived: resolveRunningItems on the whole list would turn it back into a success, since it also
+     * closes every Turn that has no reply yet.
+     */
+    private fun onHostIdle() {
+        val inProgress = _uiState.value.chatItems.filter { it.isInProgress() }
+        if (inProgress.isEmpty()) return
+        val settled = inProgress.resolveRunningItems().associateBy { it.id }
+        _uiState.update { state -> state.copy(chatItems = state.chatItems.map { settled[it.id] ?: it }) }
+        val owningSessionId = conversationHistory.activeSessionId.value
+        settled.values.forEach { item -> launchScoped { conversationHistory.persistMessage(item, owningSessionId) } }
+    }
+
+    /**
+     * The Host has no record of this session: it restarted, or the session expired while the app was
+     * away, or this is a conversation that has never been used. What the screen shows stays, because
+     * the conversation is the user's. But a turn still in flight here can never finish, so it says
+     * Failed and Retry is the move, and any other card that was spinning stops.
+     *
+     * A turn a drop already failed was right to be failed. "Not found" is the answer SESSION_STATUS
+     * would have given, so nothing is asked.
+     */
+    private fun onHostHasNoRecord() {
+        failRunningThinking()
+        onHostIdle()
+        disconnectFailedIds = emptySet()
+        disconnectFailedSessionId = null
+    }
+
+    /**
+     * The Host is still running a turn on this session: it survived a drop, or the app was relaunched
+     * into it. Undo the "Failed" a drop put on its items without asking again, and hold the composer
+     * behind the turn exactly as if this process had sent its INPUT, so a message typed now rides the
+     * turn and is answered (RUNTIME_INPUT_ACK) instead of going out as a plain INPUT that nothing is
+     * waiting on.
+     */
+    private fun onHostTurnRunning() {
+        serverTurnActive.value = true
+        val ids = disconnectFailedIds
+        if (ids.isNotEmpty() && conversationHistory.activeSessionId.value == disconnectFailedSessionId) {
+            unfailDisconnectedItems(ids)
+        }
+        disconnectFailedIds = emptySet()
+        disconnectFailedSessionId = null
     }
 
     /**
@@ -920,15 +1226,32 @@ open class ChatViewModel @JvmOverloads constructor(
      * lost when this runs a second time from the Connected handler.
      */
     private suspend fun restoreLocalSession(agentAddress: String, forceNew: Boolean) {
+        val previousSessionId = conversationHistory.activeSessionId.value
         when (val resume = conversationHistory.ensureActiveSession(agentAddress, viewModelScope, forceNew)) {
             is SessionResume.Unchanged -> {}
-            is SessionResume.Started -> _uiState.update { it.copy(chatItems = emptyList()) }
+            // A new conversation starts empty, except for an onboarding gate
+            // still waiting on the user. It belongs to the connection, not
+            // the conversation: the agent answers nothing until it is
+            // answered. On a first connect to an agent not saved yet, the
+            // card lands before this runs, and wiping it left no way to enter
+            // the code (W16AAPPLE-80).
+            is SessionResume.Started -> _uiState.update { state ->
+                val openGate = if (state.listFlags.hasOnboardSuccess) {
+                    emptyList()
+                } else {
+                    state.chatItems.filter { it is ChatItem.OnboardRequired || it is ChatItem.OnboardingFailed }
+                }
+                state.copy(chatItems = openGate)
+            }
             is SessionResume.Resumed -> {
                 val merged = trimToRetentionWindow(
                     (resume.items + _uiState.value.chatItems).dedupeUI()
                 )
                 _uiState.update { it.copy(chatItems = merged) }
             }
+        }
+        if (conversationHistory.activeSessionId.value != previousSessionId) {
+            clearExecItems()
         }
         // Now that a conversation is resolved, a replay that landed before it
         // finally has somewhere to go.
@@ -1270,7 +1593,11 @@ open class ChatViewModel @JvmOverloads constructor(
         launchScoped { conversationHistory.persistMessage(item) }
     }
 
-    private suspend fun saveAgentIfNeeded(address: String, directUrl: String?) {
+    private suspend fun saveAgentIfNeeded(agentAddress: String, directUrl: String?) {
+        // Saved in the same form as every other path saves it. The lookup
+        // ignores case anyway, but a row saved as typed kept capitals the
+        // rest of the app no longer writes (W16AAPPLE-57).
+        val address = canonicalAgentAddress(agentAddress)
         runCatchingCancellable {
             val existing = agentRepository.getAgentByAddress(address)
             if (existing == null) {
@@ -1300,6 +1627,7 @@ open class ChatViewModel @JvmOverloads constructor(
             // same guard in connectToAgent.
             failRunningThinking(persist = false)
             if (conversationHistory.startNewSession()) {
+                clearExecItems()
                 _uiState.update { it.copy(chatItems = emptyList()) }
                 // The id is minted here, not at the first message, so the
                 // re-CONNECT already names this chat's own session.
@@ -1315,7 +1643,9 @@ open class ChatViewModel @JvmOverloads constructor(
      */
     fun switchToSession(sessionId: String) {
         launchScoped {
-            if (conversationHistory.activeSessionId.value != sessionId) {
+            val switchingConversation = conversationHistory.activeSessionId.value != sessionId
+            if (switchingConversation) {
+                clearExecItems()
                 failRunningThinking(persist = false)
             }
             val items = conversationHistory.switchToSession(sessionId)
@@ -1355,7 +1685,57 @@ open class ChatViewModel @JvmOverloads constructor(
         }
     }
 
-    /** Moves one of the user's own bubbles to [next]. */
+    /**
+     * Hands the host's answer (or the reason none is coming) to the message
+     * waiting on it — see [pendingRuntimeInput]. The waiting send settles the
+     * bubble itself, so everything that happens to one message happens in one
+     * coroutine.
+     */
+    private fun answerPendingRuntimeInput(reply: RuntimeInputReply, stray: String? = null) {
+        val pending = pendingRuntimeInput
+        if (pending == null) {
+            if (stray != null) FileLogger.w(LogTags.CHAT_VM, "Runtime-input $stray with no message awaiting it; ignored")
+            return
+        }
+        pending.reply.complete(reply)
+    }
+
+    /**
+     * The connection is back, and it flushed its outbox on the way: the messages typed while it was
+     * down are on the wire now. Their bubbles stop saying they are waiting, which is also what
+     * unpins them from the bottom of the list, so the reply to one lands below it instead of above.
+     *
+     * Only the bubbles that went to the outbox: one held behind a running turn is waiting for that
+     * turn, not for the socket, and stays queued.
+     */
+    private fun settleOutboxedMessages() {
+        if (outboxedMessageIds.isEmpty()) return
+        val flushed = outboxedMessageIds.toSet()
+        outboxedMessageIds.clear()
+        _uiState.update { state ->
+            state.copy(
+                chatItems = state.chatItems.map { item ->
+                    if (item is ChatItem.User && item.id in flushed && item.state == UserMessageState.QUEUED) {
+                        item.copy(state = UserMessageState.SENT)
+                    } else {
+                        item
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * Moves one of the user's own bubbles to [next], and saves what it should
+     * come back as after a restart.
+     *
+     * That is not always [next]. In memory, a message can be held behind a
+     * running turn (QUEUED) or awaiting the host's answer (AWAITING_ACK); if
+     * the process dies there, it never went or nobody knows whether it did, so
+     * it is saved as failed — the same call a dropped connection makes. Only
+     * the outbox is the exception: it survives a restart and will still send
+     * what it holds, so a message in it is not failed.
+     */
     private fun setUserMessageState(messageId: String, next: UserMessageState) {
         _uiState.update { state ->
             state.copy(
@@ -1364,22 +1744,40 @@ open class ChatViewModel @JvmOverloads constructor(
                 }
             )
         }
+        val failedAfterRestart = when (next) {
+            UserMessageState.SENT -> false
+            UserMessageState.QUEUED -> messageId !in outboxedMessageIds
+            UserMessageState.AWAITING_ACK, UserMessageState.FAILED -> true
+        }
+        failedToSendWrites.trySend(messageId to failedAfterRestart)
     }
 
     /**
-     * Send a message that failed again, in place.
+     * Send a message that failed again, as the newest message.
      *
-     * Reuses the bubble's own id rather than minting a new one, so the
-     * transcript keeps one entry for one message however many attempts it
-     * takes — and so a second attempt cannot leave the first as an orphan the
-     * user has no way to clear.
+     * The bubble moves to the bottom of the chat: this attempt is sent now, and
+     * its reply lands at the bottom, so left where it failed the question would
+     * sit far above its answer. It moves rather than being copied — the id is
+     * reused, so the transcript keeps one entry for one message however many
+     * attempts it takes, and a second attempt cannot leave the first as an
+     * orphan the user has no way to clear. QUEUED keeps it pinned below the
+     * output of any turn still running (see ChatEventHelpers.isGate); the saved
+     * row follows once it actually goes out (see [sendMessage]).
      */
     fun resendMessage(messageId: String) {
         val failed = _uiState.value.chatItems
             .filterIsInstance<ChatItem.User>()
             .firstOrNull { it.id == messageId && it.state == UserMessageState.FAILED } ?: return
 
-        setUserMessageState(messageId, UserMessageState.QUEUED)
+        // Not setUserMessageState, on purpose: that also saves the state, and
+        // the saved row should stay failed until this attempt actually goes
+        // out — the send path's own state changes save it from there.
+        _uiState.update { state ->
+            state.copy(
+                chatItems = state.chatItems.filterNot { it.id == messageId } +
+                    failed.copy(state = UserMessageState.QUEUED)
+            )
+        }
         sendMessage(
             content = failed.content,
             images = failed.images,
@@ -1399,6 +1797,100 @@ open class ChatViewModel @JvmOverloads constructor(
      */
     fun retryFailedTurn(content: String, images: List<String>? = null, files: List<String>? = null) {
         sendMessage(content, images, files, echoUserMessage = false, waitForRunningTurn = false)
+    }
+
+    /** Requests from the Control Center app, already checked by ControlCenterHost. */
+    val controlCenterActions: ControlCenterActions = object : ControlCenterActions {
+        override suspend fun sendMessage(message: String, conversation: ControlCenterConversation) =
+            runControlCenterTurn(message, conversation)
+
+        override suspend fun runSkill(skill: String, args: String?, conversation: ControlCenterConversation) =
+            runControlCenterTurn(controlCenterSkillMessage(skill, args), conversation)
+    }
+
+    /**
+     * Sends [content] as a normal user message and returns the session once its turn ends.
+     * Only one runs at a time, and only while idle, since a queued message's answer would
+     * belong to the running turn. The app cancelling interrupts the turn it started (once it
+     * starts, if its message is still being sent), as in the React SDK; the page closing (the
+     * user going back to the chat) does not.
+     */
+    private suspend fun runControlCenterTurn(content: String, conversation: ControlCenterConversation): String {
+        if (conversation != ControlCenterConversation.CURRENT) {
+            throw ControlCenterActionRejected("Starting a new chat from the Control Center is not supported yet")
+        }
+        val activity = sessionActivity.value
+        if (activity == null || _targetAgentAddress.isBlank()) {
+            throw ControlCenterActionRejected("Agent connection is not ready")
+        }
+        // A cancelled action's message still being sent is busy too: its turn is about to start.
+        if (activity == SessionActivity.RUNNING || activity == SessionActivity.AWAITING_USER ||
+            controlCenterTurnInFlight.value || interruptPending.value || interruptWhenStarted != null
+        ) {
+            throw ControlCenterActionRejected("The agent is busy. Try again when its current turn has finished")
+        }
+        controlCenterTurnInFlight.value = true
+        val messageId = java.util.UUID.randomUUID().toString()
+        var started = false
+        var ended = false
+        var handedOff = false
+        var session: String? = null
+        try {
+            val end = coroutineScope {
+                // Subscribe before sending so a turn that ends at once is not missed.
+                val subscribed = CompletableDeferred<Unit>()
+                val waiting = async {
+                    merge(
+                        turnEvents.onSubscription { subscribed.complete(Unit) },
+                        // A failed send starts no turn, so nothing else would end the wait.
+                        _uiState.map { ui -> ui.chatItems.any { it is ChatItem.User && it.id == messageId && it.state == UserMessageState.FAILED } }
+                            .filter { it }
+                            .map { TurnEvent.Ended(TurnEnd.NOT_SENT) }
+                    ).mapNotNull { event ->
+                        when (event) {
+                            is TurnEvent.Started -> {
+                                if (event.messageId == messageId) {
+                                    started = true
+                                    session = controlCenterSessionId(_targetAgentAddress)
+                                }
+                                null
+                            }
+                            // An end before this message's turn started belongs to an earlier turn,
+                            // unless it means this message cannot be sent at all.
+                            is TurnEvent.Ended -> event.how.takeIf {
+                                started || it == TurnEnd.NOT_SENT || it == TurnEnd.CONNECTION_LOST
+                            }
+                        }
+                    }.first()
+                }
+                subscribed.await()
+                FileLogger.i(LogTags.CHAT_VM, "Control Center action: ${LogSanitizer.contentSummary(content)}")
+                handedOff = true
+                sendMessage(content, messageId = messageId)
+                waiting.await()
+            }
+            ended = true
+            return when (end) {
+                TurnEnd.OUTPUT -> session ?: controlCenterSessionId(_targetAgentAddress)
+                    ?: throw ControlCenterActionRejected("The turn finished, but this chat has no session yet")
+                TurnEnd.ERROR -> throw ControlCenterActionRejected("The agent stopped with an error. See the chat")
+                TurnEnd.INTERRUPTED -> throw ControlCenterActionRejected("The turn was stopped in the chat")
+                TurnEnd.CONNECTION_LOST ->
+                    throw ControlCenterActionRejected("The connection dropped before the turn finished. Check the chat before retrying")
+                TurnEnd.NOT_SENT -> throw ControlCenterActionRejected("The message did not reach the agent")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            if (e is ControlCenterCancelled && !ended) {
+                if (started || lastStartedMessageId == messageId) {
+                    interrupt()
+                } else if (handedOff) {
+                    interruptWhenStarted = messageId
+                }
+            }
+            throw e
+        } finally {
+            controlCenterTurnInFlight.value = false
+        }
     }
 
     fun sendMessage(
@@ -1546,40 +2038,237 @@ open class ChatViewModel @JvmOverloads constructor(
             val contentForAgent = if (instructionsSnapshot.isBlank()) content else "$instructionsSnapshot\n\n$content"
             val hasSomethingToSend = content.isNotBlank() || dataUrls != null || fileAttachments != null
 
-            val put: suspend () -> Unit = {
-                // Persisted here rather than when the bubble went up. The row's
-                // timestamp is what orders the transcript, and stamping it at
-                // the tap put a queued message *ahead of the reply it is
-                // waiting on* — the pinning below keeps the live list right,
-                // but the persisted order won, so the pair rendered as two
-                // questions followed by two answers.
-                if (echoUserMessage) conversationHistory.persistMessage(userItem, targetSessionId)
-                // A throw here is the send genuinely failing — the socket was
-                // closing under us, or the outbox refused the payload. The
-                // bubble has to say so, because nothing else will: there is no
-                // negative acknowledgement on this protocol.
-                val delivered = if (hasSomethingToSend) {
-                    runCatchingCancellable {
-                        connectUseCase.sendMessage(contentForAgent, _targetAgentAddress, dataUrls, fileAttachments)
-                    }.onFailure {
-                        FileLogger.e(LogTags.CHAT_VM, "Send failed: ${it.message}")
-                    }.isSuccess
-                } else {
-                    true
+            // What goes on the wire, kept whole so a refused send can be repeated
+            // exactly — images and files included — instead of being rebuilt
+            // from the bubble.
+            val payload = OutgoingPayload(contentForAgent, dataUrls, fileAttachments)
+
+            // [intoRunningTurn] is true when the INPUT left while a turn was
+            // still running (the idle hold timed out), which is the only time
+            // the host can answer it with RUNTIME_INPUT_ACK / _REJECTED.
+            // Held behind a running turn, a new message would otherwise live
+            // only in memory until it goes out, and a process death in between
+            // lost it without a trace. Saved now as failed, so a restart brings
+            // it back resendable. Same check as sendWhenTheAgentIsIdle's.
+            val savedWhileHeld = echoUserMessage && waitForRunningTurn && hasSomethingToSend &&
+                (serverTurnActive.value || isAgentWorking.value)
+            if (savedWhileHeld) {
+                conversationHistory.persistMessage(userItem.copy(state = UserMessageState.FAILED), targetSessionId)
+            }
+
+            // Where the row has to be once this message settles: a resend's
+            // bubble already moved to the bottom, and one saved while held is
+            // dated at the tap — before the reply it waited behind. Either way
+            // the saved row follows it to the end, or a reload puts it back
+            // above that reply (two questions, then two answers).
+            suspend fun saveAtTheEnd() {
+                if (savedWhileHeld || messageId != null) {
+                    conversationHistory.moveMessageToEnd(userItem, targetSessionId)
+                } else if (echoUserMessage) {
+                    conversationHistory.persistMessage(userItem, targetSessionId)
                 }
+            }
+
+            val put: suspend (intoRunningTurn: Boolean) -> Boolean = { intoRunningTurn ->
+                // Saved (or moved) here, when it goes out, rather than when the
+                // bubble went up: the row's timestamp is what orders the
+                // transcript. See saveAtTheEnd.
+                saveAtTheEnd()
+                // A resend (messageId given) parked its bubble as QUEUED before
+                // getting here, so it has to be settled even when nothing else
+                // flagged it — otherwise it would stay QUEUED after delivery.
+                // One saved while held is saved as failed, and settling is
+                // what clears that once it is delivered.
+                transmit(
+                    userId = userId,
+                    payload = payload,
+                    intoRunningTurn = intoRunningTurn,
+                    offline = offline,
+                    settleBubble = queuedAtSend || messageId != null || savedWhileHeld,
+                    attempt = 0
+                )
+            }
+            if (waitForRunningTurn && hasSomethingToSend) {
+                sendWhenTheAgentIsIdle(
+                    canRideRunningTurn = !payload.hasAttachments,
+                    onHeldTooLong = {
+                        // put() never runs for this message, so this is where it is
+                        // saved, or moved to where its bubble now is. Without it,
+                        // reopening the app shows the agent's answer with no
+                        // question above it.
+                        saveAtTheEnd()
+                        setUserMessageState(userId, UserMessageState.FAILED)
+                    },
+                    send = put
+                )
+            } else {
+                put(false)
+            }
+        }
+    }
+
+    /** What one outgoing message puts on the wire. */
+    private class OutgoingPayload(
+        val content: String,
+        val dataUrls: List<String>?,
+        val files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?
+    ) {
+        /** The host's mid-turn queue keeps only the text, so these must never go into a running turn. */
+        val hasAttachments: Boolean get() = dataUrls != null || files != null
+    }
+
+    /** A message sent into a running turn, and the host's answer to it when it comes. */
+    private class PendingRuntimeInput(
+        val id: String,
+        val payload: OutgoingPayload,
+        val reply: CompletableDeferred<RuntimeInputReply> = CompletableDeferred()
+    )
+
+    private enum class RuntimeInputReply {
+        /** `RUNTIME_INPUT_ACK`: queued for the running turn. */
+        ACCEPTED,
+
+        /** `RUNTIME_INPUT_REJECTED`, retryable: send it again once the turn's OUTPUT lands. */
+        REFUSED_RETRYABLE,
+
+        /** `RUNTIME_INPUT_REJECTED`, not retryable: it is not going to be taken. */
+        REFUSED,
+
+        /** The turn finished with no answer: the message was not runtime input. */
+        TURN_ENDED,
+
+        /** The socket died, so no answer can come and delivery is unknown. */
+        CONNECTION_LOST
+    }
+
+    /**
+     * Puts one message on the wire and settles its bubble.
+     *
+     * Into a running turn ([intoRunningTurn], online) delivery is unconfirmed
+     * until the host answers: it queues the text (`RUNTIME_INPUT_ACK`) or
+     * refuses it (`RUNTIME_INPUT_REJECTED`). The bubble says so, the message is
+     * registered as [pendingRuntimeInput] *before* the INPUT leaves, and this
+     * does not return until the host has answered or [RUNTIME_INPUT_REPLY_TIMEOUT_MS]
+     * has passed — the caller holds [outgoingSendLock], so nothing else is sent
+     * while an answer is owed. Offline sends sit in the outbox and go out later
+     * as ordinary INPUTs, so they never wait for one.
+     *
+     * [attempt] is 0 for the first send and 1 for the one repeat a retryable
+     * refusal earns; a second refusal is final.
+     *
+     * Returns whether this INPUT is now part of a running turn — what the
+     * caller needs to know to keep [serverTurnActive] right. A failed send, a
+     * refusal and a dropped socket all return false.
+     */
+    private suspend fun transmit(
+        userId: String,
+        payload: OutgoingPayload,
+        intoRunningTurn: Boolean,
+        offline: Boolean,
+        settleBubble: Boolean,
+        attempt: Int
+    ): Boolean {
+        val pending = if (intoRunningTurn && !offline) PendingRuntimeInput(userId, payload) else null
+        if (pending != null) {
+            pendingRuntimeInput = pending
+            setUserMessageState(userId, UserMessageState.AWAITING_ACK)
+        }
+        try {
+            // A throw here is the send genuinely failing — the socket was
+            // closing under us, or the outbox refused the payload. The bubble
+            // has to say so, because nothing else will: there is no negative
+            // acknowledgement on this protocol.
+            val delivered = runCatchingCancellable {
+                connectUseCase.sendMessage(payload.content, _targetAgentAddress, payload.dataUrls, payload.files)
+            }.onFailure {
+                FileLogger.e(LogTags.CHAT_VM, "Send failed: ${it.message}")
+            }.isSuccess
+            if (!delivered) {
+                if (interruptWhenStarted == userId) interruptWhenStarted = null
+                setUserMessageState(userId, UserMessageState.FAILED)
+                return false
+            }
+            // On the wire, so a turn is (about to be) running. Set now, before any wait
+            // for the host's answer: if that answer is the turn's OUTPUT, it clears this,
+            // and setting it after the wait would resurrect a turn that already ended.
+            serverTurnActive.value = true
+            lastStartedMessageId = userId
+            turnEvents.tryEmit(TurnEvent.Started(userId))
+            if (interruptWhenStarted == userId) {
+                interruptWhenStarted = null
+                interrupt()
+            }
+            if (pending == null) {
+                if (offline) outboxedMessageIds += userId
                 // Off the tail once it lands, so anything the new turn emits
                 // appends after it the way it always did. Offline sends stay
                 // QUEUED until the outbox flush; only a hard failure is FAILED.
-                val settled = when {
-                    !delivered -> UserMessageState.FAILED
-                    offline -> UserMessageState.QUEUED
-                    else -> UserMessageState.SENT
+                if (settleBubble) setUserMessageState(userId, if (offline) UserMessageState.QUEUED else UserMessageState.SENT)
+                return true
+            }
+            val reply = withTimeoutOrNull(RUNTIME_INPUT_REPLY_TIMEOUT_MS) { pending.reply.await() }
+            return when (reply) {
+                RuntimeInputReply.ACCEPTED -> {
+                    setUserMessageState(userId, UserMessageState.SENT)
+                    true
                 }
-                if (queuedAtSend || settled == UserMessageState.FAILED) {
-                    setUserMessageState(userId, settled)
+                // Nothing was queued and the turn is still running, so the same
+                // text goes out again once it ends — but only once. A second
+                // refusal means the host will not take it, and asking again and
+                // again would be an endless loop the user cannot see.
+                RuntimeInputReply.REFUSED_RETRYABLE -> {
+                    if (attempt == 0) {
+                        setUserMessageState(userId, if (serverTurnActive.value) UserMessageState.QUEUED else UserMessageState.SENT)
+                        retryRefusedRuntimeInput(userId, payload)
+                    } else {
+                        setUserMessageState(userId, UserMessageState.FAILED)
+                    }
+                    false
+                }
+                RuntimeInputReply.REFUSED -> {
+                    setUserMessageState(userId, UserMessageState.FAILED)
+                    false
+                }
+                // Silence, or the turn ending first: the host answers a runtime
+                // INPUT immediately, so this was an ordinary INPUT that started
+                // a turn of its own.
+                RuntimeInputReply.TURN_ENDED, null -> {
+                    setUserMessageState(userId, UserMessageState.SENT)
+                    true
+                }
+                RuntimeInputReply.CONNECTION_LOST -> {
+                    // Whether the host queued it is unknown. Say it did not go,
+                    // and let the user resend it.
+                    setUserMessageState(userId, UserMessageState.FAILED)
+                    false
                 }
             }
-            if (waitForRunningTurn && hasSomethingToSend) sendWhenTheAgentIsIdle(put) else put()
+        } finally {
+            if (pending != null && pendingRuntimeInput === pending) pendingRuntimeInput = null
+        }
+    }
+
+    /**
+     * Sends a message the host refused as runtime input once more, through the
+     * ordinary hold, so it goes out as a normal INPUT after the turn ends.
+     * Launched rather than called: the refused send still holds
+     * [outgoingSendLock], which this has to queue behind.
+     */
+    private fun retryRefusedRuntimeInput(userId: String, payload: OutgoingPayload) {
+        viewModelScope.launch {
+            sendWhenTheAgentIsIdle(
+                canRideRunningTurn = !payload.hasAttachments,
+                onHeldTooLong = { setUserMessageState(userId, UserMessageState.FAILED) }
+            ) { intoRunningTurn ->
+                transmit(
+                    userId = userId,
+                    payload = payload,
+                    intoRunningTurn = intoRunningTurn,
+                    offline = !connectUseCase.isConnected(),
+                    settleBubble = true,
+                    attempt = 1
+                )
+            }
         }
     }
 
@@ -1597,7 +2286,15 @@ open class ChatViewModel @JvmOverloads constructor(
      * on device. Waiting makes it an ordinary INPUT, which always starts its
      * own turn and is always answered.
      */
-    private suspend fun sendWhenTheAgentIsIdle(send: suspend () -> Unit) {
+    private suspend fun sendWhenTheAgentIsIdle(
+        // False for a message with attachments: the host's mid-turn queue keeps
+        // only the text, so it must never be sent into a running turn.
+        canRideRunningTurn: Boolean = true,
+        // Called, still holding the lock, when a message that cannot ride a running
+        // turn is still facing one after the wait.
+        onHeldTooLong: suspend () -> Unit = {},
+        send: suspend (intoRunningTurn: Boolean) -> Boolean
+    ) {
         outgoingSendLock.withLock {
             // Either signal counts as busy: serverTurnActive covers the turn
             // this session started, isAgentWorking covers one already running
@@ -1605,15 +2302,24 @@ open class ChatViewModel @JvmOverloads constructor(
             if (serverTurnActive.value || isAgentWorking.value) {
                 FileLogger.i(LogTags.CHAT_VM, "Send held: a turn is still running")
                 val busy = combine(serverTurnActive, isAgentWorking) { own, onScreen -> own || onScreen }
-                // Bounded: a turn left in progress by a dropped connection must
-                // not strand the message forever. Sending late beats never.
+                // Bounded for everyone: a turn left in progress by a dropped
+                // connection must not strand the queue. isAgentWorking is true for
+                // any unfinished card (a tool left RUNNING by a server crash, a
+                // stuck eval or compaction card), and nothing clears those on
+                // disconnect, so an unbounded wait here would block every later
+                // message too. Sending late beats never.
                 withTimeoutOrNull(TURN_WAIT_TIMEOUT_MS) { busy.first { !it } }
             }
-            send()
-            // Set here rather than when progress first shows: there is no gap
-            // between the INPUT leaving and this being true, so a second queued
-            // message has nothing to slip through.
-            serverTurnActive.value = true
+            // Checked after the wait rather than from its result, so a turn that
+            // starts between "idle" and here is caught too.
+            if (!canRideRunningTurn && (serverTurnActive.value || isAgentWorking.value)) {
+                FileLogger.w(LogTags.CHAT_VM, "Attachment send not made: the turn never ended")
+                onHeldTooLong()
+                return@withLock
+            }
+            // The busy flag is set inside transmit(), the moment the INPUT is on
+            // the wire, not here after the reply wait. See transmit().
+            send(serverTurnActive.value || isAgentWorking.value)
         }
     }
 
@@ -1896,6 +2602,64 @@ open class ChatViewModel @JvmOverloads constructor(
     }
 
     /**
+     * Send a direct tool command and expose its eventual EXEC_RESULT to the
+     * UI. The pending item is added synchronously so the user sees immediate
+     * feedback while the connection waits for the agent.
+     */
+    fun executeTool(tool: String, argsJson: String) {
+        val execId = UUID.randomUUID().toString()
+        val agentAddress = _targetAgentAddress
+
+        _execItems.update { items ->
+            items + ExecUiItem(execId = execId, tool = tool)
+        }
+
+        if (agentAddress.isBlank()) {
+            completeExec(execId, ExecOutcome.NotSent("No agent is connected"))
+            return
+        }
+
+        val request = ExecRequest(
+            execId = execId,
+            tool = tool,
+            argsJson = argsJson,
+            agentAddress = agentAddress
+        )
+
+        launchScoped {
+            val outcome = executeRequestSafely(request)
+            completeExec(request.execId, outcome)
+        }
+    }
+
+    private suspend fun executeRequestSafely(request: ExecRequest): ExecOutcome {
+        return runCatchingCancellable {
+            connectUseCase.executeTool(request)
+        }.getOrElse { error ->
+            ExecOutcome.Unknown(error.message ?: "EXEC command failed")
+        }
+    }
+
+    private fun completeExec(execId: String, outcome: ExecOutcome) {
+        _execItems.update { items ->
+            items.map { item ->
+                if (item.execId == execId) item.copy(outcome = outcome) else item
+            }
+        }
+    }
+
+    /** Remove one direct EXEC card from the current conversation's UI. */
+    fun dismissExec(execId: String) {
+        _execItems.update { items ->
+            items.filterNot { it.execId == execId }
+        }
+    }
+
+    private fun clearExecItems() {
+        _execItems.value = emptyList()
+    }
+
+    /**
      * Ask the agent to gracefully stop its current run — it finishes the
      * current step and returns a closing message rather than stopping
      * mid-tool-call (see [ai.openonion.oochat.data.protocol.InterruptMessage]'s
@@ -1906,6 +2670,10 @@ open class ChatViewModel @JvmOverloads constructor(
      */
     fun interrupt() {
         FileLogger.i(LogTags.CHAT_VM, "interrupt: stopping current run")
+        // The Host answers a stopped run with a closing OUTPUT; until then a new
+        // Control Center action would be answered by that OUTPUT instead of its own.
+        if (serverTurnActive.value || isAgentWorking.value) interruptPending.value = true
+        turnEnded(TurnEnd.INTERRUPTED)
         markRunningItemsDone()
         // markRunningItemsDone only freezes the spinners. Without this the
         // send gate stayed shut, so Stop looked like it had worked and the
@@ -1988,21 +2756,26 @@ open class ChatViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Advance the mode chip one step through [ApprovalMode.CYCLE].
+     * Advance the mode chip one step through [SessionModes.cycle] — the
+     * legacy [ApprovalMode.CYCLE], or the modes the Host advertised.
      *
-     * This is the *only* path a tap can take, and it cannot reach
-     * [ApprovalMode.ULW] — see [ApprovalMode.CYCLE]'s doc. Entering ULW goes
-     * through [setApprovalMode] with an explicit turn budget instead. From
-     * ULW itself this lands on the first cycle entry, which is the exit the
-     * chip offers while ULW is active.
+     * This is the *only* path a tap can take, and it cannot reach an
+     * unattended mode ([ApprovalMode.ULW], [ApprovalMode.FULL_ACCESS]) — see
+     * [ApprovalMode.CYCLE]'s doc. Entering one goes through [setApprovalMode]
+     * from the sheet instead. From one, this lands on [SessionModes.default]
+     * (safe, or the Host's auto), which is the exit the chip offers while it
+     * is active.
      */
     fun cycleApprovalMode() {
-        setApprovalMode(approvalMode.value.next())
+        val modes = sessionModes.value
+        val current = approvalMode.value
+        setApprovalMode(if (current.isUnattended) modes.default else current.next(modes.cycle))
     }
 
     /**
      * Switch to an explicitly chosen mode. [turns] is ULW's autonomous-turn
-     * budget and is ignored by the server for every other mode.
+     * budget and is ignored by the server for every other mode. A mode this
+     * connection does not offer is dropped by the repository.
      */
     fun setApprovalMode(mode: ApprovalMode, turns: Int? = null) {
         launchScoped { connectUseCase.setMode(mode, turns) }
@@ -2025,6 +2798,7 @@ open class ChatViewModel @JvmOverloads constructor(
             // Wipe the active session's persisted log too, so the drawer's
             // preview/count for this conversation reflects the clear.
             conversationHistory.clearActiveSession()
+            clearExecItems()
             _uiState.update { it.copy(chatItems = emptyList()) }
         }
     }
@@ -2039,6 +2813,13 @@ open class ChatViewModel @JvmOverloads constructor(
 
     companion object {
         /** How long a queued send waits out the running turn — see [sendWhenTheAgentIsIdle]. */
-        private const val TURN_WAIT_TIMEOUT_MS = 120_000L
+        internal const val TURN_WAIT_TIMEOUT_MS = 120_000L
+
+        /**
+         * How long a message sent into a running turn waits for the host's
+         * answer. The host replies the moment it reads the INPUT, so silence
+         * this long means it was not runtime input.
+         */
+        internal const val RUNTIME_INPUT_REPLY_TIMEOUT_MS = 10_000L
     }
 }

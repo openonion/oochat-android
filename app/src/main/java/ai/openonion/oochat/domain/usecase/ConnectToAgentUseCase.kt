@@ -9,7 +9,13 @@ import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.network.AgentConnection
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.InMemoryPendingMessageSink
@@ -46,6 +52,8 @@ class ConnectToAgentUseCase(
     private val sessionStore: SessionStore? = null,
     private val agentDiscovery: AgentDiscoveryService = AgentDiscoveryService(),
     private val pendingMessageSink: PendingMessageSink = InMemoryPendingMessageSink(),
+    // Whether the app is on screen; see AgentConnection's isAppVisible.
+    private val isAppVisible: () -> Boolean = { true },
     // Factory (not a shared instance) so getOrCreateRepository() below still
     // creates at most one repository per use-case instance. Defaults to the
     // real ConnectionRepositoryImpl; tests substitute a fake ConnectionRepository
@@ -56,6 +64,7 @@ class ConnectToAgentUseCase(
             relayUrl,
             sessionStore,
             pendingMessageSink,
+            isAppVisible = isAppVisible,
             agentDiscovery = agentDiscovery
         )
     }
@@ -80,8 +89,20 @@ class ConnectToAgentUseCase(
     override val modePending: StateFlow<Boolean>
         get() = getOrCreateRepository().modePending
 
+    override val sessionModes: StateFlow<SessionModes>
+        get() = getOrCreateRepository().sessionModes
+
+    override val hostSessionStatus: StateFlow<ServerSessionStatus>
+        get() = getOrCreateRepository().hostSessionStatus
+
     override val dashboardHtml: StateFlow<String?>
         get() = getOrCreateRepository().dashboardHtml
+
+    override val controlCenterApp: StateFlow<ControlCenterApp?>
+        get() = getOrCreateRepository().controlCenterApp
+
+    override val plan: StateFlow<List<PlanEntry>>
+        get() = getOrCreateRepository().plan
 
     /**
      * Connect to an agent with timeout.
@@ -109,21 +130,25 @@ class ConnectToAgentUseCase(
         // its own — has answered the question. Re-asking it costs another
         // handshake and a reset() that discards a session nothing is wrong
         // with. Transport failures below still get their retry.
-        val verdict = getOrCreateRepository().connectionState.value.errorMessageOrNull()
+        val state = getOrCreateRepository().connectionState.value
+        val verdict = state.errorMessageOrNull()
         if (verdict != null && ServerErrorText.isOfflineVerdict(verdict)) {
             FileLogger.w(LogTags.CONNECT_USE_CASE, "Relay says the agent is offline; skipping attempt 2")
             return false
         }
+        // The agent refused our protocol version: attempt 2 would send the
+        // same descriptor, be refused again, and show the user a second error.
+        if (state is ConnectionState.Error && !state.retryable) {
+            FileLogger.w(LogTags.CONNECT_USE_CASE, "Non-retryable error; skipping attempt 2")
+            return false
+        }
 
-        // Fallback: drop the persisted session and try once more with
-        // sessionId=null, so the server creates a fresh session. The
-        // wasted 30s timeout on the first attempt is the cost of
-        // auto-recovering from a stale session; the second attempt
-        // either connects (success) or fails fast (no real network
-        // issue, so we don't wait the full timeout again — reset()
-        // closes the WS immediately).
-        FileLogger.w(LogTags.CONNECT_USE_CASE, "First attempt failed; clearing session and retrying")
-        reset()
+        // Anything else may be transient, so one more try on the same session.
+        // Nothing is cleared first: the Host never refuses a CONNECT over its
+        // session id (ws_router/connect.py resumes it, starts one under that
+        // id, or reports a new id in CONNECTED), and reset() would also throw
+        // away the messages queued while offline (W16AAPPLE-84).
+        FileLogger.w(LogTags.CONNECT_USE_CASE, "First attempt failed; retrying on the same session")
 
         return tryConnectOnce(effectiveAddress, conversationId, effectiveDirectUrl, attempt = 2)
     }
@@ -143,10 +168,9 @@ class ConnectToAgentUseCase(
      * the Connected state within [connectionTimeoutMs] — or the agent
      * gates on ONBOARD_REQUIRED (see below).
      *
-     * Returns false early (no 30s wait) when the server rejects the
-     * attempt with a "Session is already attached" error — that's the
-     * signal to drop the persisted session and try again with
-     * sessionId=null.
+     * Returns false as soon as the state becomes an Error, without waiting
+     * out the timeout; [connect] then decides whether a second attempt is
+     * worth making.
      */
     private suspend fun tryConnectOnce(
         address: String,
@@ -179,24 +203,18 @@ class ConnectToAgentUseCase(
             val stateDeferred = async {
                 repo.connect(address, conversationId, directUrl)
                 withTimeoutOrNull(connectionTimeoutMs) {
-                    // Wait until state leaves Connecting/Reconnecting. Surface
-                    // a "stale session" error as a fast-fail so the outer
-                    // connect() can drop the persisted sessionId and retry
-                    // without waiting the full 30s.
-                    while (repo.connectionState.value is ConnectionState.Connecting ||
-                           repo.connectionState.value is ConnectionState.Reconnecting) {
-                        val err = (repo.connectionState.value as? ConnectionState.Error)?.message
-                        if (err != null && isStaleSessionError(err)) {
-                            FileLogger.w(
-                                "ConnectUseCase",
-                                "Fast-fail on stale-session error after <30s: $err"
-                            )
-                            repo.disconnect()
-                            return@withTimeoutOrNull false
-                        }
+                    // Wait until state leaves Connecting/Reconnecting. An Error,
+                    // a stale-session one included, ends the wait at once.
+                    // Reaching CONNECTED is the verdict, not still being on it:
+                    // a drop straight after is the connection's own reconnect to
+                    // handle, and a second attempt would start over without
+                    // last_msg_id (W16AAPPLE-94).
+                    while (!repo.hasConnectedThisAttempt &&
+                           (repo.connectionState.value is ConnectionState.Connecting ||
+                            repo.connectionState.value is ConnectionState.Reconnecting)) {
                         delay(100)
                     }
-                    repo.connectionState.value is ConnectionState.Connected
+                    repo.hasConnectedThisAttempt || repo.connectionState.value is ConnectionState.Connected
                 } ?: run {
                     FileLogger.e(LogTags.CONNECT_USE_CASE, "Connection timeout after ${connectionTimeoutMs}ms")
                     repo.disconnect()
@@ -219,11 +237,12 @@ class ConnectToAgentUseCase(
         }
     }
 
-    private fun isStaleSessionError(message: String): Boolean =
-        StaleSessionDetector.isStaleSessionError(message)
-
     override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<OutgoingFileAttachment>?) {
         getOrCreateRepository().sendMessage(content, agentAddress, images, files)
+    }
+
+    override suspend fun executeTool(request: ExecRequest): ExecOutcome {
+        return getOrCreateRepository().executeTool(request)
     }
 
     override fun observeEvents(): Flow<ChatEvent> {
@@ -232,6 +251,10 @@ class ConnectToAgentUseCase(
 
     override fun releaseServerTranscript() {
         getOrCreateRepository().releaseServerTranscript()
+    }
+
+    override fun releaseSessionStatus() {
+        getOrCreateRepository().releaseSessionStatus()
     }
 
     override suspend fun respond(answer: String) {

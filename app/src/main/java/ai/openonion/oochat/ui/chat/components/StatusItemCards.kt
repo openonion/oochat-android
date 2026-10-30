@@ -147,12 +147,35 @@ internal fun EvalCard(item: ChatItem.EvalItem) {
     }
 }
 
+/**
+ * Shown under a finished compaction so the percentages read as a consequence
+ * the user can act on: anything said before this line now survives only as a
+ * summary in the agent's context.
+ */
+internal const val COMPACT_DONE_HINT = "Earlier messages were summarised — the agent may not recall their details."
+
 @Composable
 internal fun CompactDivider(item: ChatItem.CompactItem) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = MaterialTheme.spacing.xs),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CompactDividerLabel(item)
+        if (item.status == CompactStatus.DONE) {
+            Text(
+                text = COMPACT_DONE_HINT,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactDividerLabel(item: ChatItem.CompactItem) {
+    Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -209,6 +232,7 @@ internal fun ModeChangedDivider(item: ChatItem.ModeChangedItem) {
         Text(
             text = buildString {
                 append("Switched to ${modeLabel(item.mode)}")
+                item.turnsLeft?.let { append(" · $it turns") }
                 triggeredBySource(item.triggeredBy)?.let { append(" · $it") }
             },
             style = MaterialTheme.typography.labelSmall,
@@ -224,6 +248,9 @@ private fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "plan mode"
     "accept_edits" -> "accept-edits mode"
     "ulw" -> "ULW mode"
+    "read-only" -> "read-only mode"
+    "auto" -> "auto mode"
+    "full-access" -> "full-access mode"
     else -> "$mode mode"
 }
 
@@ -234,6 +261,7 @@ private fun triggeredBySource(triggeredBy: String?): String? = when (triggeredBy
     "user" -> "you"
     "agent" -> "agent"
     "ulw_checkpoint" -> "checkpoint"
+    "full_access_expired" -> "turns used up"
     else -> triggeredBy
 }
 

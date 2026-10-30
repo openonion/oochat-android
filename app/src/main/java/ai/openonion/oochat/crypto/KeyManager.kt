@@ -7,10 +7,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import cash.z.ecc.android.bip39.Mnemonics
 import cash.z.ecc.android.bip39.toSeed
-import com.goterl.lazysodium.LazySodiumAndroid
-import com.goterl.lazysodium.SodiumAndroid
-import com.goterl.lazysodium.interfaces.Sign
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -27,13 +25,16 @@ import kotlinx.serialization.json.buildJsonObject
  * Implements [IdentityManager] so [ai.openonion.oochat.ui.settings.SettingsViewModel]
  * can depend on the narrower interface and be unit-tested with an in-memory fake.
  */
-class KeyManager(private val context: Context) : IdentityManager {
-    // by lazy (not eager) so constructing KeyManager doesn't unconditionally
-    // load the native libsodium .so — only generate()/sign() (which
-    // actually need it) trigger the load. This lets canonicalJson(), which
-    // touches neither sodium nor prefs, be exercised in a plain JVM unit
-    // test (see KeyManagerTest) without an Android device/emulator.
-    private val sodium by lazy { LazySodiumAndroid(SodiumAndroid()) }
+class KeyManager internal constructor(
+    private val context: Context,
+    // libsodium in production, loaded only when generate()/sign() first need
+    // it — so canonicalJson(), which touches neither sodium nor prefs, still
+    // runs in a plain JVM unit test (see KeyManagerTest). Tests that need the
+    // mnemonic paths substitute an RFC 8032 implementation; see [Ed25519].
+    private val ed25519: Ed25519
+) : IdentityManager {
+    constructor(context: Context) : this(context, SodiumEd25519())
+
     // Routed through SafePreferencesWrapper (already used by every other
     // encrypted-storage class in the app) instead of calling
     // EncryptedSharedPreferences.create() directly: besides the fallback
@@ -83,9 +84,7 @@ class KeyManager(private val context: Context) : IdentityManager {
      * Generate a new Ed25519 keypair.
      */
     fun generate(): AddressData {
-        val keyPair = sodium.cryptoSignKeypair()
-        val publicKey = keyPair.publicKey.asBytes
-        val privateKey = keyPair.secretKey.asBytes
+        val (publicKey, privateKey) = ed25519.keypair()
 
         val address = "0x" + publicKey.toHex()
         val shortAddress = "${address.take(6)}...${address.takeLast(4)}"
@@ -159,11 +158,7 @@ class KeyManager(private val context: Context) : IdentityManager {
      * derived from the same seed by the web client's tweetnacl.
      */
     private fun keysFromSeed(seed: ByteArray): AddressData {
-        val publicKey = ByteArray(Sign.ED25519_PUBLICKEYBYTES)
-        val secretKey = ByteArray(Sign.ED25519_SECRETKEYBYTES)
-        check(sodium.cryptoSignSeedKeypair(publicKey, secretKey, seed)) {
-            "Failed to derive Ed25519 keypair from seed"
-        }
+        val (publicKey, secretKey) = ed25519.keypairFromSeed(seed)
         val address = "0x" + publicKey.toHex()
         return AddressData(
             address = address,
@@ -191,12 +186,13 @@ class KeyManager(private val context: Context) : IdentityManager {
 
     /**
      * Derive the identity for an existing, already-known mnemonic phrase
-     * (import / restore). Throws [Mnemonics.ChecksumException],
-     * [Mnemonics.WordCountException], or [Mnemonics.InvalidWordException]
-     * (all `cash.z.ecc.android.bip39.Mnemonics.*`) if the phrase is invalid.
+     * (import / restore). Case and spacing between words don't matter. Throws
+     * [Mnemonics.ChecksumException], [Mnemonics.WordCountException], or
+     * [Mnemonics.InvalidWordException] (all `cash.z.ecc.android.bip39.Mnemonics.*`)
+     * if the phrase is invalid.
      */
     fun keysFromMnemonic(mnemonic: String): AddressData {
-        val mnemonicCode = Mnemonics.MnemonicCode(mnemonic.trim().lowercase())
+        val mnemonicCode = Mnemonics.MnemonicCode(normalisePhrase(mnemonic))
         mnemonicCode.validate()
         val seed = mnemonicCode.toSeed().copyOfRange(0, 32)
         return keysFromSeed(seed)
@@ -206,8 +202,10 @@ class KeyManager(private val context: Context) : IdentityManager {
      * Derive the identity for a raw 64-byte Ed25519 secret key given as 128
      * hex characters (optionally "0x"-prefixed) — the legacy/no-mnemonic
      * import path, matching the web client's `importKey()` hex fallback.
-     * The public key is the secret key's last 32 bytes, per libsodium's
-     * (and tweetnacl's identical) packed secret-key convention.
+     * The key is libsodium's (and tweetnacl's identical) packing: a 32-byte
+     * seed, then the public key it derives. A key whose second half is not
+     * that public key is refused: its address would be one the key cannot
+     * sign for, so every CONNECT would fail verification.
      */
     fun keysFromHex(hex: String): AddressData {
         val cleaned = hex.trim().removePrefix("0x")
@@ -217,6 +215,10 @@ class KeyManager(private val context: Context) : IdentityManager {
         }
         val privateKey = cleaned.hexToBytes()
         val publicKey = privateKey.copyOfRange(32, 64)
+        val (derivedPublicKey, _) = ed25519.keypairFromSeed(privateKey.copyOfRange(0, 32))
+        require(derivedPublicKey.contentEquals(publicKey)) {
+            "Invalid private key — it doesn't match its own public key. Check the whole key was copied."
+        }
         val address = "0x" + publicKey.toHex()
         return AddressData(
             address = address,
@@ -241,20 +243,22 @@ class KeyManager(private val context: Context) : IdentityManager {
 
     /**
      * Overwrites the current identity from user-supplied input — either a
-     * 12/24-word recovery phrase or a raw hex private key, matching the web
-     * client's `importKey()` branching exactly (word count 12 or 24 →
-     * mnemonic path; otherwise treated as hex).
+     * recovery phrase of any BIP39 length ([PHRASE_WORD_COUNTS]) or a raw hex
+     * private key. Matches connectonion-react's `seedFromRecovery()`
+     * (browser-identity.ts): any BIP39 length, spacing collapsed, and a hex
+     * key refused unless its public half matches its seed.
      */
     override fun importFromPhraseOrHex(input: String): AddressData {
-        val trimmed = input.trim().lowercase()
-        val wordCount = trimmed.split(Regex("\\s+")).filter { it.isNotEmpty() }.size
-        return if (wordCount == 12 || wordCount == 24) {
-            val keys = keysFromMnemonic(trimmed)
+        val phrase = normalisePhrase(input)
+        return if (phrase.split(' ').size in PHRASE_WORD_COUNTS) {
+            val keys = keysFromMnemonic(phrase)
             save(keys)
-            saveMnemonic(trimmed)
+            // Stored normalised, so "Backup Seed Phrase" shows the words the
+            // way BIP39 reads them, whatever spacing they were typed with.
+            saveMnemonic(phrase)
             keys
         } else {
-            val keys = keysFromHex(trimmed)
+            val keys = keysFromHex(input.trim().lowercase())
             save(keys)
             clearMnemonic()
             keys
@@ -287,17 +291,7 @@ class KeyManager(private val context: Context) : IdentityManager {
      * Returns hex-encoded signature.
      */
     fun sign(keys: AddressData, message: String): String {
-        val messageBytes = message.toByteArray(Charsets.UTF_8)
-        val signatureBytes = ByteArray(Sign.ED25519_BYTES)
-
-        sodium.cryptoSignDetached(
-            signatureBytes,
-            messageBytes,
-            messageBytes.size.toLong(),
-            keys.privateKey
-        )
-
-        return signatureBytes.toHex()
+        return ed25519.sign(message.toByteArray(Charsets.UTF_8), keys.privateKey).toHex()
     }
 
     /**
@@ -321,6 +315,21 @@ class KeyManager(private val context: Context) : IdentityManager {
     private fun toJsonValue(value: Any?): JsonElement {
         return when (value) {
             null -> JsonNull
+            // Already-serialised values, e.g. a signed command's payload. Ahead
+            // of the Map/List branches because JsonObject is a Map and
+            // JsonArray a List; a primitive would otherwise reach toString()
+            // and be quoted twice.
+            is JsonObject -> buildJsonObject {
+                for ((k, v) in value.entries.sortedBy { it.key }) {
+                    put(k, toJsonValue(v))
+                }
+            }
+            is JsonArray -> buildJsonArray {
+                for (item in value) {
+                    add(toJsonValue(item))
+                }
+            }
+            is JsonElement -> value
             is String -> JsonPrimitive(value)
             is Boolean -> JsonPrimitive(value)
             is Int -> JsonPrimitive(value)
@@ -350,6 +359,10 @@ class KeyManager(private val context: Context) : IdentityManager {
         }
     }
 
+    /** Lower case, single spaces: the form BIP39 derives the seed from. */
+    private fun normalisePhrase(phrase: String): String =
+        phrase.trim().lowercase().split(Regex("\\s+")).joinToString(" ")
+
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private fun Char.isHexDigit(): Boolean = Character.digit(this, 16) >= 0
@@ -375,6 +388,9 @@ class KeyManager(private val context: Context) : IdentityManager {
     }
 
     companion object {
+        /** Every phrase length BIP39 defines: 128 to 256 bits of entropy. */
+        val PHRASE_WORD_COUNTS = setOf(12, 15, 18, 21, 24)
+
         /**
          * The identity store's own file. Internal rather than private because
          * the encryption status of *this* file is what the Settings warning

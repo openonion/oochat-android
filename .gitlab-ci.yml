@@ -1,0 +1,180 @@
+# GitLab CI for the team's copy of this repository.
+#
+# Runs the same checks as .github/workflows/build.yml, plus the doc-link check.
+# Nothing ran on GitLab before this file existed.
+#
+# Jobs run on CSE's shared runner fleet: a Docker executor on 2 vCPU / 4 GB
+# machines with no swap and no KVM. The runner kills any job after 10 minutes,
+# whatever `timeout` a job asks for, and that time includes pulling the image:
+# a fresh machine took 2 to 9 minutes to pull the 1.1 GB Android image. So:
+#   - Instrumented tests (app/src/androidTest) cannot run here - an emulator
+#     needs KVM - so they are compiled but not executed, as on GitHub.
+#   - Gradle is resized to fit 4 GB (see before_script). gradle.properties is
+#     sized for GitHub's 7 GB runners; on these machines it let three JVMs claim
+#     more memory than exists, and the first pipeline froze mid-build.
+#
+# Screenshot baselines are not verified, for the same reason as on GitHub: the
+# committed Roborazzi baselines are stale (see the README).
+
+# Ubuntu 24.04 with JDK 21 and the API 36 platform, licences accepted. The
+# build targets Java 17 bytecode, so a newer JDK runs it fine.
+# Pinned by tag; pin by digest instead if a moving tag ever breaks the build.
+image: ghcr.io/cirruslabs/android-sdk:36
+
+variables:
+  # Inside the project directory, so the cache below can keep it between jobs.
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle-home"
+  # One build per job: a daemon would outlive the job and hold its memory.
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  GIT_DEPTH: "20"
+
+# Runs for merge requests and for main, nothing else: a push to a branch with
+# no merge request (a work in progress, a diary) starts no pipeline.
+#
+# Only main writes the Gradle cache (see .gradle-cache). A merge request reads
+# it, so it starts warm without paying for an upload on every push.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables:
+        CACHE_POLICY: pull
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables:
+        CACHE_POLICY: pull-push
+
+stages:
+  - check
+  - test
+  - build
+
+# Gradle's dependency cache, about 27,000 files. Every Gradle job reads it, but
+# only unit-tests writes it, and only on main: zipping and uploading it took
+# about a minute, and four jobs used to do it on every push.
+#
+# unprotect: main is a protected branch and merge request refs are not, and
+# GitLab keeps those caches apart by default, so a merge request would never
+# see main's. Merge requests only read it, so they cannot change what main uses.
+.gradle-cache: &gradle-cache
+  # Keyed on the Gradle version only, not the build scripts. A merge request
+  # cannot write the cache, so with the scripts in the key any MR that edits
+  # one (adding a test to the regression suite, say) found no cache at all,
+  # downloaded every dependency and ran out of time. A cache that is a few
+  # dependencies behind costs only those downloads. Main rewrites it on every
+  # pipeline, and Gradle deletes entries unused for 30 days, so it does not
+  # grow without bound.
+  key:
+    files:
+      - gradle/wrapper/gradle-wrapper.properties
+  paths:
+    - .gradle-home/caches/
+    - .gradle-home/wrapper/
+  unprotect: true
+  policy: pull
+
+default:
+  # A newer push supersedes a running pipeline instead of queueing behind it.
+  interruptible: true
+  # Re-run a job the runner killed or lost, not one that failed. A retry usually
+  # lands on a machine that already has the image, which is why re-running by
+  # hand used to work.
+  retry:
+    max: 2
+    when:
+      - job_execution_timeout
+      - runner_system_failure
+      - stuck_or_timeout_failure
+  before_script:
+    - chmod +x gradlew
+    # Overrides gradle.properties for CI only: Gradle home settings win over the
+    # project's. 1.5 GB for Gradle, Kotlin compiled inside that JVM rather than
+    # in a second daemon, at most two workers.
+    - mkdir -p "$GRADLE_USER_HOME/init.d"
+    - |
+      cat > "$GRADLE_USER_HOME/gradle.properties" <<'EOF'
+      org.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8
+      kotlin.compiler.execution.strategy=in-process
+      org.gradle.workers.max=2
+      EOF
+    # Caps the test JVM and prints each test class as it finishes.
+    - cp .gitlab/ci.init.gradle.kts "$GRADLE_USER_HOME/init.d/"
+    # A machine that runs out of memory freezes without a word, so log what is
+    # left every 30 seconds; the last line before a stall says why.
+    - echo "[machine] $(nproc) CPUs, $(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo) MB RAM"
+    - (while sleep 30; do echo "[memory] $(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo) MB available"; done) &
+  cache: *gradle-cache
+
+ktlint:
+  stage: check
+  script:
+    - ./gradlew :app:ktlintCheck
+
+doc-links:
+  stage: check
+  # Plain Python over `git ls-files`; needs neither Gradle nor its cache, nor
+  # the Android image, which a fresh machine took up to 9 minutes to pull. The
+  # official Python image, from AWS's public mirror of Docker Hub, which the
+  # fleet's region reaches quickly and which has no anonymous pull limit.
+  image: public.ecr.aws/docker/library/python:3.12-alpine
+  cache: []
+  before_script:
+    - apk add --no-cache git
+  script:
+    - python3 tools/check-doc-links.py
+
+unit-tests:
+  stage: test
+  # The one job that writes the cache, on main only (CACHE_POLICY, above). It
+  # resolves the most dependencies: the app's and its tests'. Saved even when
+  # the job fails or times out, so a cold main run still leaves what it
+  # downloaded for the next one instead of nothing.
+  cache:
+    <<: *gradle-cache
+    policy: $CACHE_POLICY
+    when: always
+  script:
+    - ./gradlew :app:testDebugUnitTest
+    # testDebugUnitTest and the Roborazzi tasks reconfigure the same Gradle
+    # task with a screenshot-only filter; run in one invocation, the filter wins
+    # and most of the suite silently never runs. Same guard as GitHub's.
+    - |
+      threshold=800
+      count=$(grep -rho 'tests="[0-9]*"' app/build/test-results/testDebugUnitTest/*.xml \
+        | grep -o '[0-9]*' | awk '{s+=$1} END {print s+0}')
+      echo "Unit tests executed: $count (floor: $threshold)"
+      if [ "$count" -lt "$threshold" ]; then
+        echo "Only $count unit tests executed, expected at least $threshold - see the comment above this check."
+        exit 1
+      fi
+    # Known issues are reported as skipped, which a green pipeline hides; list
+    # them so every run shows what is still open (docs/regression-suite.md).
+    # Each reason ends "(ExceptionClass: message)"; only that tail is dropped,
+    # since the descriptions have parentheses of their own.
+    - |
+      issues=$(grep -rhoE 'KNOWN ISSUE: .*' app/build/test-results/testDebugUnitTest/*.xml \
+        | sed -E 's/ \([A-Za-z]+: .*$//' | sort -u || true)
+      echo "Known issues still open:"
+      echo "${issues:-  none}"
+  # Only the JUnit XML (about 100 KB), which GitLab turns into the merge
+  # request's test summary: which tests failed and why. The HTML test report and
+  # JaCoCo coverage (about 950 files) are not uploaded; this pipeline checks that
+  # the app builds and its tests pass. Both still build locally (README).
+  artifacts:
+    when: always
+    expire_in: 1 week
+    reports:
+      junit: app/build/test-results/testDebugUnitTest/*.xml
+
+instrumented-tests-compile:
+  stage: test
+  script:
+    - ./gradlew :app:compileDebugAndroidTestKotlin
+
+assemble-debug:
+  stage: build
+  # Not gated on the tests, as on GitHub: a broken build should say so at once.
+  # Unlike GitHub's, this job keeps no APK: the 26 MB debug APK is over CSE
+  # GitLab's artifact size limit (the upload fails with 413). It proves the app
+  # builds; build the APK locally to install it.
+  needs: []
+  script:
+    - ./gradlew :app:assembleDebug
