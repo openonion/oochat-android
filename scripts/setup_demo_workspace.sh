@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup_demo_workspace.sh — the small project the coding agents work on in the final demo
-# (W16AAPPLE-52).
+# (part of W16AAPPLE-52).
 #
 # Usage:  ./scripts/setup_demo_workspace.sh [path]        create it (default: ~/oochat-demo)
 #         ./scripts/setup_demo_workspace.sh --reset [path] put it back as it started, after a run
@@ -11,8 +11,12 @@
 # ("fix the failing test") and a longer one to stop part way ("add tests for every function,
 # fix any bugs, run them"), without letting a live demo touch anything that matters.
 #
+# The tests use unittest, so the Host machine needs only Python. A conftest.py at the root
+# lets plain `pytest` import them too, so the one failure is always the deliberate assertion,
+# whichever way an agent runs the tests.
+#
 # --reset only ever runs on a workspace this script made: it checks for the first commit's
-# message before discarding anything.
+# message before discarding anything. It then rewinds main and deletes any other branch.
 #
 # Portable to bash 3.2 (macOS default), like audit_repo.sh. Runs under Git Bash on Windows.
 
@@ -26,7 +30,7 @@ if [ "${1:-}" = "--reset" ]; then
     shift
 fi
 case "${1:-}" in
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
     -*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
 esac
 DIR="${1:-$HOME/oochat-demo}"
@@ -39,9 +43,14 @@ if $reset; then
         exit 1
     fi
     first=$(git -C "$DIR" rev-list --max-parents=0 HEAD)
-    git -C "$DIR" reset -q --hard "$first"
+    # -B rewinds main even when an agent committed there and then moved to another branch.
+    git -C "$DIR" checkout -q -f -B main "$first"
+    git -C "$DIR" for-each-ref --format='%(refname:short)' refs/heads |
+        while read -r branch; do
+            [ "$branch" = "main" ] || git -C "$DIR" branch -q -D "$branch"
+        done
     git -C "$DIR" clean -q -fdx
-    echo "Reset $DIR to its first commit; the bug and the failing test are back."
+    echo "Reset $DIR to its first commit on main; the bug and the failing test are back."
     exit 0
 fi
 
@@ -51,9 +60,24 @@ if [ -e "$DIR" ]; then
     exit 1
 fi
 
+python=""
+for candidate in python3 python; do
+    # Windows has a python3 stub that only opens the Store, so check it really runs.
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "" >/dev/null 2>&1; then
+        python=$candidate
+        break
+    fi
+done
+
 mkdir -p "$DIR/tasks" "$DIR/tests"
 
 : > "$DIR/tasks/__init__.py"
+: > "$DIR/tests/__init__.py"
+
+cat > "$DIR/conftest.py" <<'EOF'
+# Empty on purpose: it makes pytest put this folder on the import path, so `pytest` finds the
+# tasks package the same way `python -m pytest` and `python -m unittest` do.
+EOF
 
 cat > "$DIR/tasks/store.py" <<'EOF'
 """A tiny to-do list, kept in a JSON file. Small on purpose: it is the demo's workspace."""
@@ -91,24 +115,32 @@ def pending(tasks):
 EOF
 
 cat > "$DIR/tests/test_store.py" <<'EOF'
+import unittest
+
 from tasks import store
 
 
-def test_add_numbers_tasks_from_one():
-    tasks = store.add([], "Buy milk")
-    assert tasks == [{"id": 1, "title": "Buy milk", "done": False}]
+class StoreTest(unittest.TestCase):
+    def test_add_numbers_tasks_from_one(self):
+        tasks = store.add([], "Buy milk")
+        self.assertEqual(tasks, [{"id": 1, "title": "Buy milk", "done": False}])
+
+    def test_pending_lists_only_unfinished_tasks(self):
+        tasks = store.add(store.add([], "Buy milk"), "Call Sam")
+        store.complete(tasks, 1)
+        self.assertEqual([task["title"] for task in store.pending(tasks)], ["Call Sam"])
 
 
-def test_pending_lists_only_unfinished_tasks():
-    tasks = store.add(store.add([], "Buy milk"), "Call Sam")
-    store.complete(tasks, 1)
-    assert [task["title"] for task in store.pending(tasks)] == ["Call Sam"]
+if __name__ == "__main__":
+    unittest.main()
 EOF
 
 cat > "$DIR/README.md" <<'EOF'
 # oochat demo workspace
 
 A tiny to-do list for the final demo. Coding agents work here, nowhere else.
+
+Run the tests with `python -m unittest` (or `pytest`, if it is installed).
 
 Reset it after a run with `scripts/setup_demo_workspace.sh --reset` from the oochat repo.
 EOF
@@ -120,13 +152,24 @@ git -C "$DIR" add -A
 # A fixed author, so the workspace is the same on every machine and needs no git identity.
 git -C "$DIR" -c user.name="oochat demo" -c user.email="demo@example.invalid" \
     commit -q -m "$FIRST_COMMIT"
+# Name the branch main whatever git's default is, so --reset knows which branch to rewind.
+git -C "$DIR" branch -M main
 
 cat <<EOF
 Demo workspace ready at $DIR
 
-  Tests:   cd "$DIR" && python -m pytest -q     (one fails on purpose; needs: pip install pytest)
+  Tests:   cd "$DIR" && ${python:-python} -m unittest     (one fails on purpose)
   Prompts: "Use Claude Code to fix the failing test in $DIR"
+           "Use Codex to fix the failing test in $DIR"
            "Use Claude Code to add tests for every function in tasks/store.py, fix any bugs,
             and run the tests"   (long enough to stop part way)
+           "Use Codex to add tests for every function in tasks/store.py, fix any bugs,
+            and run the tests"
   Reset:   $0 --reset "$DIR"
 EOF
+
+if [ -z "$python" ]; then
+    echo >&2
+    echo "Warning: no working Python found. The agents need Python on the Host machine to run" >&2
+    echo "the tests; install it before the demo." >&2
+fi
