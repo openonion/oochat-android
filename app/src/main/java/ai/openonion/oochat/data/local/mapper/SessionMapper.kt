@@ -13,7 +13,8 @@ object SessionMapper {
             createdAt = entity.createdAt,
             updatedAt = entity.updatedAt,
             messageCount = entity.messageCount,
-            lastMessagePreview = entity.lastMessagePreview
+            lastMessagePreview = entity.lastMessagePreview,
+            remoteRevision = entity.remoteRevision
         )
     }
 
@@ -25,7 +26,8 @@ object SessionMapper {
             createdAt = domain.createdAt,
             updatedAt = domain.updatedAt,
             messageCount = domain.messageCount,
-            lastMessagePreview = domain.lastMessagePreview
+            lastMessagePreview = domain.lastMessagePreview,
+            remoteRevision = domain.remoteRevision
         )
     }
 

@@ -1,6 +1,7 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.SessionActivity
 import ai.openonion.oochat.ui.components.ConfirmationSheet
 import ai.openonion.oochat.ui.components.ConnectionStatusDot
 import ai.openonion.oochat.ui.components.DangerConfirmActions
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Menu
@@ -44,7 +46,7 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Header mirrors Figma: hamburger opens the drawer, title row (status dot +
- * title) with the model name quietly underneath, agent-home button, overflow
+ * title) with the session status and model name quietly underneath, agent-home button, overflow
  * menu for logs/clear. Settings only lives in the drawer footer — don't
  * duplicate it here.
  *
@@ -66,11 +68,17 @@ fun ChatTopBar(
     // See ConnectionStatusDot's own doc — surfaces the connected
     // agent's model once its AGENT_PROFILE frame lands.
     modelName: String? = null,
+    // What the agent is doing on this session — see ChatViewModel.sessionActivity.
+    // Null while not connected, where the status dot and banner speak instead.
+    sessionActivity: SessionActivity? = null,
     // True once a DASHBOARD_SNAPSHOT has arrived. The button is absent, not
     // disabled, when it hasn't: most agents have no Home page, and a dead
     // control on every one of them is worse than no control.
     hasDashboard: Boolean = false,
     onOpenDashboard: () -> Unit = {},
+    // The owner's Rem notebook (W16AAPPLE-69). Offered on any live connection:
+    // only the Host knows who its owner is, and a non-owner is told so there.
+    onOpenRem: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -122,16 +130,21 @@ fun ChatTopBar(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            // Row 2: model, quiet and small — indented to align with the
-            // title text (dot 6dp + row gap 6dp = 12dp), not with the dot.
-            if (modelName != null) {
+            // Row 2: session status, then model, quiet and small — indented to
+            // align with the title text (dot 6dp + row gap 6dp = 12dp), not with
+            // the dot. One line: the status leads, so a long model name is what
+            // the ellipsis eats.
+            val subtitle = listOfNotNull(sessionActivity?.label, modelName).joinToString(" · ")
+            if (subtitle.isNotEmpty()) {
                 Text(
-                    text = modelName,
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 12.dp)
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .testTag("chat_top_bar_subtitle")
                 )
             }
         }
@@ -163,6 +176,16 @@ fun ChatTopBar(
                 containerColor = MaterialTheme.colorScheme.surface,
                 tonalElevation = 3.dp
             ) {
+                if (isConnected) {
+                    DropdownMenuItem(
+                        text = { Text("Rem") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.MenuBook, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onOpenRem()
+                        }
+                    )
+                }
                 DropdownMenuItem(
                     text = { Text("View logs") },
                     leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
@@ -194,6 +217,15 @@ fun ChatTopBar(
         }
     }
 }
+
+/** The top bar's words for a [SessionActivity]. */
+internal val SessionActivity.label: String
+    get() = when (this) {
+        SessionActivity.RUNNING -> "Running"
+        SessionActivity.AWAITING_USER -> "Waiting for you"
+        SessionActivity.IDLE -> "Idle"
+        SessionActivity.NOT_FOUND -> "Session not found"
+    }
 
 @Composable
 private fun ClearChatSheet(onConfirm: () -> Unit, onDismiss: () -> Unit) {

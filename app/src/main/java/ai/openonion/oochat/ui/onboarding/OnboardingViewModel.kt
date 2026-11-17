@@ -3,6 +3,8 @@ package ai.openonion.oochat.ui.onboarding
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.di.appContainer
+import ai.openonion.oochat.domain.model.canonicalAgentAddress
+import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.ui.agent.components.AgentFormState
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -70,7 +72,9 @@ class OnboardingViewModel @JvmOverloads constructor(
         if (!formState.isValid) return
 
         val trimmedUrl = formState.serverUrl.trim().trimEnd('/')
-        val trimmedAddress = formState.agentAddress.trim()
+        // The chat screen saves this agent from the config, so it gets the
+        // same form as everywhere else (W16AAPPLE-57).
+        val trimmedAddress = canonicalAgentAddress(formState.agentAddress.trim())
         val trimmedApiKey = formState.apiKey.trim().takeIf { it.isNotBlank() }
 
         val error = validate(trimmedUrl, trimmedAddress)
@@ -88,6 +92,23 @@ class OnboardingViewModel @JvmOverloads constructor(
         }
     }
 
+    /**
+     * What Setup's QR scanner found. A code that names an agent is returned for the form to take,
+     * and clears any earlier message. Anything else is refused: nothing is returned and
+     * [errorMessage] says so. [contents] is null when the user backed out of the scanner, which is
+     * neither, so nothing changes.
+     */
+    internal fun onScanned(contents: String?): ScannedAgent? {
+        if (contents == null) return null
+        val agent = AgentQrCode.parse(contents)
+        _errorMessage.value = if (agent == null) {
+            "That QR code isn't a ConnectOnion agent. Scan the code behind an agent's Share button, or paste its address."
+        } else {
+            null
+        }
+        return agent
+    }
+
     private fun validate(trimmedUrl: String, trimmedAddress: String): String? = when {
         trimmedUrl.length > 500 ->
             "URL is too long (maximum 500 characters)"
@@ -100,6 +121,10 @@ class OnboardingViewModel @JvmOverloads constructor(
         trimmedAddress.startsWith("wss://") || trimmedAddress.startsWith("ws://") ||
             trimmedAddress.startsWith("https://") || trimmedAddress.startsWith("http://") ->
             "Agent address should be a hex address (0x...), not a URL. Please select from the dropdown."
+        // The check Add Agent makes (AgentViewModel.validateAgentInput). Setup
+        // used to save any 0x… string, which can never be dialled (W16AAPPLE-61).
+        !AgentDiscoveryService.ADDRESS_REGEX.matches(trimmedAddress) ->
+            "Please enter a valid agent address (0x followed by 64 hex characters)"
         else -> null
     }
 }
