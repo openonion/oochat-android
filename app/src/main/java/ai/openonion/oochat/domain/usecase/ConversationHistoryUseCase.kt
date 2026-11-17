@@ -482,8 +482,18 @@ class ConversationHistoryUseCase(
         // reply was minted with a content-derived id (OUTPUT-, image- and
         // pre-stableAssistantId rows weren't), and those would otherwise
         // look like transcript this conversation is missing.
+        // Reasoning rows count as well: re_act/reflect write their text into
+        // the session's messages as an assistant entry, so the server's copy
+        // lists as a reply what this conversation already shows as reasoning.
+        // Its text lives in the row's payload, not in `content`.
         val localIds = messageRepository.getMessagesListBySession(sessionId)
-            .flatMapTo(mutableSetOf()) { listOf(it.id, stableAssistantId(it.content)) }
+            .flatMapTo(mutableSetOf()) { row ->
+                val reasoning = row.payload
+                    ?.let { TranscriptItemCodec.decode(it) as? ChatItem.Thinking }
+                    ?.takeIf { it.isReasoning }
+                    ?.content
+                listOfNotNull(row.id, stableAssistantId(row.content), reasoning?.let(::stableAssistantId))
+            }
         val missing = SessionFreshness.missingEntries(serverEntries.map { it.content }, localIds)
             // A reply already filed under a *different* conversation stays
             // there — persistMessage inserts with REPLACE, so re-persisting
@@ -568,6 +578,26 @@ class ConversationHistoryUseCase(
                 onPreviewUpdate = { _, _, _ -> }
             )
         }.onFailure { e -> FileLogger.e(LogTags.CONV_HISTORY, "persistMessage failed: ${e.message}") }
+    }
+
+    /**
+     * Moves a resent message to the end of its conversation.
+     *
+     * [persistMessage] keeps a row's first timestamp, which is right for a
+     * replay and wrong here: the resend went out now, so its reply lands at
+     * the bottom, and on reload the question has to be above it rather than
+     * back where the failed attempt was. Saves it instead if it never was.
+     */
+    suspend fun moveMessageToEnd(item: ChatItem.User, targetSessionId: String? = _activeSessionId.value) {
+        val saved = runCatchingCancellable { messageRepository.existsById(item.id) }.getOrDefault(false)
+        if (!saved) {
+            persistMessage(item, targetSessionId)
+            return
+        }
+        val now = System.currentTimeMillis()
+        addTimestamps(mapOf(item.id to now))
+        runCatchingCancellable { messageRepository.updateTimestamp(item.id, now) }
+            .onFailure { e -> FileLogger.e(LogTags.CONV_HISTORY, "moveMessageToEnd failed: ${e.message}") }
     }
 
     /**
