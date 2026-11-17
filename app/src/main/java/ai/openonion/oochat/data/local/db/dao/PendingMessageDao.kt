@@ -54,18 +54,22 @@ abstract class PendingMessageDao {
     abstract fun deleteById(id: Long)
 
     /**
-     * The oldest row for [agentAddress] that belongs on [sessionId] and is no
-     * newer than [maxId] — its own, plus any queued before there was a session
-     * to name (`session_id = NULL` never matches, which is why the IS NULL arm
-     * is separate). One row, not the lot: see [claimNextForAgent].
+     * The oldest row for [agentAddress] that belongs on [sessionId] or the
+     * active local [conversationId], and is no newer than [maxId]. The local
+     * id is needed when Memory is off: the Host mints a new random session id,
+     * while a message queued before CONNECTED is tagged with the conversation
+     * id. Rows queued before either id existed remain the NULL arm. One row,
+     * not the lot: see [claimNextForAgent].
      */
     @Query(
         "SELECT * FROM pending_messages WHERE agent_address = :agentAddress AND id <= :maxId " +
-            "AND (session_id IS NULL OR session_id = :sessionId) ORDER BY id ASC LIMIT 1"
+            "AND (session_id IS NULL OR session_id = :sessionId OR session_id = :conversationId) " +
+            "ORDER BY id ASC LIMIT 1"
     )
     abstract fun oldestClaimableForAgent(
         agentAddress: String,
         sessionId: String?,
+        conversationId: String?,
         maxId: Long
     ): PendingMessageEntity?
 
@@ -78,8 +82,13 @@ abstract class PendingMessageDao {
      * landing while the caller is already draining) must not both see it.
      */
     @Transaction
-    open fun claimNextForAgent(agentAddress: String, sessionId: String?, maxId: Long): PendingMessageEntity? {
-        val row = oldestClaimableForAgent(agentAddress, sessionId, maxId) ?: return null
+    open fun claimNextForAgent(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        maxId: Long
+    ): PendingMessageEntity? {
+        val row = oldestClaimableForAgent(agentAddress, sessionId, conversationId, maxId) ?: return null
         deleteById(row.id)
         return row
     }

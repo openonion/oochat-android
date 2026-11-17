@@ -1,19 +1,23 @@
 package ai.openonion.oochat.ui.navigation
 
 import ai.openonion.oochat.network.AgentDiscoveryService
+import ai.openonion.oochat.ui.adaptive.HomeScreenRoute
 import ai.openonion.oochat.ui.agent.AgentDiscoveryScreenWrapper
 import ai.openonion.oochat.ui.agent.AgentEditScreenWrapper
 import ai.openonion.oochat.ui.agent.AgentListScreenWrapper
 import ai.openonion.oochat.ui.chat.ChatScreen
 import ai.openonion.oochat.ui.components.ConfirmationSheet
 import ai.openonion.oochat.ui.components.DangerConfirmActions
-import ai.openonion.oochat.ui.dashboard.DashboardScreenWrapper
+import ai.openonion.oochat.ui.controlcenter.ControlCenterScreenWrapper
+import ai.openonion.oochat.ui.controlcenter.controlCenterSupported
 import ai.openonion.oochat.ui.loading.LoadingScreen
 import ai.openonion.oochat.ui.logs.LogsScreen
 import ai.openonion.oochat.ui.onboarding.OnboardingScreen
 import ai.openonion.oochat.ui.recovery.RecoveryScreen
+import ai.openonion.oochat.ui.rem.RemScreenWrapper
 import ai.openonion.oochat.ui.settings.SettingsScreen
 import ai.openonion.oochat.ui.theme.Motion
+import ai.openonion.oochat.ui.workroom.WorkRoomScreenWrapper
 import ai.openonion.oochat.util.truncateMiddle
 import android.net.Uri
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -59,7 +63,12 @@ object Routes {
     const val AGENT_DISCOVERY = "agent_discovery"
     const val SETTINGS = "settings"
     const val LOGS = "logs"
-    const val DASHBOARD = "dashboard"
+    const val CONTROL_CENTER = "control_center"
+    const val REM = "rem"
+    const val WORK_ROOM = "work_room"
+
+    /** A Claude Code or Codex run's Work Room; invocation ids hold a ':', so the id is encoded. */
+    fun workRoom(invocationId: String) = "$WORK_ROOM/${Uri.encode(invocationId)}"
 
     /** SavedStateHandle key used to hand a picked agent address back from AGENT_DISCOVERY. */
     const val RESULT_SELECTED_AGENT_ADDRESS = "selected_agent_address"
@@ -192,30 +201,40 @@ fun NavigationGraph(
             var linkApproved by rememberSaveable(linkedAddress) { mutableStateOf(false) }
             var linkAnswered by rememberSaveable(linkedAddress) { mutableStateOf(false) }
 
-            ChatScreen(
-                // Until the user accepts, this screen behaves exactly as a
-                // normal launch: it connects to their own configured agent.
-                connectToAgentId = if (linkApproved) linkedAddress else "",
-                onboardPending = onboardPending,
-                // Opening the app resumes the previous conversation if it
-                // still exists (ensureActiveSession falls back to a fresh one
-                // when it doesn't). Starting fresh is now only ever an
-                // explicit user action — the drawer's "New conversation".
-                startNewSessionOnConnect = false,
-                onNavigateToSettings = {
-                    navController.navigate(Routes.SETTINGS)
-                },
-                onNavigateToLogs = {
-                    navController.navigate(Routes.LOGS)
-                },
-                onNavigateToAgentList = {
-                    navController.navigate(Routes.AGENT_LIST)
-                },
-                onNavigateToDashboard = {
-                    navController.navigate(Routes.DASHBOARD)
-                },
-                onNavigateToAgentChat = navigateToAgentChat
-            )
+            ChatWithHomeRoute(chatEntry = backStackEntry) { chatViewModel, homeInLayout ->
+                ChatScreen(
+                    // Until the user accepts, this screen behaves exactly as a
+                    // normal launch: it connects to their own configured agent.
+                    connectToAgentId = if (linkApproved) linkedAddress else "",
+                    onboardPending = onboardPending,
+                    // Opening the app resumes the previous conversation if it
+                    // still exists (ensureActiveSession falls back to a fresh one
+                    // when it doesn't). Starting fresh is now only ever an
+                    // explicit user action — the drawer's "New conversation".
+                    startNewSessionOnConnect = false,
+                    onNavigateToSettings = {
+                        navController.navigate(Routes.SETTINGS)
+                    },
+                    onNavigateToLogs = {
+                        navController.navigate(Routes.LOGS)
+                    },
+                    onNavigateToRem = {
+                        navController.navigate(Routes.REM)
+                    },
+                    onNavigateToAgentList = {
+                        navController.navigate(Routes.AGENT_LIST)
+                    },
+                    onNavigateToControlCenter = {
+                        navController.navigate(Routes.CONTROL_CENTER)
+                    },
+                    onNavigateToWorkRoom = { invocationId ->
+                        navController.navigate(Routes.workRoom(invocationId))
+                    },
+                    onNavigateToAgentChat = navigateToAgentChat,
+                    viewModel = chatViewModel,
+                    homeInLayout = homeInLayout
+                )
+            }
 
             if (linkedAddress.isNotEmpty() && !linkAnswered) {
                 DeepLinkConnectSheet(
@@ -277,24 +296,34 @@ fun NavigationGraph(
             val agentId = backStackEntry.arguments?.getString("agentId") ?: ""
             val sessionId = backStackEntry.arguments?.getString("sessionId")
             val startNew = backStackEntry.arguments?.getBoolean("startNew") ?: false
-            ChatScreen(
-                connectToAgentId = agentId,
-                sessionIdToRestore = sessionId,
-                startNewSessionOnConnect = startNew,
-                onNavigateToSettings = {
-                    navController.navigate(Routes.SETTINGS)
-                },
-                onNavigateToLogs = {
-                    navController.navigate(Routes.LOGS)
-                },
-                onNavigateToAgentList = {
-                    navController.navigate(Routes.AGENT_LIST)
-                },
-                onNavigateToDashboard = {
-                    navController.navigate(Routes.DASHBOARD)
-                },
-                onNavigateToAgentChat = navigateToAgentChat
-            )
+            ChatWithHomeRoute(chatEntry = backStackEntry) { chatViewModel, homeInLayout ->
+                ChatScreen(
+                    connectToAgentId = agentId,
+                    sessionIdToRestore = sessionId,
+                    startNewSessionOnConnect = startNew,
+                    onNavigateToSettings = {
+                        navController.navigate(Routes.SETTINGS)
+                    },
+                    onNavigateToLogs = {
+                        navController.navigate(Routes.LOGS)
+                    },
+                    onNavigateToRem = {
+                        navController.navigate(Routes.REM)
+                    },
+                    onNavigateToAgentList = {
+                        navController.navigate(Routes.AGENT_LIST)
+                    },
+                    onNavigateToControlCenter = {
+                        navController.navigate(Routes.CONTROL_CENTER)
+                    },
+                    onNavigateToWorkRoom = { invocationId ->
+                        navController.navigate(Routes.workRoom(invocationId))
+                    },
+                    onNavigateToAgentChat = navigateToAgentChat,
+                    viewModel = chatViewModel,
+                    homeInLayout = homeInLayout
+                )
+            }
         }
 
         composable(Routes.AGENT_LIST) {
@@ -419,12 +448,25 @@ fun NavigationGraph(
             )
         }
 
-        // The agent's own Home page. Reached only from the chat top bar, and
-        // only once a DASHBOARD_SNAPSHOT has arrived, so the chat entry it
-        // borrows its ChatViewModel from is always still on the stack — see
-        // DashboardScreenWrapper for why that matters.
-        composable(Routes.DASHBOARD) {
-            DashboardScreenWrapper(
+        // The agent owner's Rem notebook (W16AAPPLE-69), from the chat's menu.
+        // Reads over the shared connection, so it needs nothing from the chat entry.
+        composable(Routes.REM) {
+            RemScreenWrapper(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        // A Claude Code or Codex run's Work Room (W16AAPPLE-33), from its card in the chat. It
+        // reads the run from the chat's ViewModel, so like the Control Center it borrows the chat
+        // entry, which is always under it on the stack.
+        composable(
+            route = "${Routes.WORK_ROOM}/{invocationId}",
+            arguments = listOf(navArgument("invocationId") { type = NavType.StringType })
+        ) { entry ->
+            WorkRoomScreenWrapper(
+                invocationId = entry.arguments?.getString("invocationId").orEmpty(),
                 chatViewModelStoreOwner = CHAT_ROUTES.firstNotNullOfOrNull { route ->
                     runCatching { navController.getBackStackEntry(route) }.getOrNull()
                 },
@@ -433,6 +475,29 @@ fun NavigationGraph(
                 }
             )
         }
+
+        // The agent's Home on a screen of its own, which only a Control Center app the device cannot
+        // host has: the screen says why. Any other Home is in the chat's layout, beside it or as a
+        // tab. Reached only from the chat top bar, and only once the agent has sent its app, so the
+        // chat entry it borrows its ChatViewModel from is always still on the stack — see
+        // DashboardScreenWrapper for why that matters.
+        composable(Routes.CONTROL_CENTER) {
+            // A device that can host the app has no screen for it, and HomeScreenRoute leaves.
+            val hostsApps = remember { controlCenterSupported() }
+            HomeScreenRoute(
+                onLeave = { navController.popBackStack(Routes.CONTROL_CENTER, inclusive = true) },
+                hasHome = hostsApps
+            ) {
+                ControlCenterScreenWrapper(
+                    chatViewModelStoreOwner = CHAT_ROUTES.firstNotNullOfOrNull { route ->
+                        runCatching { navController.getBackStackEntry(route) }.getOrNull()
+                    },
+                    onNavigateBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
+        }
     }
 }
 
@@ -440,7 +505,7 @@ fun NavigationGraph(
  * The two destinations that host a [ai.openonion.oochat.ui.chat.ChatViewModel].
  * Only one is ever on the stack at a time — each chat hop pops the other.
  */
-private val CHAT_ROUTES = listOf(
+internal val CHAT_ROUTES = listOf(
     "${Routes.CHAT}?onboardPending={onboardPending}",
     "${Routes.CHAT_WITH_AGENT}?sessionId={sessionId}&startNew={startNew}"
 )
@@ -457,7 +522,9 @@ private val DRILL_DOWN_ROUTES = listOf(
     Routes.AGENT_DISCOVERY,
     Routes.SETTINGS,
     Routes.LOGS,
-    Routes.DASHBOARD
+    Routes.REM,
+    Routes.WORK_ROOM,
+    Routes.CONTROL_CENTER
 )
 
 private fun NavBackStackEntry.isDrillDown(): Boolean =

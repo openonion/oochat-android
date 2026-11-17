@@ -1,8 +1,12 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import android.app.Application
+import android.content.Intent
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -10,8 +14,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.util.Locale
 
 /**
  * The top-up control, ported from the reference web client's `TopUp` /
@@ -70,6 +76,13 @@ class LowBalanceBarComposeTest {
         composeRule.onNodeWithText("Add credits").assertDoesNotExist()
     }
 
+    @Test
+    fun `a blank address counts as no address`() {
+        setBar(balanceUsd = 0.2, agentAddress = "  ")
+
+        composeRule.onNodeWithText("Add credits").assertDoesNotExist()
+    }
+
     // ── What it says ─────────────────────────────────────────────────
 
     @Test
@@ -78,6 +91,29 @@ class LowBalanceBarComposeTest {
 
         composeRule.onNodeWithText("Out of credits", substring = true).assertExists()
         composeRule.onNodeWithText("$0.00", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun `an overdrawn balance reads as out of credits too`() {
+        setBar(balanceUsd = -0.35)
+
+        composeRule.onNodeWithText("Out of credits", substring = true).assertExists()
+    }
+
+    @Test
+    fun `a balance too small to print as anything but zeros reads as out of credits`() {
+        setBar(balanceUsd = 0.00004)
+
+        composeRule.onNodeWithText("Out of credits", substring = true).assertExists()
+        composeRule.onNodeWithText("$0.0", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun `a sub-cent balance keeps enough places to stay non-zero`() {
+        // Two decimal places read "$0.00 left" here, the very thing the zero wording avoids.
+        setBar(balanceUsd = 0.003)
+
+        composeRule.onNodeWithText("Running low — $0.0030 left").assertExists()
     }
 
     @Test
@@ -97,5 +133,30 @@ class LowBalanceBarComposeTest {
             "https://o.openonion.ai/purchase?key=$address",
             agentPurchaseUrl(address)
         )
+    }
+
+    @Test
+    fun `tapping the bar opens the purchase page for this agent in a browser`() {
+        setBar(balanceUsd = 0.42)
+
+        composeRule.onNodeWithText("Add credits").performClick()
+
+        val started = Shadows.shadowOf(ApplicationProvider.getApplicationContext<Application>()).nextStartedActivity
+        assertEquals(Intent.ACTION_VIEW, started?.action)
+        assertEquals(agentPurchaseUrl(address), started?.data?.toString())
+    }
+
+    @Test
+    fun `the figure takes a decimal point whatever the phone's locale`() {
+        // A German phone used to read "$0,42" (W16AAPPLE-67).
+        val original = Locale.getDefault()
+        Locale.setDefault(Locale.GERMANY)
+        try {
+            setBar(balanceUsd = 0.42)
+
+            composeRule.onNodeWithText("Running low — $0.42 left").assertExists()
+        } finally {
+            Locale.setDefault(original)
+        }
     }
 }
