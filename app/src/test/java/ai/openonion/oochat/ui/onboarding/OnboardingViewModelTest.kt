@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.onboarding
 
+import ai.openonion.oochat.Constants
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.ui.agent.components.AgentFormState
@@ -77,9 +78,11 @@ class OnboardingViewModelTest {
         configRepository = configRepository
     )
 
+    private val address = "0x" + "ab".repeat(32)
+
     private fun validForm(
         serverUrl: String = "https://relay.example.com",
-        agentAddress: String = "0xabc123",
+        agentAddress: String = address,
         apiKey: String = ""
     ) = AgentFormState(serverUrl = serverUrl, agentAddress = agentAddress, apiKey = apiKey)
 
@@ -135,7 +138,7 @@ class OnboardingViewModelTest {
         var savedCalled = false
         val form = AgentFormState(
             serverUrl = "  https://relay.example.com/  ",
-            agentAddress = "  0xabc123  ",
+            agentAddress = "  ${address.uppercase().replace("0X", "0x")}  ",
             apiKey = "  my-key  "
         )
 
@@ -147,9 +150,28 @@ class OnboardingViewModelTest {
         val saved = configRepository.savedConfig
         assertNotNull(saved)
         assertEquals("https://relay.example.com", saved!!.serverUrl)
-        assertEquals("0xabc123", saved.agentAddress)
+        // Trimmed and lower-cased, as Add Agent saves it (W16AAPPLE-57).
+        assertEquals(address, saved.agentAddress)
         assertEquals("my-key", saved.apiKey)
         assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `Setup rejects an agent address the Add Agent form rejects`() = runTest(testDispatcher) {
+        val vm = createVm()
+        var saved = false
+
+        vm.connect(AgentFormState(serverUrl = "https://oo.openonion.ai", agentAddress = "0xabc123"), onSaved = { saved = true })
+        testScheduler.runCurrent()
+
+        // AgentViewModel's doc says the two "agree on what's a valid agent".
+        // Setup used to save any 0x… string, which can never be dialled
+        // (W16AAPPLE-61).
+        assertFalse("a 0x address that is not 64 hex must not be saved", saved)
+        assertEquals(
+            "Please enter a valid agent address (0x followed by 64 hex characters)",
+            vm.errorMessage.value
+        )
     }
 
     @Test
@@ -262,5 +284,55 @@ class OnboardingViewModelTest {
         testScheduler.runCurrent()
 
         assertNull(vm.errorMessage.value)
+    }
+
+    // ── The QR scanner's result ────────────────────────────────────────
+
+    @Test
+    fun `a scan that names an agent is handed to the form, with no error`() = runTest(testDispatcher) {
+        val vm = createVm()
+
+        val scanned = vm.onScanned("https://chat.openonion.ai/$address")
+
+        assertEquals(ScannedAgent(serverUrl = Constants.DEFAULT_SERVER_URL, agentAddress = address), scanned)
+        assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `a scan that names no agent is refused, and says so`() = runTest(testDispatcher) {
+        val vm = createVm()
+
+        val scanned = vm.onScanned("WIFI:S:home;T:WPA;P:secret;;")
+
+        assertNull("there is nothing to put in the form", scanned)
+        assertEquals(
+            "That QR code isn't a ConnectOnion agent. Scan the code behind an agent's Share button, or paste its address.",
+            vm.errorMessage.value
+        )
+    }
+
+    @Test
+    fun `a good scan after a bad one clears the message`() = runTest(testDispatcher) {
+        val vm = createVm()
+        vm.onScanned("hello")
+        assertNotNull("test setup: the bad scan must have said so", vm.errorMessage.value)
+
+        vm.onScanned("connectonion://agent/$address")
+
+        assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `backing out of the scanner changes nothing`() = runTest(testDispatcher) {
+        val vm = createVm()
+        vm.connect(validForm(serverUrl = "relay.example.com"), onSaved = {})
+        testScheduler.runCurrent()
+        val before = vm.errorMessage.value
+        assertNotNull("test setup: an earlier error", before)
+
+        val scanned = vm.onScanned(null)
+
+        assertNull(scanned)
+        assertEquals(before, vm.errorMessage.value)
     }
 }
