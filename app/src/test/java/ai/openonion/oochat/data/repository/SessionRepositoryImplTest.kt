@@ -106,4 +106,24 @@ class SessionRepositoryImplTest {
     fun `getSessionById returns null for an unknown id`() = runTest {
         assertNull(repository.getSessionById("missing"))
     }
+
+    @Test
+    fun `locally created sessions are scoped to and filtered by identity`() = runTest {
+        seedAgent("agent-1")
+        var identity = "0xidentity-a"
+        val scoped = SessionRepositoryImpl(
+            db.sessionDao(),
+            db.sessionSyncDao(),
+            identityAddress = { identity }
+        )
+        val session = scoped.createSession("agent-1", "Identity A")
+
+        identity = "0xidentity-b"
+        scoped.activateIdentity(identity)
+        assertEquals(emptyList<Any>(), scoped.getAllSessions().first())
+        assertEquals(emptyList<Any>(), scoped.getSessionsByAgent("agent-1").first())
+
+        scoped.activateIdentity("0xidentity-a")
+        assertEquals(listOf(session.id), scoped.getAllSessions().first().map { it.id })
+    }
 }

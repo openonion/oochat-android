@@ -5,6 +5,8 @@ import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import android.app.Application
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -76,9 +78,10 @@ class LoadingViewModelTest {
             _events.tryEmit(ChatEvent.ChatItemReceived(item))
         }
         override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?) {}
-        override suspend fun respond(answer: String) {}
+        override suspend fun executeTool(request: ExecRequest): ExecOutcome = ExecOutcome.NotSent("Not used in LoadingViewModel tests")
+        override suspend fun respond(answer: String, requestId: String?) {}
         override suspend fun interrupt() {}
-        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {}
+        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) {}
         override suspend fun respondToOnboard(method: String, inviteCode: String?, payment: Double?) {}
         override suspend fun respondToPlanReview(message: String) {}
         override suspend fun respondToUlwTurnsReached(action: String, turns: Int?, mode: String?) {}
@@ -90,7 +93,11 @@ class LoadingViewModelTest {
         var disconnectCount = 0
             override fun retryNow() {}
         override suspend fun querySessionStatus() {}
-override suspend fun disconnect() { disconnectCount++ }
+        val disconnectKeptOutbox = mutableListOf<Boolean>()
+        override suspend fun disconnect(keepOutbox: Boolean) {
+            disconnectCount++
+            disconnectKeptOutbox += keepOutbox
+        }
 
         var isConnectedResult = false
         override fun isConnected(): Boolean = isConnectedResult
@@ -394,6 +401,17 @@ override suspend fun disconnect() { disconnectCount++ }
         assertTrue(events.single() is LoadingEvent.Cancelled)
         assertEquals(1, connectUseCase.disconnectCount)
         collectJob.cancel()
+    }
+
+    @Test
+    fun `cancelling the loading screen keeps the messages queued for the agent`() = runTest(testDispatcher) {
+        // W16AAPPLE-102: relaunched offline with messages queued, a user who
+        // gives up on the slow connect must not lose them. Nothing would say
+        // so either: after a restart their bubbles come back looking sent.
+        viewModel.cancel()
+        advanceUntilIdle()
+
+        assertEquals(listOf(true), connectUseCase.disconnectKeptOutbox)
     }
 
     @Test

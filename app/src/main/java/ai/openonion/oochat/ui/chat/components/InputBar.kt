@@ -2,6 +2,7 @@ package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.ui.common.rememberPermissionGate
 import ai.openonion.oochat.ui.theme.spacing
@@ -53,14 +54,20 @@ private data class PickedFile(val uri: Uri, val name: String)
 
 @Composable
 fun InputBar(
+    // Status only, like [isAgentWorking]: it no longer locks the field. A
+    // message sent while disconnected (or mid-reconnect) goes to the outbox and
+    // out on the next CONNECTED, as the user guide promises (W16AAPPLE-102).
+    // Only the approval chip, which talks to a live agent, still needs it.
     isConnected: Boolean,
     awaitingOnboardCode: Boolean = false,
-    isSending: Boolean,
+    // Whether there is an agent for a message to go to, connected or not.
+    // Without one the send path has nowhere to queue it (ChatViewModel's
+    // sendMessage returns early), so the field stays locked.
+    hasAgent: Boolean = true,
     // True while the agent has a running turn. It no longer locks anything:
     // the relay accepts an INPUT on a running session as runtime input
     // (ws_router/session.py's INPUT branch), so a message sent now reaches the
-    // agent mid-run. It only adds the Stop control below the field. Distinct
-    // from [isSending], which reflects the *connection* being mid-(re)connect.
+    // agent mid-run. It only adds the Stop control below the field.
     isAgentWorking: Boolean = false,
     // Tool-approval mode chip, on the row below the field alongside the session
     // usage. Defaults keep the dozens of existing InputBar call sites
@@ -69,6 +76,9 @@ fun InputBar(
     // True while approvalMode is only requested, not yet agent-confirmed —
     // see ConnectionRepository.modePending's doc.
     modePending: Boolean = false,
+    // Which modes the chip and sheet offer, and whether the Host owns them —
+    // see ConnectionRepository.sessionModes.
+    sessionModes: SessionModes = SessionModes.LEGACY,
     usage: SessionUsageTotals = SessionUsageTotals(0, 0.0, null),
     // The connected agent's published skills (AgentLiveProfile.skills), which
     // are the whole candidate set for the `/` palette. Empty for most agents,
@@ -133,8 +143,8 @@ fun InputBar(
     // new-turn and interject paths. Offering the send here only produced a
     // "prompt required" error every time. TextInputField's placeholder says
     // why while attachments are waiting.
-    val canSend = isConnected && !isSending && input.text.isNotBlank()
-    val fieldEnabled = isConnected
+    val fieldEnabled = composerEnabled(hasAgent, awaitingOnboardCode, isConnected)
+    val canSend = fieldEnabled && input.text.isNotBlank()
     // Dictation only writes into this field, so it needs no more than the field
     // itself does; it still waits out a dictation, because finishing one now
     // belongs to the waveform and this slot has nothing left to offer until the
@@ -331,7 +341,8 @@ fun InputBar(
             ApprovalModeSheet(
                 current = approvalMode,
                 onSelect = onSelectApprovalMode,
-                onDismiss = { showModeSheet = false }
+                onDismiss = { showModeSheet = false },
+                modes = sessionModes
             )
         }
 
@@ -422,6 +433,8 @@ fun InputBar(
             },
             isConnected = isConnected,
             awaitingOnboardCode = awaitingOnboardCode,
+            hasAgent = hasAgent,
+            enabled = fieldEnabled,
             isAgentWorking = isAgentWorking,
             interactionSource = fieldInteractionSource,
             attachmentCount = attachedImages.size + attachedFiles.size,
@@ -450,9 +463,12 @@ fun InputBar(
             ApprovalModeChip(
                 mode = approvalMode,
                 // Switching mode is a message to a running agent; with no live
-                // socket there is nothing to send it to.
-                enabled = isConnected,
+                // socket there is nothing to send it to. A Host that owns the
+                // mode also refuses a change mid-turn ("Session is busy"), so
+                // there the chip waits for the turn instead of inviting one.
+                enabled = isConnected && !(sessionModes.hostManaged && isAgentWorking),
                 pending = modePending,
+                turnsLeft = sessionModes.turnsLeft,
                 onCycle = onCycleApprovalMode,
                 onOpenSheet = { showModeSheet = true }
             )
@@ -487,6 +503,19 @@ fun InputBar(
  * getData, so both shapes are read.
  */
 /** Attachments per message, images and files counted together — see InputBar's fitting(). */
+/**
+ * Whether the composer takes input. The one rule, shared with ChatScreen's
+ * dimming so the box can never look locked while it works, or the reverse.
+ *
+ * Not gated on the connection: offline, the message is queued (W16AAPPLE-102).
+ * A gate still waiting for an invite code is the exception, since that code
+ * goes in the card above, not here. Paired with !isConnected, as in
+ * TextInputField's placeholder: the flag also follows an unanswered gate card,
+ * which must not lock a connected composer.
+ */
+internal fun composerEnabled(hasAgent: Boolean, awaitingOnboardCode: Boolean, isConnected: Boolean): Boolean =
+    hasAgent && !(awaitingOnboardCode && !isConnected)
+
 private const val MAX_ATTACHMENTS = 3
 
 /**

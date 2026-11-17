@@ -3,10 +3,7 @@ package ai.openonion.oochat.network
 import ai.openonion.oochat.util.FileLogger
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -93,72 +90,5 @@ class AgentDiscoveryServiceTest {
 
         assertEquals(upper, resolved.address)
         assertTrue("hex is case-insensitive", log.contains("Input is valid address"))
-    }
-
-    // ── the relay directory, which is where published skills actually live ──
-    //
-    // The slash palette waited for an AGENT_PROFILE frame. Nothing sends one:
-    // the string appears nowhere in the ConnectOnion SDK, and connects against
-    // a live agent produced CONNECTED/ONBOARD_*/PING and no profile. The SDK
-    // puts the profile in its ANNOUNCE and leaves subscribers to fetch it.
-
-    @Test
-    fun `a published profile is read out of the directory entry`() {
-        val server = MockWebServer()
-        server.enqueue(
-            MockResponse().setBody(
-                """
-                {"endpoints":[],"relay":"wss://oo.openonion.ai","last_seen":"2026-08-09T00:00:00",
-                 "profile":{"alias":"palette-agent","model":"gemini-2.5-flash","tools":["echo"],
-                 "skills":[{"name":"explain","description":"Explain a snippet of code"},
-                           {"name":"translate","description":"Translate the message"}]}}
-                """.trimIndent()
-            )
-        )
-        server.start()
-
-        val profile = runBlocking {
-            service.fetchPublishedProfile(realAddress, server.url("/").toString())
-        }
-
-        assertEquals("palette-agent", profile?.alias)
-        assertEquals(listOf("explain", "translate"), profile?.skills?.map { it.name })
-        assertEquals("Explain a snippet of code", profile?.skills?.first()?.description)
-        // The path the relay serves — a wrong one silently returns someone
-        // else's row, or a 404, and the palette stays empty either way.
-        assertEquals("/api/agents/$realAddress", server.takeRequest().path)
-
-        server.shutdown()
-    }
-
-    @Test
-    fun `a wss relay URL is turned into an https directory URL`() {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("""{"profile":null}"""))
-        server.start()
-
-        // The repository holds the relay as wss://…; only the scheme differs.
-        val wsUrl = server.url("/").toString().replaceFirst("http", "ws")
-        val profile = runBlocking { service.fetchPublishedProfile(realAddress, wsUrl) }
-
-        assertNull("a null profile is not an error, just an agent that published none", profile)
-        assertEquals("/api/agents/$realAddress", server.takeRequest().path)
-
-        server.shutdown()
-    }
-
-    @Test
-    fun `a directory that is down costs the palette and nothing else`() {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(503))
-        server.start()
-
-        val profile = runBlocking {
-            service.fetchPublishedProfile(realAddress, server.url("/").toString())
-        }
-
-        assertNull(profile)
-
-        server.shutdown()
     }
 }

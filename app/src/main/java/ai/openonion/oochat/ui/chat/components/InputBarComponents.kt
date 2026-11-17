@@ -43,6 +43,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,7 +75,9 @@ internal fun StopButton(onClick: () -> Unit) {
     ) {
         Surface(
             onClick = onClick,
-            modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+            modifier = Modifier
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .semantics { role = Role.Button },
             shape = RoundedCornerShape(50),
             color = MaterialTheme.colorScheme.inverseSurface,
             contentColor = MaterialTheme.colorScheme.inverseOnSurface,
@@ -175,7 +180,7 @@ internal fun AttachmentThumbnail(uri: Uri, onRemove: () -> Unit, index: Int = 0,
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Remove image",
+                        contentDescription = if (total > 1) "Remove image ${index + 1} of $total" else "Remove image",
                         tint = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.size(9.dp)
                     )
