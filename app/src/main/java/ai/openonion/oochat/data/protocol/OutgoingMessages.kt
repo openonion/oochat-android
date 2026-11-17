@@ -2,6 +2,7 @@ package ai.openonion.oochat.data.protocol
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Outgoing WebSocket messages sent to the server.
@@ -11,19 +12,39 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ConnectMessage(
     val type: String = "CONNECT",
+    // Top-level and unsigned, as in connectonion-react's CONNECT: the Host
+    // reads data.get("protocol") off the envelope, not the signed payload.
+    // Omitting it is accepted only during the descriptor-less compatibility
+    // window, which may close from 1.8.0a1 onwards (websocket-protocol.md).
+    val protocol: ProtocolDescriptor = OipProtocol.DESCRIPTOR,
     val payload: ConnectPayload,
     val from: String,
     val signature: String,
     val timestamp: Long,
     val to: String? = null,
     @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("last_msg_id") val lastMsgId: String? = null,
     val session: SessionState? = null
 )
 
+/**
+ * The signed half of [ConnectMessage].
+ *
+ * [nonce] keeps two CONNECTs from one identity in the same second distinct:
+ * Ed25519 is deterministic and [timestamp] has one-second resolution, and the
+ * Host refuses a signature it has seen before (websocket-protocol.md, "A
+ * signature is single-use").
+ *
+ * [signedCommands] opts this connection into the Host's v2 command gate (see
+ * [SignedCommand]). It is inside the signature so a relay cannot strip it and
+ * downgrade the socket to unsigned commands. A pre-v2 Host ignores it.
+ */
 @Serializable
 data class ConnectPayload(
     val timestamp: Long,
-    val to: String? = null
+    val to: String? = null,
+    val nonce: String,
+    @SerialName("signed_commands") val signedCommands: Int = SignedCommand.CAPABILITY
 )
 
 @Serializable
@@ -50,6 +71,24 @@ data class InputMsg(
 data class FileAttachment(
     val name: String,
     val data: String
+)
+
+/**
+ * Run one named tool directly, with no LLM turn (ws_router/exec.py); answered
+ * by an `EXEC_RESULT` carrying the same [execId].
+ *
+ * A v2 signed command like [InputMsg]: AgentConnection.signedCommand wraps it
+ * with [SignedCommand.envelope], which adds `to`, `timestamp` and `nonce` to the
+ * signed payload. [to] also stays at the top level, where a pre-v2 relay routes
+ * on it.
+ */
+@Serializable
+data class ExecMessage(
+    @SerialName("exec_id") val execId: String,
+    val tool: String,
+    val args: JsonObject,
+    val to: String,
+    val type: String = "EXEC"
 )
 
 @Serializable
@@ -182,6 +221,14 @@ data class UlwResponse(
  *
  * The server acknowledges by sending a `mode_changed` notification back
  * (approval.py:341, ulw.py:86) — see [ChatItem.ModeChangedItem][ai.openonion.oochat.domain.model.ChatItem.ModeChangedItem].
+ *
+ * A ConnectOnion 1.7+ Host that advertises `session_modes` on CONNECTED
+ * takes the same frame itself instead (ws_router/mode.py's
+ * handle_mode_change): [mode] is "read-only" | "auto" | "full-access", it is
+ * accepted only while the session is idle, and the answer is immediate —
+ * `mode_changed` with `mode`, `turns_left` and `session_id`, or an `ERROR`
+ * (-32000 busy, -32602 unavailable mode, -32002 no session). [turns] is
+ * never sent there: the Host grants full access's budget itself.
  */
 @Serializable
 data class ModeChangeMessage(
