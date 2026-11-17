@@ -3,6 +3,7 @@ package ai.openonion.oochat.ui.chat.components
 import ai.openonion.oochat.domain.model.ApprovalDecision
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import org.junit.Rule
@@ -27,6 +28,41 @@ class ActionCardsComposeTest {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `an answered question drawn afresh keeps its buttons off`() {
+        // A scroll or rotation draws the card again with none of its local state.
+        composeRule.setContent {
+            ConnectOnionTheme {
+                AskUserCard(
+                    item = ChatItem.AskUser(id = "q-1", text = "Which branch?", options = listOf("main", "dev"), multiSelect = false, answer = "dev"),
+                    onRespond = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("main").assertIsNotEnabled()
+        composeRule.onNodeWithText("dev").assertIsNotEnabled()
+        composeRule.onNodeWithText("No longer waiting for an answer").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a refused answer says the question is no longer waiting`() {
+        composeRule.setContent {
+            ConnectOnionTheme {
+                AskUserCard(
+                    item = ChatItem.AskUser(
+                        id = "q-1", text = "Which branch?", options = listOf("main", "dev"), multiSelect = false,
+                        answer = "dev", refused = true
+                    ),
+                    onRespond = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("No longer waiting for an answer").assertExists()
+        composeRule.onNodeWithText("main").assertIsNotEnabled()
+    }
 
     @Test
     fun `pending approval card shows the argument being approved`() {

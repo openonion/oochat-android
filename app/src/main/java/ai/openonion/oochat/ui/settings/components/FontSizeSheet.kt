@@ -200,6 +200,7 @@ internal fun FontSizeSheet(
         Spacer(modifier = Modifier.height(MaterialTheme.spacing.lg))
         Button(
             onClick = { onConfirm(currentIndex); onDismiss() },
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Done")

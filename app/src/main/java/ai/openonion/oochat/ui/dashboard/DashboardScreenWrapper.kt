@@ -23,11 +23,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
  *
  * The allowlist is the live `AGENT_PROFILE`'s skills. Null until that frame
  * arrives, and [DashboardSkillIntent] refuses everything while it is.
+ *
+ * @param besideChat The page is next to the chat, not in place of it. It then has no way back to
+ *   show, and running a skill leaves it where it is rather than going back to the chat.
  */
 @Composable
 fun DashboardScreenWrapper(
     chatViewModelStoreOwner: ViewModelStoreOwner?,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    besideChat: Boolean = false
 ) {
     val application = LocalContext.current.applicationContext as Application
     val viewModel: ChatViewModel = viewModel(
@@ -43,13 +47,25 @@ fun DashboardScreenWrapper(
     DashboardScreen(
         html = html,
         allowedSkills = profile?.skills?.map { it.name },
-        onRunSkill = { message ->
-            viewModel.sendMessage(message)
-            // Back to the conversation, where the turn this just started is.
-            onNavigateBack()
-        },
+        onRunSkill = { message -> runSkillFromHome(message, besideChat, viewModel::sendMessage, onNavigateBack) },
         onNavigateBack = onNavigateBack,
         agentName = profile?.name,
-        chatAwaitsUser = awaitsUser
+        chatAwaitsUser = awaitsUser,
+        besideChat = besideChat
     )
+}
+
+/**
+ * Sends the message of a skill run from the Home page as the user's own. On a screen of its own
+ * that is followed by going back to the conversation, where the turn it started is; beside the chat
+ * the conversation is already in view.
+ */
+internal fun runSkillFromHome(
+    message: String,
+    besideChat: Boolean,
+    send: (String) -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    send(message)
+    if (!besideChat) onNavigateBack()
 }
