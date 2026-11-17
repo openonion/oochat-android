@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,9 @@ internal fun UserBubble(
             // been delivered has no send time yet, so the line is free.
             timestamp = when (item.state) {
                 UserMessageState.QUEUED -> "Waiting to send…"
+                // BubbleTimestamp is plain Text, so TalkBack reads this too: a
+                // screen-reader user hears that delivery is unconfirmed.
+                UserMessageState.AWAITING_ACK -> "Sending…"
                 UserMessageState.FAILED -> null
                 UserMessageState.SENT -> timestamp
             },
@@ -70,7 +74,7 @@ internal fun UserBubble(
                 horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs),
                 modifier = Modifier
                     .padding(top = MaterialTheme.spacing.xs)
-                    .then(if (onResend != null) Modifier.clickable(onClick = onResend) else Modifier)
+                    .then(if (onResend != null) Modifier.clickable(role = Role.Button, onClick = onResend) else Modifier)
                     .semantics { contentDescription = "Not sent. Tap to try again." }
             ) {
                 Icon(

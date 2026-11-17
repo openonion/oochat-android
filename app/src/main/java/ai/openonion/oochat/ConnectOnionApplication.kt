@@ -13,8 +13,9 @@ import coil.memory.MemoryCache
  * Named `ConnectOnionApplication` (not `ConnectOnionApp`) to avoid colliding
  * with the top-level `@Composable fun ConnectOnionApp()` in ConnectOnionApp.kt.
  */
-class ConnectOnionApplication : Application(), ImageLoaderFactory {
-    val container: AppContainer by lazy { DefaultAppContainer(this) }
+open class ConnectOnionApplication : Application(), ImageLoaderFactory {
+    // Open for StartScreenTest's fake container.
+    open val container: AppContainer by lazy { DefaultAppContainer(this) }
 
     // Started-activity count, the standard dependency-free way to know
     // whether the app is visible (lifecycle-process/ProcessLifecycleOwner

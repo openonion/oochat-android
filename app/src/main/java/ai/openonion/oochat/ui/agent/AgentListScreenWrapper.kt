@@ -2,6 +2,7 @@ package ai.openonion.oochat.ui.agent
 
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.di.appContainer
+import ai.openonion.oochat.ui.components.AppSnackbarHost
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -12,7 +13,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -82,7 +82,7 @@ fun AgentListScreenWrapper(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { AppSnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         AgentListScreen(
             agents = uiState.agents,

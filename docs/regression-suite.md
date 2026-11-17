@@ -1,0 +1,147 @@
+# Regression suite
+
+The tests that hold the features users rely on, and the behaviour that looks
+unintended. Everything here is a JVM unit test, so it runs wherever
+`testDebugUnitTest` runs, with no device.
+
+```bash
+./gradlew :app:testDebugUnitTest -Pregression
+```
+
+Without `-Pregression` the task runs the whole unit suite as before. The list of
+classes lives in `regressionSuite` in `app/build.gradle.kts`. A class listed
+there is in the suite as a whole, so a new test for one of these features
+belongs in one of those classes, or its class belongs in that list.
+
+## What it covers
+
+| Feature | Classes | What is pinned |
+|---|---|---|
+| Add agent by 0x address | `AgentViewModelTest`, `AgentFormScreenComposeTest`, `AgentFormNamingTest`, `EmbeddedDiscoveryPanelComposeTest`, `AgentDiscoveryServiceTest`, `AgentRepositoryImplTest`, `AgentDiscoveryRepositoryImplTest`, `AgentMapperTest`, `AgentQrCodeTest` | 0x + 64 hex and every near miss, in Setup too; a URL pasted as an address; what Save hands over (trimmed, lower-cased address, default name, relay or direct); one agent per address in any letter case, on add, edit and discovery; the first agent added becomes the default; a scanned QR code fills the form only if it names an agent (the website's Share code, the app's link, a server link or just the address), and any other is refused with a message (W16AAPPLE-57 to -61, -68, -81) |
+| Direct (/ws) and relay (/ws/input) | `AgentConnectionRobolectricTest`, `AgentConnectionTest`, `ProtocolParserTest`, `ConnectionConfigTest`, `ConstantsTest`, `EncryptedPreferencesConnectionConfigRepositoryTest`, `LoadingViewModelTest` | The URL actually dialled in each mode; `to` present on relay frames and absent on direct ones, signed and unsigned; which saved configs count as relay |
+| Ed25519 identity | `IdentityVectorsTest`, `Slip10Test`, `KeyManagerMnemonicTest`, `KeyManagerPersistenceTest`, `KeyManagerTest`, `SettingsViewModelTest` | Phrase -> seed -> SLIP-0010 account key -> address and key -> signature, against the connectonion SDK's own output; mint, restore, import, reset and backup; every BIP39 phrase length, spacing, and hex keys whose halves do not match; a pre-SLIP-0010 install keeps its key and is told its phrase no longer restores it (W16AAPPLE-62, -63, -64, -97) |
+| Onboarding gate | `OnboardCardsComposeTest`, `ChatEventReducerTest`, `OutgoingMessagesTest`, `ConnectionRepositoryImplTest`, `ConnectToAgentUseCaseTest`, `OnboardingViewModelTest` | No reconnect behind the user while the gate is open (failure and close); the exact `ONBOARD_SUBMIT` frame; submitting while disconnected |
+| Slash-command palette | `SlashCommandMatcherTest`, `SlashCommandPaletteComposeTest`, `InputBarOfflineComposeTest`, `LiveProfileMatchTest`, `AgentFormScreenComposeTest` (plus `ConnectionRepositoryImplTest`) | Skills come only from `AGENT_PROFILE`, never the relay's public profile, so they stay hidden until the Host lets the user in, and are dropped again on a disconnect, a refused reconnect or a new invite-code prompt (W16AAPPLE-71). The agent's Edit screen says skills will show once the user is let in, then lists them collapsed behind "What this agent can do (N)", matched to the agent by the address the app dialled, in any case; cleaned to one per name with "No description" dropped (W16AAPPLE-65); a picked command is sent as plain text; still offered while disconnected, since the message is queued (W16AAPPLE-102), and hidden only with no agent to send to |
+| Dictation | `DictationMergeTest`, `InputBarDictationComposeTest`, `ChatViewModelTest`, `SpeechRecognizerIntentTest`, `SpeechRecognitionLevelTest`, `VoiceTranscriptionInstructionTest`, `VoiceTranscriptionServiceTest`, `VoiceRecorderStoreTest` | Nothing is ever sent on its own, including when the fallback path fails; a recording under a second says "Recording too short" instead of vanishing, while an unusable one is dropped quietly (W16AAPPLE-103); one token refresh after a 401 |
+| Rem notebook | `RemNotebookTest`, `RemScreenComposeTest`, `RemViewModelTest` (plus `ProtocolParserTest`, `AgentConnectionRobolectricTest`) | Pages come out of the Host's reader page with only category, title, date and Markdown; the notebook's folder, logs and mail accounts are dropped, credentials (keys, tokens, named secrets, URL passwords) become `[redacted]`, absolute paths become `[path removed]` and home folders `~`, passages Rem labels `[personal]` or `[sensitive]` are hidden; the contents leave off held, service, duplicate-catalog, notes and logs pages, which links still open; all checked on page text written the way Rem writes it; a refresh keeps the open page; links between pages open the linked page; each Host refusal has its own message, an older Host is told apart, Try again only where reading again can help, and the Host's own wording is never shown; the screen says Rem, never Wiki, and names `co rem` commands (W16AAPPLE-69) |
+| Low-balance bar | `LowBalanceBarComposeTest` (plus `ConnectionRepositoryImplTest`, `TurnFooterFormattingTest`) | Threshold, wording at zero and below, and for a balance too small to print as anything but zeros; the amount, like every cost figure, with a decimal point on a comma-decimal phone, and sub-cent amounts kept non-zero (W16AAPPLE-67); the tap opening the purchase page, the balance reaching the live profile |
+| TalkBack labels and roles | `ChatControlsLabelledComposeTest`, `ControlRolesComposeTest`, `ApprovalModeControlsComposeTest`, `FailedMessagesBarComposeTest`, `SelectedSemanticsComposeTest`, `PillTextFieldAccessibilityTest` | Every control in the transcript (one of each kind of chat item), the composer and the approval controls has text or a content description once its children are merged, so none is read out unlabelled; the approval mode chip, Stop, the "Not sent" row and every expandable card announce as buttons; the chip says which setting it is and what a tap does, and an expandable card says whether it is open; the current mode and option announce as selected (W16AAPPLE-48) |
+| Session resume | `ProcessDeathResumeTest`, `ForegroundReturnTest`, `ConnectionRepositorySessionPersistenceTest`, `SessionPersistsToRoomTest`, `ColdStartConnectionTest`, `SharedConnectionTest`, `ConnectToAgentUseCaseStaleSessionTest`, `SessionFreshnessTest` | Killed mid-stream: the relaunch CONNECTs on the same `session_id` with no `last_msg_id` and the replayed turn lands once in Room and on screen; a dropped socket names the last event it handled; a turn that finished while the app was dead arrives once, and a tool call it left running stops spinning; a dead socket is replaced on return to the app (W16AAPPLE-46); a cold start opens one socket |
+| CONNECTED status | `ProtocolParserTest`, `AgentConnectionRobolectricTest`, `ConnectionRepositoryImplTest`, `ChatViewModelTest`, `ProcessDeathResumeTest` | `status` (new, connected, running) and `server_newer` read off the frame and carried to the screen, which acts on each once: running holds the composer and un-fails a dropped turn, connected settles cards left spinning, new fails a lost turn and leaves a brand-new conversation alone, a failed turn stays failed; a message typed offline is marked sent when the connection returns; the Host's newer transcript merges once, without touching a message not yet sent (W16AAPPLE-22) |
+| Wrong clock and failed reconnects | `HostClockTest`, `AgentConnectionRobolectricTest`, `ConnectionRepositoryImplTest`, `ServerErrorTextTest`, `ChatViewModelTest` | Signatures carry the server's time from the upgrade's `Date` (CONNECT, commands, invite codes), the device clock with no header or past the 30-minute bound, a fresh reading per socket, and a clock put right is followed; `signature expired` is shown as advice to check the date and time; a reconnect answered with ERROR ends in Error with Reconnect, an unanswered one climbs the ladder after 15 s, and the relay's offline verdict is a rung; an offline agent is tried every minute after the ladder while the app is on screen; a recreated chat screen does not re-add an old error; a session the Host lost (`authenticate first`, Rem's `Authentication required`) reconnects by itself and reads Rem again, sends nothing again by itself but shows a lost message failed with Retry, at most once a minute before Reconnect is offered (W16AAPPLE-90, -82, -79, -74, -108) |
+| Relay failover | `RelayFailoverTest` | The relay dropping, restarting, refusing upgrades or answering `Agent not connected` mid-turn: the app redials `/ws/input` on the backoff ladder, resumes with `session_id` and `last_msg_id`, a frame missed while it was down is replayed once, and the rest of the turn lands once in Room and on screen |
+| Network drop | `NetworkDropTest` | The phone's network cut mid-turn, with the socket failing at once or going silent until OkHttp's ping times out: dials fail while offline on the backoff ladder, the app dials as soon as the network is back, resumes with `session_id` and `last_msg_id`, and what it missed (including frames sent into the silent socket) is replayed once and lands once in Room and on screen |
+| Home beside the chat or in a tab | `HomePlacementTest`, `HomePlacementWindowComposeTest`, `ChatWithHomeComposeTest`, `ChatWithHomeTabsComposeTest`, `PaneComposeTest`, `HomeScreenRouteComposeTest`, `HomeBesideChatComposeTest`, `AgentHomeTest`, `ChatWithHomePanesComposeTest`, `ChatHomeButtonComposeTest`, `HomeScreenWrappersComposeTest`, `RunSkillFromHomeTest` | The agent's Home goes beside the chat from 600dp wide and 480dp tall and in a tab of its own on anything smaller (a phone, even on its side), on either side of each bound, and never when the agent has none; the chat keeps its typed text and state while Home appears and disappears (a foldable unfolded and folded); each pane gets half the row even when what it holds ignores the modifier it is given; a Home screen of its own leaves for the chat when Home gets a place in the chat's layout, including while it is open; beside the chat a Home page has no back arrow and no waiting bar (W16AAPPLE-31); which Home an agent has, and that a Control Center the device cannot host stays behind the Home button instead of filling half the screen; the chat's Home button is hidden whenever Home is in the chat's layout (beside it or a tab) and shown only for a Control Center the device cannot host; both Home screens drop their way back when beside the chat; a skill run from Home beside the chat does not go back to it (W16AAPPLE-105); on a phone the chat and Home tabs each keep their state (the transcript's place, a draft, the page's own state) while the other is showing, the Home tab is named for what the agent sent (Control Center or Dashboard), the chat's top bar sits directly under the tabs with no second gap for the status bar, Home is built only when its tab is first opened, choosing a tab drops the keyboard, and going back from Home by its arrow, the back button or a skill run returns to the chat (W16AAPPLE-32) |
+| Design system | `ColorSchemePaletteTest`, `StatusColorsPaletteTest`, `LogColorsTest`, `ThemeColorsOnlyInThemeTest`, `ContrastUsageTest`, `TypographyTest`, `ShapesTest`, `ElevationTest`, `AgentStatusColorComposeTest`, `AppSnackbarHostComposeTest`, `ControlCenterWebViewTest`, `ControlCenterPageTest`, `DashboardWebViewTest` | The palette is the brand green ramp on warm greys with no other accent but the error red, and every text pair, caption and divider is legible in light and dark; the status colours and the log console stay on it; the type is the system font with monospace for ticking figures, and nothing bundles a font; one 2 to 12dp radius scale, with every button on it; no shadow above a 1dp hairline and no tint; no screen writes a colour or a radius of its own, and no caption or border sits on a container too raised for it; an agent's Dashboard and Control Center are created under the app's own theme, in both directions, and follow a change (W16AAPPLE-49). See [design-system.md](design-system.md) |
+| Failed sends | `OfflineQueueRestartTest`, `RoomPendingMessageSinkTest`, `InMemoryPendingMessageSinkTest`, `FailedMessagesBarComposeTest` | A message queued offline survives a kill, is held while another conversation is open, and is sent once on its own; the outbox is bounded |
+| Session drawer | `SessionDrawerComposeTest`, `ConversationHistoryUseCaseTest`, `SessionRepositoryImplTest` | New chat and switching, in place or by opening another agent; Rename's Save is disabled until the trimmed name changes; delete asks first |
+| Approval cards and modes | `ApprovalCardComposeTest`, `ApprovalResponseTest`, `ActionCardsComposeTest`, `ApprovalModeControlsComposeTest`, `ApprovalModeTest`, `ProtocolParserStatusEventsTest` | Allow once, Trust for this session, Reject, Stop and Explain send the `APPROVAL_RESPONSE` the Host accepts, naming its request, once per card; an ask_user answer names the question tapped, not the newest; an answer the Host refuses marks only its own card as no longer waiting; Ultra work returns to Safe when the Host ends its budget |
+| Database upgrades | `MigrationChainTest`, `Migration8To9Test`, `Migration9To10Test`, `Migration10To11Test`, `Migration12To13Test`, `Migration13To14Test`, `TurnMetadataSchemaCompatTest` | Each migration produces the next exported schema, with no tables missing or left over; every version from v5 upgrades to the current one with its data intact. Old databases are built from `app/schemas` |
+| Which screen opens first | `StartScreenTest` | Setup with no saved connection; Loading, which dials the agent, with one |
+| Stop and interrupt | `InputBarInterjectComposeTest`, `ChatViewModelTest`, `ConnectionRepositoryImplTest` | Stop shows only during a turn; `INTERRUPT` is sent and the turn settles |
+| Keep typing while working | `InputBarInterjectComposeTest`, `ProtocolParserRuntimeInputTest` | The composer works mid-run; `RUNTIME_INPUT_ACK` and `RUNTIME_INPUT_REJECTED` are read correctly |
+
+## Where the test data comes from
+
+`IdentityVectorsTest` asserts values that did not come from this app:
+
+- RFC 8032's own Ed25519 test vectors.
+- SLIP-0010's own ed25519 test vector 1.
+- Account paths, keys, addresses and signatures made with the connectonion SDK
+  itself (v1.9.2b28: `derive.py` over python-mnemonic and PyNaCl, i.e.
+  libsodium), so the addresses are the ones `co` recovers from those phrases.
+- Signatures checked with the server's own
+  `connectonion.network.host.auth.verify_signature`.
+
+libsodium's Android `.so` cannot load on a JVM, so these tests run
+`KeyManager` on an RFC 8032 stand-in (`BouncyCastleEd25519`), injected through
+the `Ed25519` seam. The same file checks the stand-in against those vectors. The
+device test `KeyManagerSodiumVectorsTest` checks the real binary against the same
+values.
+
+## Known issues
+
+These tests assert what the app *should* do, wrapped in `knownIssue { }`. While
+the problem is still there, the test is reported as **skipped**, and its reason
+is printed to the test's stderr. Once someone fixes it, the test **fails** on
+purpose. At that point, remove the wrapper, and the test guards the fix.
+
+| Area | Issue | Test |
+|---|---|---|
+| Direct/relay | A direct `wss://host` URL becomes `ws://wss://host/ws`, so the app dials a host called `wss` | `AgentConnectionRobolectricTest` |
+| Direct/relay | A direct URL ending in `/` is dialled at `//ws` (the Add Agent form does not trim it) | `AgentConnectionRobolectricTest` |
+| Direct/relay | The saved `connectionMode` is never read. A relay-mode agent on a self-hosted relay is dialled at `<relay>/ws` | `ChatViewModelTest` |
+| Failed sends | After a restart, a message still in the outbox shows as sent, not "Waiting to send…" (W16AAPPLE-106) | `OfflineQueueRestartTest` |
+
+## Not covered, and why
+
+- **The recovery phrase on the web.** Android and the `co` CLI derive the key
+  with SLIP-0010 (W16AAPPLE-97). The web client still takes the first 32 bytes
+  of the BIP39 seed, so the same phrase gives a different address there. That
+  is the web client's to change; nothing here can test it.
+- **Anything needing a device.** CI runs no instrumented tests, and the
+  screenshot baselines are not verified (see the README). Process death is
+  therefore modelled in `ProcessDeathResumeTest`: the first launch's objects
+  are abandoned without a flush and the relaunch is rebuilt on the same Room
+  file, rather than the app being killed on an emulator.
+- **Home beside the chat, or in a tab, on a real device.** The wiring is tested with a real
+  `ChatViewModel` over fakes, as in `ChatScreenRecompositionTest`, but with stand-in
+  panes and Robolectric's stub WebView, and `NavigationGraph` itself is not run. So
+  what the real Home pages look like next to the chat, and how the layout behaves
+  across a fold, is checked by hand on a tablet or foldable emulator (Pixel Tablet,
+  or Pixel Fold unfolded) and on a phone emulator, with an agent that has a Dashboard or a
+  Control Center:
+  - Landscape on the tablet: the chat is on the left and Home on the right, and the
+    chat's top bar has no Home button.
+  - A skill run from Home sends its message and Home stays where it is.
+  - Rotate to portrait and back, or fold and unfold the foldable: what was typed in
+    the chat and how far it was scrolled are still there, and Home comes and goes.
+  - Unfold while Home's tab is showing: the tabs go and the chat remains, with Home
+    beside it. Fold again: the tabs come back.
+  - On the phone emulator (`Pixel_7`) the Chat tab and a tab named for the agent's Home
+    (Control Center or Dashboard) sit under the status bar, with the chat's top bar directly
+    below them and no Home button in it. A phone on its side keeps the tabs.
+  - On the phone, type a draft and scroll the chat up, choose Home's tab and then Chat: the
+    draft and the scroll position are where they were, and the keyboard closed when Home
+    was chosen. Scroll or fill in something on a Dashboard, go to Chat and back: it is
+    still as it was. For a Control Center, the work it was doing carries on while the chat
+    shows.
+  - On the phone, the back button on Home's tab goes to the chat, and a skill run from
+    Home lands on the chat with the turn it started.
+  - A Control Center the device cannot host has no tab: the chat's Home button opens the
+    screen that says why.
+  - The chat's navigation drawer opens inside its half, and Home's page reloads when
+    its pane comes back.
+- **How a screen looks in light and dark.** The tests pin the palette and its contrast, but not how a
+  screen looks. Before a screen ships, open it in light and in dark and go through the checklist in
+  [design-system.md](design-system.md#verifying-a-screen-in-light-and-dark), including, for the
+  Dashboard and Control Center, the two cases where the app's theme and the phone's disagree.
+- **The live relay.** `RelayFailoverTest` fakes it at the `WebSocketFactory`
+  seam instead of reaching `oo.openonion.ai` from CI. The restart tests use the
+  standard close codes 1012 and 1001.
+- **What TalkBack actually says.** The tests check the semantics TalkBack is given
+  (names, roles, states), not its speech, which depends on its version and settings.
+  So the spoken result is checked by hand, on a phone or on an emulator image with
+  Google Play (Settings, Accessibility, TalkBack). Swipe right through each screen
+  and listen for a name and a role on every control:
+  - Chat top bar: "Open menu, button", the agent's name, "More options, button",
+    and, when a Control Center cannot be shown, "Open agent home, button".
+  - Composer: "Open attachment menu, button", "Dictate a message, button", "Send,
+    button" (and "disabled" while the field is empty), and the approval chip as
+    "Approval mode: safe, button, double-tap to change mode" (and "double-tap to exit"
+    on full access, which also says how many turns are left). Double-tap changes the
+    mode; "Approval mode options, button" opens the sheet, whose rows announce as
+    radio buttons with the current one selected. While a change is pending the chip
+    also says "Mode change pending".
+  - While the agent works: "Stop, button".
+  - An approval card: the tool and what it wants to do are read before "Allow
+    once", "Trust for this session", "Reject" and "Explain", each as a button.
+  - A tool, plan or diff card: "..., button, Collapsed"; a double tap says
+    "Expanded".
+  - A message that was not sent: "Not sent. Tap to try again., button", and in the
+    bar above the composer "Retry sending: <the message>" for each one.
+  - Attachments: "Selected image 1 of 2" then "Remove image 1 of 2" (or "Remove
+    <file name>" for a file), and "Add more images".
+  - On a phone with tabs (W16AAPPLE-32): open Home once, return to Chat, and swipe
+    through the whole chat. It must never read anything from the hidden Home page.
+  - Work Rooms are not built yet; add them to this list when they are.
