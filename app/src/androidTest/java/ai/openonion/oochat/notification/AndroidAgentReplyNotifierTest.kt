@@ -1,5 +1,6 @@
 package ai.openonion.oochat.notification
 
+import ai.openonion.oochat.domain.model.NotificationTarget
 import android.app.Notification
 import android.app.NotificationManager
 import android.os.Build
@@ -101,6 +102,21 @@ class AndroidAgentReplyNotifierTest {
     fun clearing_removes_it() {
         notifier.notifyAgentReply(agentName = "demo-agent", preview = "Done.")
         require(posted() != null)
+
+        notifier.clearReplyNotifications()
+
+        assertNull(awaitNotification(present = false))
+    }
+
+    @Test
+    fun a_finished_run_posts_and_clearing_replies_removes_it() {
+        notifier.notifyRunFinished(
+            invocationId = "codex:call-1",
+            title = "Codex finished",
+            summary = "Fix the login test: All tests pass",
+            target = NotificationTarget("0x" + "a".repeat(64), "session-1", "codex:call-1")
+        )
+        assertEquals("Codex finished", requireNotNull(posted()).extras.getString(Notification.EXTRA_TITLE))
 
         notifier.clearReplyNotifications()
 

@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -49,17 +48,18 @@ class VoiceRecorderStoreTest {
     }
 
     @Test
-    fun `stopRecording with nothing started returns null`(): Unit = runBlocking {
-        assertNull(store.stopRecording())
+    fun `stopRecording with nothing started has nothing usable`(): Unit = runBlocking {
+        assertEquals(RecordingResult.Unusable, store.stopRecording())
     }
 
     @Test
-    fun `stopRecording immediately after starting is too short and returns null`(): Unit = runBlocking {
+    fun `stopRecording immediately after starting is too short, so the screen can say so`(): Unit = runBlocking {
         store.startRecording()
 
         val result = store.stopRecording()
 
-        assertNull("a <1s recording must not be treated as a real message", result)
+        // Not a real message, and told apart from a failure (W16AAPPLE-103).
+        assertEquals(RecordingResult.TooShort, result)
     }
 
     @Test

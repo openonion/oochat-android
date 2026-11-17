@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.Flow
  */
 interface SessionRepository {
 
+    /** Shows this identity's conversations and hides rows owned by another identity. */
+    suspend fun activateIdentity(identityAddress: String) = Unit
+
     /**
      * Get all sessions ordered by update time (newest first).
      */

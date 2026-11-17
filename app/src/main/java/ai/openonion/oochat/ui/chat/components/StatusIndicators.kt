@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 
 /**
  * The 3 states shared by [ToolStatus]/[ThinkingStatus]/etc.-driven
@@ -174,9 +175,13 @@ internal fun formatContextPercent(percent: Double): Int =
 internal const val MIN_DISPLAY_COST_USD = 0.0001
 
 /**
- * USD for one LLM call, from core/usage.py's cost field. Sub-cent calls are
- * the common case, so this keeps enough places to stay non-zero rather than
- * rounding an honest $0.004 down to "$0.00".
+ * A dollar amount: the cost of an LLM call (core/usage.py's cost field), a
+ * session's total, or an agent's balance. Sub-cent amounts are the common
+ * case, so this keeps enough places to stay non-zero rather than rounding an
+ * honest $0.004 down to "$0.00".
+ *
+ * Locale.US: a dollar amount takes a decimal point whatever the phone's
+ * locale. A German phone read "$0,0071" (W16AAPPLE-67).
  */
 internal fun formatCostUsd(cost: Double): String =
-    if (cost >= 0.01) "$%.2f".format(cost) else "$%.4f".format(cost)
+    if (cost >= 0.01) "$%.2f".format(Locale.US, cost) else "$%.4f".format(Locale.US, cost)

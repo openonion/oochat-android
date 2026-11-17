@@ -2,11 +2,15 @@ package ai.openonion.oochat.domain.usecase
 
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.local.db.entity.AgentEntity
+import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import ai.openonion.oochat.data.local.mapper.TranscriptItemCodec
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ProviderActivity
+import ai.openonion.oochat.domain.model.ProviderActivityStatus
 import ai.openonion.oochat.domain.model.Role
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.UserMessageState
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -104,6 +108,49 @@ class PersistenceTransactionTest {
         assertEquals(Role.USER.name, inserted.role)
     }
 
+    private suspend fun savedRun(sessionId: String) = database.messageDao().getMessagesListBySession(sessionId)
+        .mapNotNull { row -> row.payload?.let(TranscriptItemCodec::decode) as? ChatItem.ProviderInvocation }
+        .single()
+
+    @Test
+    fun `a Work Room run retires its outer tool call's row`() = runTest(testDispatcher) {
+        // W16AAPPLE-33: saved before the run started, it would come back as a raw tool card on reload.
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+        persist(sessionId, ChatItem.ToolCall(id = "call-1", name = "codex", args = mapOf("prompt" to "build it")))
+
+        persist(sessionId, ChatItem.ProviderInvocation(id = "codex:call-1", parentToolCallId = "call-1", provider = "codex", stateRevision = 1))
+
+        assertEquals(listOf("codex:call-1"), database.messageDao().getMessagesListBySession(sessionId).map { it.id })
+    }
+
+    @Test
+    fun `a run folded while its conversation was off screen is merged into the saved card`() = runTest(testDispatcher) {
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+        val step = { id: String, sequence: Int ->
+            ProviderActivity(id, sequence, "command", ProviderActivityStatus.COMPLETED, "Run the requested tests", "")
+        }
+        persist(
+            sessionId,
+            ChatItem.ProviderInvocation(
+                id = "codex:call-1",
+                provider = "codex",
+                taskTitle = "Add a login page",
+                stateRevision = 2,
+                activities = listOf(step("a", 1))
+            )
+        )
+
+        // Off screen, a step is folded against an empty list: a card with that step and nothing else.
+        persist(sessionId, ChatItem.ProviderInvocation(id = "codex:call-1", provider = "codex", activities = listOf(step("b", 2))))
+
+        val run = savedRun(sessionId)
+        assertEquals("Add a login page", run.taskTitle)
+        assertEquals(2L, run.stateRevision)
+        assertEquals(listOf("a", "b"), run.activities.map { it.id })
+    }
+
     @Test
     fun `persistMessageAtomically updates title for first user message`() = runTest(testDispatcher) {
         val sessionId = "session-1"
@@ -154,6 +201,43 @@ class PersistenceTransactionTest {
         )
 
         assertTrue(database.messageDao().getMessagesListBySession(sessionId).isEmpty())
+    }
+
+    @Test
+    fun `saving a message again keeps a failed delivery already recorded`() = runTest(testDispatcher) {
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+        val item = ChatItem.User(id = "u1", content = "hello")
+        suspend fun persist() = transaction.persistMessageAtomically(
+            sessionId = sessionId,
+            item = item,
+            onTitleUpdate = { _, _ -> },
+            onPreviewUpdate = { _, _, _ -> }
+        )
+        persist()
+        database.messageDao().updateDeliveryState("u1", ChatMessageEntity.DELIVERY_FAILED)
+
+        // insertMessage is REPLACE: without carrying it over, any re-save (a
+        // resend that was never saved, a replay) would quietly mark it sent.
+        persist()
+
+        assertEquals(ChatMessageEntity.DELIVERY_FAILED, database.messageDao().getDeliveryStateById("u1"))
+    }
+
+    @Test
+    fun `a message saved already failed is recorded as failed in the same write`() = runTest(testDispatcher) {
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+
+        // A message held behind a running turn is saved like this at the tap.
+        transaction.persistMessageAtomically(
+            sessionId = sessionId,
+            item = ChatItem.User(id = "u1", content = "hello", state = UserMessageState.FAILED),
+            onTitleUpdate = { _, _ -> },
+            onPreviewUpdate = { _, _, _ -> }
+        )
+
+        assertEquals(ChatMessageEntity.DELIVERY_FAILED, database.messageDao().getDeliveryStateById("u1"))
     }
 
     @Test
