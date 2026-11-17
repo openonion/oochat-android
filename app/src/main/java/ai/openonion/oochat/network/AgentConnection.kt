@@ -9,6 +9,7 @@ import ai.openonion.oochat.data.protocol.FileAttachment
 import ai.openonion.oochat.data.protocol.InputMsg
 import ai.openonion.oochat.data.protocol.InterruptMessage
 import ai.openonion.oochat.data.protocol.ModeChangeMessage
+import ai.openonion.oochat.data.protocol.OipProtocol
 import ai.openonion.oochat.data.protocol.OnboardSubmitMessage
 import ai.openonion.oochat.data.protocol.OnboardSubmitPayload
 import ai.openonion.oochat.data.protocol.PlanReviewResponse
@@ -16,14 +17,17 @@ import ai.openonion.oochat.data.protocol.PongMessage
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.SessionStatusQuery
 import ai.openonion.oochat.data.protocol.SessionStatusQuerySession
+import ai.openonion.oochat.data.protocol.SignedCommand
 import ai.openonion.oochat.data.protocol.UlwResponse
 import ai.openonion.oochat.di.sharedHttpClient
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ExecOutcome
 import ai.openonion.oochat.domain.usecase.StaleSessionDetector
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogSanitizer
 import ai.openonion.oochat.util.LogTags
 import ai.openonion.oochat.util.runCatchingCancellable
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,18 +35,26 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
@@ -75,6 +87,27 @@ class AgentConnection(
     @Volatile private var keys: KeyManager.AddressData? = null
     @Volatile private var _currentSession: SessionState? = null
     val currentSession: SessionState? get() = _currentSession
+    private data class ReplayCursor(val sessionId: String, val msgId: String)
+    @Volatile private var replayCursor: ReplayCursor? = null
+
+    /**
+     * Keys ([ParseResult.dedupeKey]) of the agent-log frames already handled, oldest first. After a
+     * reconnect the Host re-sends frames this connection has seen, so repeats are dropped before they
+     * reach anything with a side effect. The key is the frame's decoded content, not its raw text or
+     * its id: the relay stamps a different conn_id on every socket, and the Host reuses one id for an
+     * llm_call and its llm_result and for each status of a compact or an eval.
+     */
+    private val seenFrames = LinkedHashSet<String>()
+
+    /** True the first time [key] is seen, false for a repeat; see [seenFrames]. */
+    private fun isFirstSighting(key: String): Boolean {
+        synchronized(seenFrames) {
+            if (!seenFrames.add(key)) return false
+            while (seenFrames.size > MAX_SEEN_FRAMES) seenFrames.remove(seenFrames.first())
+            return true
+        }
+    }
+
     /**
      * Every INPUT whose reply is still owed, not just the newest one.
      *
@@ -86,6 +119,9 @@ class AgentConnection(
      * ProtocolParser dropped it, leaving the composer stuck mid-turn.
      */
     private val outstandingInputIds = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
+    /** EXEC calls waiting for the EXEC_RESULT carrying the same exec_id. */
+    private val pendingExecs = ConcurrentHashMap<String, CompletableDeferred<ExecOutcome>>()
     @Volatile private var isDirect: Boolean = false
     @Volatile private var agentAddress: String = ""
     @Volatile private var directUrl: String? = null
@@ -166,6 +202,13 @@ class AgentConnection(
     // its own retry.
     @Volatile private var staleSessionRecoveryAttempted = false
 
+    // True once the Host has refused this client's OIP version (W16AAPPLE-12).
+    // Terminal for the cycle: every reconnect would send the same descriptor
+    // and be refused the same way, so [attemptReconnect], [retryNow] and
+    // [reopenSocket] stand down. Reset only by [connect], i.e. by the user
+    // trying again.
+    @Volatile private var protocolRejected = false
+
     // Every session id this connection has been on, however it got there —
     // staged by us, or assigned by the server. Recording the server-assigned
     // ones is what makes [isWrongSession] work: without them the id a switch
@@ -221,7 +264,7 @@ class AgentConnection(
     // whichever one was ready first. ChatItem/Output frames that the
     // state collector won were silently dropped by its `else -> {}`.
     private val _events = MutableSharedFlow<ConnectionEvent>(
-        extraBufferCapacity = 64,
+        extraBufferCapacity = EVENT_BUFFER_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     // SharedFlow, not Flow: replay is 0, so a subscriber has to be able to
@@ -271,7 +314,14 @@ class AgentConnection(
      * Closing first is deliberate: this server keeps the old socket open
      * after ERROR, so without it two sockets would race the same agent.
      */
+    @Synchronized
     private fun reopenSocket(reason: String) {
+        // The caller saw a live socket, but a version refusal can have landed
+        // on OkHttp's thread since; reopening would send the refused CONNECT
+        // again, and Reconnecting would replace the error the user is reading.
+        // @Synchronized: the same lock as stopAfterProtocolRejection, so the
+        // two cannot interleave.
+        if (protocolRejected) return
         isConnectionReady = false
         val addr = agentAddress
         val direct = directUrl
@@ -306,6 +356,7 @@ class AgentConnection(
      * own close as a [ConnectionEvent.Disconnected].
      */
     private fun retireSocket(reason: String) {
+        settlePendingExecs("The agent connection was replaced")
         socketGeneration.incrementAndGet()
         webSocket?.close(1000, reason)
         webSocket = null
@@ -350,6 +401,7 @@ class AgentConnection(
             // stale-session recovery, independent of whether a previous
             // cycle already used (and possibly exhausted) its one shot.
             staleSessionRecoveryAttempted = false
+            protocolRejected = false
             reconnectScope = CoroutineScope(SupervisorJob() + reconnectDispatcher)
 
             openWebSocket(agentAddress, directUrl)
@@ -370,24 +422,25 @@ class AgentConnection(
         // Never repeats, never goes backwards — see nextConnectTimestamp.
         val timestamp = nextConnectTimestamp()
         val directNow = isDirect
+        val sessionId = _currentSession?.sessionId
+        val payload = ConnectPayload(
+            timestamp = timestamp,
+            to = if (!directNow) capturedAgentAddress else null,
+            nonce = SignedCommand.newNonce()
+        )
 
-        val signature = signPayload(
-            payloadFields = buildMap<String, Any> {
-                put("timestamp", timestamp)
-                if (!directNow) put("to", capturedAgentAddress)
-            }
-        ) ?: return
+        // Signed exactly as serialised, so the bytes the Host canonicalises
+        // are the bytes signed here, signed_commands included.
+        val signature = signPayload(json.encodeToJsonElement(payload).jsonObject) ?: return
 
         val connectMsg = ConnectMessage(
-            payload = ConnectPayload(
-                timestamp = timestamp,
-                to = if (!directNow) capturedAgentAddress else null
-            ),
+            payload = payload,
             from = k.address,
             signature = signature,
             timestamp = timestamp,
             to = if (!directNow) capturedAgentAddress else null,
-            sessionId = _currentSession?.sessionId
+            sessionId = sessionId,
+            lastMsgId = replayCursor?.takeIf { it.sessionId == sessionId }?.msgId
         )
 
         val msgStr = json.encodeToString(connectMsg)
@@ -413,6 +466,177 @@ class AgentConnection(
         }
         val canonical = keyManager.canonicalJson(payloadFields)
         return signer(k, canonical)
+    }
+
+    /**
+     * [command] as a v2 signed command (see [SignedCommand]), ready to send,
+     * or null when there are no keys to sign with. The CONNECT on every socket
+     * enables the Host's command gate, so an unsigned command would be refused:
+     * callers drop the frame rather than send it unsigned.
+     *
+     * @param to the agent CONNECT named; the Host refuses any other recipient.
+     */
+    private inline fun <reified T> signedCommand(command: T, to: String = agentAddress): String? {
+        val k = keys ?: run {
+            FileLogger.e(LogTags.AGENT_CONN, "signedCommand: no keys loaded, dropping")
+            return null
+        }
+        val frame = SignedCommand.envelope(
+            command = json.encodeToJsonElement(command).jsonObject,
+            to = to,
+            timestamp = System.currentTimeMillis() / 1000,
+            nonce = SignedCommand.newNonce(),
+            from = k.address,
+            sign = { payload -> signer(k, keyManager.canonicalJson(payload)) }
+        )
+        return json.encodeToString(JsonObject.serializer(), frame)
+    }
+
+    /** Sign and send an application command on the live socket. */
+    private inline fun <reified T> sendSigned(command: T) {
+        signedCommand(command)?.let { webSocket?.send(it) }
+    }
+
+    /**
+     * Send one direct EXEC command and wait for its matching EXEC_RESULT.
+     *
+     * EXEC is never queued or retried: once the socket accepts the frame, a
+     * timeout or disconnect cannot tell us whether the remote tool ran.
+     */
+    suspend fun executeTool(
+        execId: String,
+        tool: String,
+        args: JsonObject,
+        recipient: String,
+        timeoutMs: Long = EXEC_TIMEOUT_MS
+    ): ExecOutcome {
+        val socket = webSocket?.takeIf { isConnectionReady }
+            ?: return ExecOutcome.NotSent("The agent connection is not ready")
+
+        val message = createExecMessage(
+            execId = execId,
+            tool = tool,
+            args = args,
+            recipient = recipient
+        ) ?: return ExecOutcome.NotSent("The client identity is unavailable")
+
+        val result = CompletableDeferred<ExecOutcome>()
+        if (pendingExecs.putIfAbsent(execId, result) != null) {
+            return ExecOutcome.NotSent("Duplicate EXEC id: $execId")
+        }
+
+        val accepted = socket.send(message)
+        if (!accepted) {
+            pendingExecs.remove(execId, result)
+            return ExecOutcome.NotSent("The WebSocket rejected the EXEC frame")
+        }
+
+        FileLogger.i(LogTags.AGENT_CONN, "EXEC → tool=$tool exec_id=${execId.take(8)}")
+        return awaitExecResult(execId, result, timeoutMs)
+    }
+
+    /** Build the signed EXEC frame through the shared command envelope. */
+    private fun createExecMessage(
+        execId: String,
+        tool: String,
+        args: JsonObject,
+        recipient: String
+    ): String? {
+        val command = JsonObject(
+            mapOf(
+                "type" to JsonPrimitive("EXEC"),
+                "exec_id" to JsonPrimitive(execId),
+                "tool" to JsonPrimitive(tool),
+                "args" to args,
+                // Keep the routing field at the top level for pre-v2 relays;
+                // the shared envelope also copies it into the signed payload.
+                "to" to JsonPrimitive(recipient)
+            )
+        )
+        return signedCommand(command, to = recipient)
+    }
+
+    /** Wait for EXEC result, if timeout remove pending EXEC commands. */
+    private suspend fun awaitExecResult(
+        execId: String,
+        result: CompletableDeferred<ExecOutcome>,
+        timeoutMs: Long
+    ): ExecOutcome =
+        try {
+            // Generic signed-command refusals intentionally wait for the
+            // normal timeout. They may belong to an INPUT, so treating every
+            // `unauthorized: ...` frame as an EXEC failure would blame the
+            // wrong card. Known EXEC-only refusals are settled above.
+            withTimeoutOrNull(timeoutMs) {
+                result.await()
+            } ?: run {
+                currentCoroutineContext().ensureActive()
+                ExecOutcome.Unknown("No EXEC_RESULT received within ${timeoutMs}ms")
+            }
+        } finally {
+            pendingExecs.remove(execId, result)
+        }
+
+    /** Complete the caller waiting for this result. */
+    private fun completeExecResult(event: ConnectionEvent.ExecResultReceived) {
+        val outcome = when (event.status) {
+            "success" -> ExecOutcome.Success(
+                result = event.result.orEmpty(),
+                durationMs = event.durationMs
+            )
+            "error" -> ExecOutcome.Error(
+                message = event.error.orEmpty(),
+                durationMs = event.durationMs
+            )
+            else -> ExecOutcome.Unknown("Unsupported EXEC_RESULT status: ${event.status}")
+        }
+
+        val waiter = pendingExecs.remove(event.execId)
+        if (waiter == null) {
+            FileLogger.w(
+                LogTags.AGENT_CONN,
+                "Ignoring EXEC_RESULT for unknown exec_id=${event.execId.take(8)}"
+            )
+        } else {
+            waiter.complete(outcome)
+        }
+    }
+
+    /**
+     * Some EXEC refusals arrive as a plain ERROR without an exec_id. The Host
+     * uses these for requests that cannot be accepted at all, so complete the
+     * waiting EXEC calls instead of leaving them to time out.
+     */
+    private fun failPendingExecsForRefusal(event: ConnectionEvent.ConnectionError): Boolean {
+        // Keep this list narrow. A generic `unauthorized: ...` ERROR may have
+        // rejected an INPUT rather than an EXEC, so matching every refusal
+        // would incorrectly settle unrelated tool cards.
+        val providerRestriction = event.code.equals("provider_station_only", ignoreCase = true)
+        val authenticationRequired = event.message.contains("authenticate first", ignoreCase = true)
+        if (!providerRestriction && !authenticationRequired) return false
+
+        val outcome = ExecOutcome.Error(event.message)
+        var settled = false
+        pendingExecs.entries.forEach { (execId, waiter) ->
+            if (pendingExecs.remove(execId, waiter)) {
+                waiter.complete(outcome)
+                settled = true
+            }
+        }
+        return settled
+    }
+
+    /** Release every caller waiting on a socket that can no longer answer. */
+    private fun settlePendingExecs(reason: String) {
+        val unknown = ExecOutcome.Unknown(reason)
+        pendingExecs.entries.forEach { (execId, waiter) ->
+            // Remove the exact entry before completing it. A concurrent
+            // EXEC added after this iteration began must not be removed by a
+            // broad clear() without also being notified.
+            if (pendingExecs.remove(execId, waiter)) {
+                waiter.complete(unknown)
+            }
+        }
     }
 
     /**
@@ -461,9 +685,9 @@ class AgentConnection(
             files = files
         )
 
-        val msgStr = json.encodeToString(msg)
+        val msgStr = signedCommand(msg, to = agentAddress)
         FileLogger.i(LogTags.AGENT_CONN, "INPUT → ${LogSanitizer.contentSummary(prompt)}")
-        val accepted = webSocket?.send(msgStr) ?: false
+        val accepted = msgStr != null && webSocket?.send(msgStr) == true
         if (!accepted) {
             // The id would otherwise sit in the set forever, and an OUTPUT
             // arriving for some other send could be matched against it.
@@ -486,7 +710,7 @@ class AgentConnection(
     }
 
     fun respond(answer: String) {
-        webSocket?.send(json.encodeToString(AskUserResponse(answer = answer)))
+        sendSigned(AskUserResponse(answer = answer))
     }
 
     /**
@@ -498,21 +722,21 @@ class AgentConnection(
      */
     fun interrupt() {
         FileLogger.i(LogTags.AGENT_CONN, "INTERRUPT → socket=${webSocket != null}")
-        webSocket?.send(json.encodeToString(InterruptMessage()))
+        sendSigned(InterruptMessage())
     }
 
     fun respondToApproval(approved: Boolean, scope: String = "once", mode: String? = null, feedback: String? = null) {
-        webSocket?.send(json.encodeToString(ApprovalResponse(approved = approved, scope = scope, mode = mode, feedback = feedback)))
+        sendSigned(ApprovalResponse(approved = approved, scope = scope, mode = mode, feedback = feedback))
     }
 
     /** Reply to a [ChatItem.PlanReviewItem][ai.openonion.oochat.domain.model.ChatItem.PlanReviewItem] checkpoint. */
     fun respondToPlanReview(message: String) {
-        webSocket?.send(json.encodeToString(PlanReviewResponse(message = message)))
+        sendSigned(PlanReviewResponse(message = message))
     }
 
     /** Reply to a [ChatItem.UlwTurnsReachedItem][ai.openonion.oochat.domain.model.ChatItem.UlwTurnsReachedItem] checkpoint. */
     fun respondToUlwTurnsReached(action: String, turns: Int? = null, mode: String? = null) {
-        webSocket?.send(json.encodeToString(UlwResponse(action = action, turns = turns, mode = mode)))
+        sendSigned(UlwResponse(action = action, turns = turns, mode = mode))
     }
 
     /**
@@ -528,7 +752,7 @@ class AgentConnection(
      */
     fun setMode(mode: String, turns: Int? = null) {
         FileLogger.i(LogTags.AGENT_CONN, "mode_change → $mode${turns?.let { " ($it turns)" } ?: ""}")
-        webSocket?.send(json.encodeToString(ModeChangeMessage(mode = mode, turns = turns)))
+        sendSigned(ModeChangeMessage(mode = mode, turns = turns))
     }
 
     /**
@@ -625,6 +849,7 @@ class AgentConnection(
         synchronized(this) {
             isReconnecting = false
             isConnectionReady = false
+            settlePendingExecs("The agent connection was closed")
             reconnectJob?.cancel()
             reconnectJob = null
             reconnectAttempts = 0
@@ -637,8 +862,30 @@ class AgentConnection(
 
     fun isConnected(): Boolean = webSocket != null && isConnectionReady
 
+    /**
+     * End this cycle after the Host refused our OIP version. The Host keeps
+     * the socket open after its ERROR (ws_router/session.py returns to the
+     * read loop), so the client closes it: left open, its eventual drop would
+     * climb the reconnect ladder and be refused once per rung. Retiring it
+     * bumps [socketGeneration], so that close's own onClosed is ignored rather
+     * than reported as a [ConnectionEvent.Disconnected] over the real reason.
+     */
+    private fun stopAfterProtocolRejection() {
+        synchronized(this) {
+            protocolRejected = true
+            isReconnecting = false
+            isConnectionReady = false
+            reconnectJob?.cancel()
+            reconnectJob = null
+            onboardingPending = false
+            retireSocket("Unsupported OIP protocol")
+        }
+    }
+
     fun reset() {
         _currentSession = null
+        replayCursor = null
+        synchronized(seenFrames) { seenFrames.clear() }
         outstandingInputIds.clear()
         pendingMessageSink.clear(agentAddress)
     }
@@ -653,14 +900,22 @@ class AgentConnection(
      * No-op unless a reconnect is already pending — this does not start one.
      */
     fun retryNow() {
-        if (!isReconnecting) return
+        if (!isReconnecting || protocolRejected) return
         FileLogger.i(LogTags.AGENT_CONN, "Reconnect: retrying now (foreground)")
         reconnectJob?.cancel()
         reconnectAttempts = 0
         reconnectJob = reconnectScope.launch {
             runCatchingCancellable {
-                retireSocket("Reconnecting")
-                openWebSocket(agentAddress, directUrl)
+                // Re-checked under stopAfterProtocolRejection's lock: retryNow
+                // runs on the main thread and the refusal lands on OkHttp's, so
+                // it can arrive after the guard above but before this job exists
+                // to be cancelled, and would be answered with one more CONNECT.
+                synchronized(this@AgentConnection) {
+                    if (!protocolRejected) {
+                        retireSocket("Reconnecting")
+                        openWebSocket(agentAddress, directUrl)
+                    }
+                }
             }.onFailure { e ->
                 FileLogger.e(LogTags.AGENT_CONN, "Immediate reconnect failed: ${e.message}")
                 attemptReconnect()
@@ -679,6 +934,10 @@ class AgentConnection(
      * which the UI reads (correctly) as a network drop.
      */
     private fun attemptReconnect() {
+        if (protocolRejected) {
+            FileLogger.i(LogTags.AGENT_CONN, "OIP version rejected — not reconnecting")
+            return
+        }
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             FileLogger.w(LogTags.AGENT_CONN, "Max reconnect attempts reached ($MAX_RECONNECT_ATTEMPTS)")
             isConnectionReady = false
@@ -862,6 +1121,7 @@ class AgentConnection(
                 // handleMessage: one identical failure per ladder rung.
                 FileLogger.eRepeating(LogTags.AGENT_CONN, "WS failed: ${t.message}")
                 isConnectionReady = false
+                settlePendingExecs("The agent connection failed")
                 // Server keeps socket open after ERROR, so error reconnect is
                 // scheduled from handleMessage, not here; see schedulePostRejectionReconnect doc.
                 //
@@ -885,6 +1145,7 @@ class AgentConnection(
                 }
                 FileLogger.i(LogTags.AGENT_CONN, "WS closed: $code $reason")
                 isConnectionReady = false
+                settlePendingExecs("The agent connection closed")
                 // See onFailure's comment above — same fix, same reason:
                 // always climb the ladder on a non-deliberate close.
                 when {
@@ -979,6 +1240,14 @@ class AgentConnection(
             // iteration, and toSet() iterates.
             val outstanding = synchronized(outstandingInputIds) { outstandingInputIds.toSet() }
             val result = ProtocolParser.parse(text, outstanding, isDirect)
+            // A replay re-sends frames already handled; drop repeats before any side effect. Only
+            // frames with a dedupeKey are compared, so snapshots re-sent on every CONNECT still pass.
+            val dedupeKey = result.dedupeKey
+            if (dedupeKey != null && !isFirstSighting(dedupeKey)) {
+                FileLogger.d(LogTags.AGENT_CONN, "Dropping replayed frame: ${LogSanitizer.jsonTypeSummary(text)}")
+                return
+            }
+
             // The run these ids belonged to has answered (or given up), so the
             // next send starts from an empty set rather than inheriting them.
             if (result.event is ConnectionEvent.OutputReceived ||
@@ -1016,7 +1285,7 @@ class AgentConnection(
             // id is applied whenever it differs — keying off `== null` meant a
             // server-reissued id was dropped once a session already existed.
             val sessionBefore = _currentSession
-            result.updateSession?.let { _currentSession = it }
+            result.updateSession?.let { _currentSession = it.keepingPlanOf(sessionBefore) }
             result.updateSessionId?.let { sid ->
                 if (_currentSession?.sessionId != sid) {
                     _currentSession = (_currentSession ?: SessionState()).copy(sessionId = sid)
@@ -1026,8 +1295,17 @@ class AgentConnection(
                 // on, and [isWrongSession] cannot recognise it otherwise.
                 rememberSession(sid)
             }
+            // A `plan` frame is session state too: kept on the session so it is
+            // saved with it and echoed on the next CONNECT, which the Host
+            // adopts as the session — a stale plan there would be the agent's.
+            (result.event as? ConnectionEvent.PlanUpdated)?.let { update ->
+                _currentSession = _currentSession?.copy(plan = ProtocolParser.encodePlan(update.entries))
+            }
             _currentSession?.takeIf { it != sessionBefore }?.let {
                 _events.tryEmit(ConnectionEvent.SessionUpdated(it))
+            }
+            result.msgId?.let { id ->
+                _currentSession?.sessionId?.let { sid -> replayCursor = ReplayCursor(sid, id) }
             }
 
             // Set waiting state
@@ -1092,7 +1370,9 @@ class AgentConnection(
                         ConnectionEvent.Connected(
                             address = keys?.address ?: "unknown",
                             sessionId = result.updateSessionId,
-                            session = result.updateSession
+                            session = result.updateSession,
+                            status = event.status,
+                            serverNewer = event.serverNewer
                         )
                     )
                 }
@@ -1100,11 +1380,24 @@ class AgentConnection(
                     FileLogger.i(LogTags.AGENT_CONN, "OUTPUT ✓ ${LogSanitizer.contentSummary(event.result)}")
                     _events.tryEmit(event)
                 }
+                is ConnectionEvent.ExecResultReceived -> {
+                    completeExecResult(event)
+                }
+                is ConnectionEvent.ProtocolRejected -> {
+                    FileLogger.e(
+                        LogTags.AGENT_CONN,
+                        "CONNECT refused: Host speaks ${event.hostProtocol ?: "<undeclared>"}, " +
+                            "client ${OipProtocol.NAME}/${OipProtocol.VERSION} — not reconnecting"
+                    )
+                    stopAfterProtocolRejection()
+                    _events.tryEmit(event)
+                }
                 is ConnectionEvent.ConnectionError -> {
                     // Rate-limited: the retry ladder replays the identical
                     // rejection on every rung, and an unbounded loop of it is
                     // what filled app.log before the ladder was capped.
                     FileLogger.eRepeating(LogTags.AGENT_CONN, "ERROR: ${event.message}")
+                    val execRefusalHandled = failPendingExecsForRefusal(event)
                     // Kept only while the handshake has never landed, so it can
                     // only ever explain a connection that never worked.
                     if (!reachedAgentThisCycle) neverReachedReason = event.message
@@ -1140,6 +1433,10 @@ class AgentConnection(
                         // covered both responsibilities above and below.
                         schedulePostRejectionReconnect()
                         _events.tryEmit(ConnectionEvent.Reconnecting)
+                    } else if (execRefusalHandled) {
+                        // The refusal has already been delivered to the EXEC
+                        // card; emitting a second ConnectionError would show
+                        // the same failure in the generic chat error UI.
                     } else if (!staleSessionRecoveryAttempted && StaleSessionDetector.isStaleSessionError(event.message)) {
                         // See recoverFromStaleSession's doc: the same
                         // "session already attached" rejection
@@ -1156,7 +1453,7 @@ class AgentConnection(
                         // invite-code-rejection path and a single
                         // stale-session recovery attempt get contextual
                         // treatment instead.
-                        _events.tryEmit(ConnectionEvent.ConnectionError(event.message))
+                        _events.tryEmit(ConnectionEvent.ConnectionError(event.message, event.code))
                     }
                 }
                 is ConnectionEvent.ChatItemReceived -> {
@@ -1196,6 +1493,22 @@ class AgentConnection(
                     FileLogger.i(LogTags.AGENT_CONN, "SESSION_STATUS ← ${event.status}")
                     _events.tryEmit(event)
                 }
+                is ConnectionEvent.PlanUpdated -> {
+                    // Count only — the entries are the agent's own task text.
+                    FileLogger.d(LogTags.AGENT_CONN, "plan ✓ ${event.entries.size} entries")
+                    _events.tryEmit(event)
+                }
+                is ConnectionEvent.RuntimeInputAcknowledged -> {
+                    FileLogger.i(LogTags.AGENT_CONN, "RUNTIME_INPUT_ACK ✓")
+                    _events.tryEmit(event)
+                }
+                is ConnectionEvent.RuntimeInputRejected -> {
+                    // Deliberately not routed through ConnectionError: the
+                    // socket and the running turn are both fine, and that path
+                    // clears outstandingInputIds and can start a reconnect.
+                    FileLogger.w(LogTags.AGENT_CONN, "RUNTIME_INPUT_REJECTED (retryable=${event.retryable})")
+                    _events.tryEmit(event)
+                }
                 is ConnectionEvent.Waiting -> {} // Already handled above
                 else -> {} // Ignore Unknown, Ping, etc.
             }
@@ -1210,6 +1523,8 @@ class AgentConnection(
         const val READ_TIMEOUT_SECONDS = 600L
         const val WRITE_TIMEOUT_SECONDS = 30L
         const val PING_INTERVAL_SECONDS = 15L
+        /** Maximum time to wait for a shell-capable Host to return EXEC_RESULT. */
+        const val EXEC_TIMEOUT_MS = 60_000L
 
         /**
          * The WebSocket-tuned view of [sharedHttpClient], built once.
@@ -1255,6 +1570,18 @@ class AgentConnection(
         /** How many superseded session ids one connection remembers; see knownSessionIds. */
         private const val MAX_REMEMBERED_SESSIONS = 16
 
+        /**
+         * Slots in each event buffer between the socket and the chat (this class's, and the
+         * repository's chat bus). A replay can hand over a whole turn at once; a consumer slower
+         * than the socket makes a full buffer drop its oldest event, and with the cursor already
+         * past it that message is gone for good. DROP_OLDEST stays, so a stuck collector can
+         * never stall the socket.
+         */
+        internal const val EVENT_BUFFER_CAPACITY = 1024
+
+        /** How many handled frames are remembered for replay de-duplication; see seenFrames. */
+        private const val MAX_SEEN_FRAMES = 4096
+
         /** Interjections per run before the oldest id stops being recognised; see outstandingInputIds. */
         private const val MAX_OUTSTANDING_INPUT_IDS = 16
 
@@ -1264,9 +1591,10 @@ class AgentConnection(
         /**
          * The next distinct second to sign a CONNECT with — never repeating,
          * never going backwards. The server refuses a signature it has already
-         * seen (auth.py `signature_already_used`) and the signed payload is
-         * `{timestamp(seconds), to}`, so same-second twins are rejected as a
-         * replay. Process-wide, not per-instance: ConnectionRepositoryImpl
+         * seen (auth.py `signature_already_used`). The payload's nonce already
+         * keeps same-second twins distinct; this stays as a second guard, since
+         * a pre-nonce payload of `{timestamp(seconds), to}` was exactly how
+         * twins got rejected as a replay. Process-wide, not per-instance: ConnectionRepositoryImpl
          * builds a fresh AgentConnection for every connect(), so an instance
          * field would reset exactly where two CONNECTs are closest together —
          * the stale-session retry.
@@ -1287,5 +1615,18 @@ class AgentConnection(
          */
         internal fun reconnectBackoffMs(attemptNumber: Int): Long =
             (2000L * (1 shl (attemptNumber - 1))).coerceAtMost(32000L)
+    }
+
+    /**
+     * This snapshot, with the plan it should carry. A snapshot whose plan is
+     * missing or malformed says nothing about the plan, so the one already
+     * held for the same session stands — the web client's rule
+     * (remote-agent.ts's _applySessionSnapshot); a different session's plan
+     * is never carried over.
+     */
+    private fun SessionState.keepingPlanOf(previous: SessionState?): SessionState = when {
+        ProtocolParser.decodePlan(plan) != null -> this
+        previous != null && previous.sessionId == sessionId -> copy(plan = previous.plan)
+        else -> copy(plan = null)
     }
 }
