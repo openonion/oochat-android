@@ -85,6 +85,21 @@ internal fun ImageGridBubble(images: List<String>, isUser: Boolean) {
 }
 
 /**
+ * One inline picture shown whole, at its own proportions (W16AAPPLE-34). A screenshot of a
+ * workspace is there to be read, so unlike an attachment it is never cropped to fit a tile.
+ * Decoded as an agent's image is, so it is capped at [MAX_AGENT_IMAGE_DIMENSION] too.
+ */
+@Composable
+internal fun InlineImage(dataUrl: String, contentDescription: String, modifier: Modifier = Modifier) {
+    AsyncImage(
+        model = rememberImageModel(dataUrl, targetShortSidePx = null),
+        contentDescription = contentDescription,
+        contentScale = ContentScale.FillWidth,
+        modifier = modifier
+    )
+}
+
+/**
  * Coil has no built-in fetcher for the `data:` URI scheme (only agent-sent
  * images ever use it — see ProtocolParser's "agent_image" case; user-sent
  * images are always `file://`/`content://`, which Coil handles natively as

@@ -57,6 +57,52 @@ sealed class ChatEvent {
      * something rendered in the message list.
      */
     data class SessionStatusReceived(val sessionId: String?, val status: String) : ChatEvent()
+
+    /**
+     * The host queued a message that was sent while a turn was running
+     * (`RUNTIME_INPUT_ACK`). Not a [ChatItem]: it settles the delivery state of
+     * a message already on screen, which the caller owns. Carries no message
+     * id because the wire has none — see
+     * [ai.openonion.oochat.network.ConnectionEvent.RuntimeInputAcknowledged].
+     */
+    data class RuntimeInputAcknowledged(val sessionId: String?) : ChatEvent()
+
+    /**
+     * The running turn refused a mid-turn message (`RUNTIME_INPUT_REJECTED`);
+     * nothing was queued. [retryable] means the text will be taken as an
+     * ordinary INPUT once the turn ends. Like [RuntimeInputAcknowledged], it
+     * answers the oldest message still awaiting an answer.
+     */
+    data class RuntimeInputRejected(val sessionId: String?, val retryable: Boolean) : ChatEvent()
+
+    /** The Host refused this device's answer to [requestId]; another device answered first. */
+    data class AnswerRefused(val requestId: String?) : ChatEvent()
+
+    /**
+     * The Host's answer to a message typed into a Work Room (W16AAPPLE-35).
+     * Settles that room's draft, which the ViewModel owns; not a chat item.
+     */
+    data class ProviderInputAcked(val ack: ProviderInputAck) : ChatEvent()
+
+    /**
+     * The Host's answer to a Work Room's scoped Stop (W16AAPPLE-37). Settles
+     * that room's Stop, which the ViewModel owns; the run itself ends by the
+     * `provider_invocation` that follows.
+     */
+    data class ProviderStopAcked(val ack: ProviderStopAck) : ChatEvent()
+
+    /**
+     * The Host's answer to a change of a Work Room's provider permission mode
+     * (W16AAPPLE-43). Settles that room's control, which the ViewModel owns;
+     * the run itself is updated by the `provider_invocation` that follows.
+     */
+    data class ProviderPermissionAcked(val ack: ProviderPermissionAck) : ChatEvent()
+
+    /** An EXEC's answer that came after its wait ended; see ConnectionEvent.LateExecResult (W16AAPPLE-101). */
+    data class ExecResultArrived(val execId: String, val outcome: ExecOutcome) : ChatEvent()
+
+    /** The connection finished flushing the outbox for [conversationId] (W16AAPPLE-106). */
+    data class OutboxFlushed(val conversationId: String?) : ChatEvent()
 }
 
 /**

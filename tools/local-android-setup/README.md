@@ -73,10 +73,10 @@ exact command to do that step by hand, then stops without leaving anything
 half-configured. Re-running the script after fixing it picks up where it left
 off; already-installed packages are skipped.
 
-The one thing the scripts deliberately do not install is **JDK 17**. It is only
-needed to build from source or run the test suite — installing and running the
-app does not need it — and installing a JDK properly is platform-specific enough
-that doing it silently would be worse than pointing at
+The one thing the scripts deliberately do not install is **JDK 17**, and
+`install` needs it: the Android SDK manager runs on Java 17 or newer, and 17
+is what the build is verified on. Installing a JDK properly is
+platform-specific enough that doing it silently would be worse than pointing at
 [Adoptium](https://adoptium.net/temurin/releases/?version=17).
 
 ## Options

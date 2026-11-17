@@ -129,6 +129,7 @@ internal fun DangerConfirmActions(
         }
         Button(
             onClick = onConfirm,
+            shape = MaterialTheme.shapes.large,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
                 contentColor = MaterialTheme.colorScheme.error

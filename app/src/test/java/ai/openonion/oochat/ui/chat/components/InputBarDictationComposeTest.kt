@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -57,7 +58,7 @@ class InputBarDictationComposeTest {
             .grantPermissions(Manifest.permission.RECORD_AUDIO)
     }
 
-    private fun bar() {
+    private fun bar(onVoiceTranscriptConsumed: () -> Unit = {}, onSend: () -> Unit = {}) {
         composeRule.setContent {
             var voice by remember { mutableStateOf(VoiceInputState()) }
             setVoice = { voice = it }
@@ -65,10 +66,10 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = voice,
                         onStartVoiceRecording = { setVoice(VoiceInputState(phase = VoiceInputPhase.LISTENING)) },
-                        onSend = { _, _, _ -> }
+                        onVoiceTranscriptConsumed = onVoiceTranscriptConsumed,
+                        onSend = { _, _, _ -> onSend() }
                     )
                 }
             }
@@ -90,7 +91,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                         onCancelVoiceRecording = onCancelVoiceRecording,
                         onFinishVoiceInput = onFinishVoiceInput,
@@ -112,23 +112,23 @@ class InputBarDictationComposeTest {
     }
 
     @Test
-    fun `the mic survives a send and a whole agent turn`() {
-        // Web disables its mic only while transcribing. Ours waited out both of
-        // these, which is exactly when the next message wants dictating.
+    fun `a dictation started before a turn can still be finished during it`() {
+        // A running turn gives the trailing slot to Stop (W16AAPPLE-112), but a
+        // dictation already under way keeps its mic until it is done.
         composeRule.setContent {
             ConnectOnionTheme {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = true,
                         isAgentWorking = true,
+                        voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                         onSend = { _, _, _ -> }
                     )
                 }
             }
         }
 
-        composeRule.onNodeWithContentDescription("Dictate a message").assertIsEnabled()
+        composeRule.onNodeWithContentDescription("Dictate a message").assertExists()
     }
 
     @Test
@@ -138,7 +138,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.TRANSCRIBING),
                         onSend = { _, _, _ -> }
                     )
@@ -188,7 +187,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.PREPARING),
                         onCancelVoiceRecording = onCancelVoiceRecording,
                         onFinishVoiceInput = onFinishVoiceInput,
@@ -234,7 +232,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.PREPARING),
                         onSend = { _, _, _ -> }
                     )
@@ -259,7 +256,7 @@ class InputBarDictationComposeTest {
             setVoice = { voice = it }
             ConnectOnionTheme {
                 Column {
-                    InputBar(isConnected = true, isSending = false, voiceInput = voice, onSend = { _, _, _ -> })
+                    InputBar(isConnected = true, voiceInput = voice, onSend = { _, _, _ -> })
                 }
             }
         }
@@ -305,7 +302,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.TRANSCRIBING),
                         onSend = { _, _, _ -> }
                     )
@@ -324,7 +320,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(
                             phase = VoiceInputPhase.LISTENING,
                             notice = "Using server transcription."
@@ -352,7 +347,6 @@ class InputBarDictationComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                         onSend = { _, _, _ -> }
                     )
@@ -415,5 +409,22 @@ class InputBarDictationComposeTest {
         final("book a tabel for two")
 
         composeRule.onNodeWithText("book a table").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a finished dictation lights Send and is handed over once, but nothing is sent`() {
+        // The README's promise: the transcript lands in the field, editable,
+        // and only the user's own tap sends it.
+        var sends = 0
+        var consumed = 0
+        bar(onVoiceTranscriptConsumed = { consumed++ }, onSend = { sends++ })
+        startDictating()
+        partial("book a table")
+        final("book a table for two")
+
+        composeRule.onNode(hasSetTextAction()).assertTextEquals("book a table for two")
+        composeRule.onNodeWithContentDescription("Send").assertIsEnabled()
+        assertEquals("the composer must take a finished transcript exactly once", 1, consumed)
+        assertEquals("dictation must never send on its own", 0, sends)
     }
 }

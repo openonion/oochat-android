@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -47,14 +48,17 @@ import androidx.compose.ui.unit.dp
 fun ConnectionStatusDot(
     connectionState: ConnectionState,
     awaitingOnboardCode: Boolean = false,
+    // The colour once connected. The chat's top bar passes what the session is
+    // doing instead — green while it runs, grey while idle.
+    connectedColor: Color = MaterialTheme.statusColors.successDot,
     modifier: Modifier = Modifier
 ) {
     val dotColor by animateColorAsState(
         targetValue = when {
             awaitingOnboardCode && connectionState.isConnecting() -> MaterialTheme.statusColors.successDot
-            connectionState is ConnectionState.Connected -> MaterialTheme.statusColors.successDot
-            connectionState is ConnectionState.Connecting -> MaterialTheme.statusColors.warningDot
-            connectionState is ConnectionState.Reconnecting -> MaterialTheme.statusColors.warningDot
+            connectionState is ConnectionState.Connected -> connectedColor
+            connectionState is ConnectionState.Connecting -> MaterialTheme.statusColors.successDot
+            connectionState is ConnectionState.Reconnecting -> MaterialTheme.statusColors.successDot
             connectionState is ConnectionState.Error -> MaterialTheme.colorScheme.error
             else -> MaterialTheme.colorScheme.outline
         },

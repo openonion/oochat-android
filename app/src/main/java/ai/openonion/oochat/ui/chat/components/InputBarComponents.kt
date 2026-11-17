@@ -1,6 +1,6 @@
 package ai.openonion.oochat.ui.chat.components
 
-import ai.openonion.oochat.ui.theme.spacing
+import ai.openonion.oochat.ui.theme.Radii
 import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
@@ -9,17 +9,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
@@ -29,7 +25,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,7 +38,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -60,50 +54,45 @@ import coil.compose.AsyncImage
  * — it used to grey out mid-dictation, back when the mic slot showed a second
  * square glyph.
  */
+/**
+ * Stop, as the composer's own trailing circle while a turn runs: the one thing
+ * a running turn most needs from this bar, where Send sits the rest of the time.
+ */
 @Composable
 internal fun StopButton(onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(if (isPressed) 0.9f else 1f, label = "stopButtonScale")
 
-    Row(
-        modifier = Modifier.height(48.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Surface(
-            onClick = onClick,
-            modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.inverseSurface,
-            contentColor = MaterialTheme.colorScheme.inverseOnSurface,
-            interactionSource = interactionSource
+    IconButton(onClick = onClick, interactionSource = interactionSource) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.inverseSurface),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier
-                    .defaultMinSize(minHeight = 32.dp)
-                    .padding(horizontal = MaterialTheme.spacing.md, vertical = MaterialTheme.spacing.xs2),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs2)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Stop,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = "Stop",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Medium
-                )
-            }
+            Icon(
+                imageVector = Icons.Default.Stop,
+                contentDescription = "Stop",
+                tint = MaterialTheme.colorScheme.inverseOnSurface,
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }
 
 @Composable
-internal fun SendButton(enabled: Boolean, onClick: () -> Unit) {
-    val background = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainer
-    val tint = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.outline
+internal fun SendButton(enabled: Boolean, onClick: () -> Unit, quietWhenDisabled: Boolean = false) {
+    // Green whether or not there is anything to send yet, as the design draws
+    // it: the circle is where sending happens, and it stays put. The empty
+    // chat's centred card is the exception (quietWhenDisabled): there the box
+    // is the call to action, and a green circle beside nothing typed competes
+    // with it.
+    val quiet = quietWhenDisabled && !enabled
+    val background = if (quiet) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f) else MaterialTheme.colorScheme.primary
+    val tint = if (quiet) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f) else MaterialTheme.colorScheme.onPrimary
 
     // Scale down slightly on press (matches the Figma design's button press
     // feedback). Reuses the button's own interaction source rather than
@@ -143,9 +132,9 @@ internal fun AttachmentThumbnail(uri: Uri, onRemove: () -> Unit, index: Int = 0,
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(72.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(10.dp))
+                .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant), MaterialTheme.shapes.medium)
         )
         // Overhangs the thumbnail's corner (Figma: top:-6,right:-6) rather
         // than sitting flush inside it. The 8dp gap between thumbnails
@@ -175,7 +164,7 @@ internal fun AttachmentThumbnail(uri: Uri, onRemove: () -> Unit, index: Int = 0,
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Remove image",
+                        contentDescription = if (total > 1) "Remove image ${index + 1} of $total" else "Remove image",
                         tint = MaterialTheme.colorScheme.surface,
                         modifier = Modifier.size(9.dp)
                     )
@@ -192,7 +181,7 @@ internal fun AddMoreTile(enabled: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(72.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .drawBehind {
                 val stroke = Stroke(
@@ -202,7 +191,7 @@ internal fun AddMoreTile(enabled: Boolean, onClick: () -> Unit) {
                 drawRoundRect(
                     color = outlineColor,
                     style = stroke,
-                    cornerRadius = CornerRadius(10.dp.toPx())
+                    cornerRadius = CornerRadius(Radii.medium.toPx())
                 )
             }
             .clickable(enabled = enabled, onClick = onClick),
@@ -231,9 +220,9 @@ internal fun AttachmentFileChip(name: String, onRemove: (() -> Unit)? = null) {
         Column(
             modifier = Modifier
                 .size(width = 88.dp, height = 72.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant), RoundedCornerShape(10.dp))
+                .border(BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant), MaterialTheme.shapes.medium)
                 .padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {

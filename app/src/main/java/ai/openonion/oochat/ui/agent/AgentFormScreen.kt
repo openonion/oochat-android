@@ -3,13 +3,15 @@ package ai.openonion.oochat.ui.agent
 import ai.openonion.oochat.domain.model.AgentLiveProfile
 import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.domain.model.AppError
-import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
 import ai.openonion.oochat.ui.agent.components.AgentFormContent
 import ai.openonion.oochat.ui.agent.components.AgentFormState
 import ai.openonion.oochat.ui.agent.components.EmbeddedDiscoveryPanel
 import ai.openonion.oochat.ui.agent.components.FormFieldShape
 import ai.openonion.oochat.ui.agent.components.formFieldColors
 import ai.openonion.oochat.ui.agent.components.formFieldTextStyle
+import ai.openonion.oochat.ui.chat.components.ExpandChevron
+import ai.openonion.oochat.ui.chat.components.ExpandableSection
+import ai.openonion.oochat.ui.components.AppSnackbarHost
 import ai.openonion.oochat.ui.components.BackTopAppBar
 import ai.openonion.oochat.ui.components.ConfirmationSheet
 import ai.openonion.oochat.ui.components.DangerConfirmActions
@@ -22,21 +24,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -104,7 +106,6 @@ fun AgentFormScreen(
             AgentFormState(
                 serverUrl = existingAgent?.serverUrl ?: "https://oo.openonion.ai",
                 agentAddress = existingAgent?.address ?: "",
-                apiKey = existingAgent?.apiKey ?: "",
                 useDirectConnection = existingAgent?.connectionMode == "direct"
             )
         )
@@ -150,8 +151,8 @@ fun AgentFormScreen(
             address = address,
             name = name.trim().ifBlank { defaultAgentName(address) },
             description = description.trim().takeIf { it.isNotBlank() },
-            serverUrl = formState.serverUrl.trim(),
-            apiKey = formState.apiKey.trim().takeIf { it.isNotBlank() },
+            // Without a trailing slash, as Setup saves it (W16AAPPLE-55).
+            serverUrl = formState.serverUrl.trim().trimEnd('/'),
             avatarUrl = existingAgent?.avatarUrl,
             createdAt = existingAgent?.createdAt ?: System.currentTimeMillis(),
             lastConnectedAt = existingAgent?.lastConnectedAt,
@@ -175,7 +176,7 @@ fun AgentFormScreen(
                     )
                 )
             },
-            snackbarHost = { SnackbarHost(snackbarHostState) }
+            snackbarHost = { AppSnackbarHost(snackbarHostState) }
         ) { paddingValues ->
             Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
                 Column(
@@ -200,13 +201,11 @@ fun AgentFormScreen(
                         color = MaterialTheme.colorScheme.outline
                     )
 
-                    // Only shown while this saved agent is the live
-                    // connection — a disconnected agent has no current
-                    // tools/skills to report, and stale data from a past
-                    // session would be actively misleading here.
-                    liveProfile?.let { profile ->
-                        LiveProfileSection(profile)
-                    }
+                    // Filled only while this saved agent is the live, admitted
+                    // connection — stale data from a past session would be
+                    // actively misleading here. Until then it says why it is
+                    // empty rather than showing nothing (W16AAPPLE-71).
+                    LiveProfileSection(liveProfile)
 
                     Spacer(modifier = Modifier.height(MaterialTheme.spacing.sm))
 
@@ -281,7 +280,7 @@ fun AgentFormScreen(
                 )
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { AppSnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -327,12 +326,6 @@ fun AgentFormScreen(
                 // Add Agent picks from the radar above; a quick-pick of agents
                 // already saved on this device would only re-add a duplicate.
                 savedAgentDropdown = false,
-                advancedSettings = {
-                    AdvancedSettingsSection(
-                        apiKey = formState.apiKey,
-                        onApiKeyChange = { formState = formState.copy(apiKey = it) }
-                    )
-                },
                 submitButton = {
                     Button(
                         onClick = { save() },
@@ -401,27 +394,67 @@ private fun DiscardChangesSheet(onDiscard: () -> Unit, onKeepEditing: () -> Unit
  * The connected agent's own tools/skills, straight from its `AGENT_PROFILE`
  * frame — see [AgentLiveProfile]'s doc. Read-only: this is what the live
  * socket reported, not something the form edits.
+ *
+ * The Host sends that frame only once it has let this user in, so a null
+ * [profile] means not connected or not admitted yet, and the section says so.
+ * Skills sit in a collapsed "What this agent can do (N)" disclosure, as on
+ * O Chat (oo-chat #263): available on request, not the first thing shown.
  */
 @Composable
-private fun LiveProfileSection(profile: AgentLiveProfile) {
-    if (profile.tools.isEmpty() && profile.skills.isEmpty()) return
-
+private fun LiveProfileSection(profile: AgentLiveProfile?) {
     Column(verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.sm)) {
         Text(
             text = "Live from this agent",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (profile == null) {
+            Text(
+                text = SKILLS_AWAITING_ADMISSION,
+                style = MaterialTheme.typography.bodySmall,
+                // onSurfaceVariant, not outline: this is the section's whole
+                // message, and outline is not meant to reach 4.5:1 for text.
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            return@Column
+        }
         if (profile.tools.isNotEmpty()) {
             ProfileTagGroup(label = "Tools", tags = profile.tools)
         }
-        if (profile.skills.isNotEmpty()) {
-            // Names only: this is a chip row, and the descriptions belong to
-            // the composer's `/` palette, where they help pick a command.
-            ProfileTagGroup(label = "Skills", tags = profile.skills.map { it.name })
+        if (profile.skills.isEmpty()) {
+            Text(
+                text = "This agent hasn't shared any skills.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            ExpandableSection(
+                previewContent = { expanded ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "What this agent can do (${profile.skills.size})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        ExpandChevron(expanded)
+                    }
+                },
+                expandedContent = {
+                    // Names only: this is a chip row, and the descriptions belong to
+                    // the composer's `/` palette, where they help pick a command.
+                    ProfileTagGroup(label = "Skills", tags = profile.skills.map { it.name })
+                }
+            )
         }
     }
 }
+
+internal const val SKILLS_AWAITING_ADMISSION =
+    "Skills show here once you're connected and this agent has let you in."
 
 @Composable
 private fun ProfileTagGroup(label: String, tags: List<String>) {
@@ -441,7 +474,7 @@ private fun ProfileTagGroup(label: String, tags: List<String>) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .clip(MaterialTheme.shapes.large)
                         .background(MaterialTheme.colorScheme.secondaryContainer)
                         .padding(horizontal = MaterialTheme.spacing.sm, vertical = MaterialTheme.spacing.xs2)
                 )
