@@ -1,30 +1,57 @@
 package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
+import ai.openonion.oochat.crypto.TestIdentity
 import ai.openonion.oochat.data.protocol.FileAttachment
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
+import ai.openonion.oochat.domain.model.PlanStatus
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionModes
+import ai.openonion.oochat.domain.usecase.ServerErrorText
+import ai.openonion.oochat.knownIssue
 import ai.openonion.oochat.network.AgentConnection
+import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.network.QueuedMessage
 import ai.openonion.oochat.network.WebSocketFactory
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okio.ByteString
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -32,6 +59,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Unit tests for [ConnectionRepositoryImpl]'s [ConnectionRepositoryImpl.connect]
@@ -52,7 +80,7 @@ import org.robolectric.annotation.Config
 class ConnectionRepositoryImplTest {
 
     private class FakeWebSocket : WebSocket {
-        val sentMessages = mutableListOf<String>()
+        val sentMessages = CopyOnWriteArrayList<String>()
         override fun request(): Request = Request.Builder().url("wss://fake.example.com/ws").build()
         override fun queueSize(): Long = 0
         override fun send(text: String): Boolean { sentMessages += text; return true }
@@ -79,7 +107,7 @@ class ConnectionRepositoryImplTest {
     @Before
     fun setUp() {
         keyManager = KeyManager(ApplicationProvider.getApplicationContext())
-        keyManager.save(keyManager.keysFromHex("aa".repeat(32) + "bb".repeat(32)))
+        keyManager.save(TestIdentity.keys())
         factory = FakeWebSocketFactory()
 
         repository = ConnectionRepositoryImpl(
@@ -87,7 +115,13 @@ class ConnectionRepositoryImplTest {
             relayUrl = "ws://test.invalid",
             pendingMessageSink = sink,
             agentConnectionFactory = { km, url ->
-                AgentConnection(km, url, factory, pendingMessageSink = sink)
+                AgentConnection(
+                    keyManager = km,
+                    relayUrl = url,
+                    webSocketFactory = factory,
+                    signer = { _, _ -> "fake-signature" },
+                    pendingMessageSink = sink
+                )
             }
         )
     }
@@ -108,6 +142,20 @@ class ConnectionRepositoryImplTest {
 
     private fun simulateConnected(sessionId: String = "sess-1") {
         factory.lastListener?.onMessage(factory.lastWebSocket!!, """{"type":"CONNECTED","session_id":"$sessionId"}""")
+    }
+
+    private fun simulateConnectedWith(status: String, serverNewer: Boolean) {
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"CONNECTED","session_id":"sess-1","status":"$status","server_newer":$serverNewer}"""
+        )
+    }
+
+    private fun simulateToolCall(toolId: String) {
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"tool_call","id":"ev-$toolId","tool_id":"$toolId","name":"bash"}"""
+        )
     }
 
     private fun simulateError(message: String) {
@@ -172,6 +220,119 @@ class ConnectionRepositoryImplTest {
     }
 
     @Test
+    fun `the Connected state carries the status and server_newer the Host sent`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = true) }) {
+            repository.connectionState.value is ConnectionState.Connected
+        }
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals(ServerSessionStatus.RUNNING, connected.status)
+        assertTrue(connected.serverNewer)
+    }
+
+    @Test
+    fun `the Connected state is UNKNOWN and not newer when the Host sent neither`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals(ServerSessionStatus.UNKNOWN, connected.status)
+        assertFalse(connected.serverNewer)
+    }
+
+    @Test
+    fun `a later CONNECTED replaces the status of the earlier one`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = true) }) {
+            (repository.connectionState.value as? ConnectionState.Connected)?.status == ServerSessionStatus.RUNNING
+        }
+
+        awaitUntil(retry = { simulateConnectedWith("connected", serverNewer = false) }) {
+            (repository.connectionState.value as? ConnectionState.Connected)?.status == ServerSessionStatus.CONNECTED
+        }
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertFalse("the earlier frame's server_newer must not linger", connected.serverNewer)
+    }
+
+    private fun awaitRunning() = awaitUntil(retry = { simulateConnectedWith("running", serverNewer = true) }) {
+        (repository.connectionState.value as? ConnectionState.Connected)?.status == ServerSessionStatus.RUNNING
+    }
+
+    @Test
+    fun `releasing the status clears what the Host said and keeps the connection`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitRunning()
+
+        repository.releaseSessionStatus()
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals(ServerSessionStatus.UNKNOWN, connected.status)
+        assertFalse(connected.serverNewer)
+        assertTrue(repository.isConnected())
+    }
+
+    @Test
+    fun `releasing the status leaves a connection that is not Connected alone`() = runTest(testDispatcher) {
+        repository.releaseSessionStatus()
+        assertEquals(ConnectionState.Disconnected, repository.connectionState.value)
+
+        repository.connect("0xAGENT")
+        repository.releaseSessionStatus()
+        assertEquals(ConnectionState.Connecting, repository.connectionState.value)
+    }
+
+    @Test
+    fun `moving to another conversation forgets the status of the one left`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT", conversationId = "conv-A")
+        awaitRunning()
+
+        repository.switchConversation("conv-B")
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals("the status was conv-A's, not conv-B's", ServerSessionStatus.UNKNOWN, connected.status)
+    }
+
+    @Test
+    fun `staying on the same conversation keeps the status`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT", conversationId = "conv-A")
+        awaitRunning()
+
+        repository.switchConversation("conv-A")
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals(ServerSessionStatus.RUNNING, connected.status)
+    }
+
+    @Test
+    fun `adopting the session the connection is already on keeps the status`() = runTest(testDispatcher) {
+        // No conversation yet, so the Host mints the session (sess-1) and a conversation later takes its id.
+        repository.connect("0xAGENT")
+        awaitRunning()
+
+        repository.switchConversation("sess-1")
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertEquals(ServerSessionStatus.RUNNING, connected.status)
+    }
+
+    @Test
+    fun `a finished turn ends the running the Host reported`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitRunning()
+
+        awaitUntil(retry = { simulateFrame("""{"type":"OUTPUT","result":"done"}""") }) {
+            (repository.connectionState.value as? ConnectionState.Connected)?.status == ServerSessionStatus.UNKNOWN
+        }
+
+        val connected = repository.connectionState.value as ConnectionState.Connected
+        assertFalse("the whole answer goes, not just the status", connected.serverNewer)
+    }
+
+    @Test
     fun `an OnboardRequired ChatItemReceived is forwarded through observeEvents`() = runBlocking {
         // Uses real dispatchers (not runTest's virtual scheduler) because the event has to cross two real background thread-hops that virtual time can't reliably pump.
         repository.connect("0xAGENT")
@@ -195,6 +356,43 @@ class ConnectionRepositoryImplTest {
     }
 
     @Test
+    fun `a burst of frames bigger than the chat event buffer reaches a slow collector whole`() = runBlocking {
+        repository.connect("0xAGENT")
+        simulateConnected()
+
+        // A collector stuck on its first event while the burst arrives, like the chat's Room writes.
+        val release = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        val delivered = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val collector = launch(Dispatchers.Default) {
+            repository.observeEvents().collect { event ->
+                started.complete(Unit)
+                release.await()
+                if (event is ChatEvent.ChatItemReceived) delivered += event.item.id
+            }
+        }
+        // Frames sent before the collector subscribes are lost, so send markers until it has one.
+        var marker = 0
+        withTimeout(5000L) {
+            while (!started.isCompleted) {
+                simulateToolCall("m${marker++}")
+                delay(20)
+            }
+        }
+
+        val burst = 200
+        repeat(burst) { simulateToolCall("t$it") }
+        delay(300) // lets the repository's own collector pass every frame on while the consumer is stuck
+        release.complete(Unit)
+        // The collector is still adding on another thread, and iterating a synchronizedList needs its lock held.
+        fun arrived() = synchronized(delivered) { delivered.count { it.startsWith("t") } }
+        withTimeoutOrNull(5000L) { while (arrived() < burst) delay(20) }
+        collector.cancelAndJoin()
+
+        assertEquals((0 until burst).map { "t$it" }, synchronized(delivered) { delivered.filter { it.startsWith("t") } })
+    }
+
+    @Test
     fun `sendMessage forwards to the underlying AgentConnection once connected`() = runTest(testDispatcher) {
         repository.connect("0xAGENT")
         simulateConnected()
@@ -203,6 +401,94 @@ class ConnectionRepositoryImplTest {
 
         assertTrue(factory.lastWebSocket!!.sentMessages.any { it.contains("hello") })
     }
+
+    @Test
+    fun `executeTool converts arguments and returns matching result`() =
+        runBlocking {
+            repository.connect(
+                agentAddress = "0xAGENT",
+                conversationId = "conversation-1"
+            )
+            awaitUntil(retry = { simulateConnected("conversation-1") }) {
+                repository.isConnected()
+            }
+
+            val pendingOutcome = async(start = CoroutineStart.UNDISPATCHED) {
+                repository.executeTool(
+                    ExecRequest(
+                        execId = "exec-1",
+                        tool = "shell",
+                        argsJson = """{"command":"pwd"}""",
+                        agentAddress = "0xAGENT"
+                    )
+                )
+            }
+
+            awaitUntil { factory.lastWebSocket!!.sentMessages.isNotEmpty() }
+            assertTrue(
+                factory.lastWebSocket!!.sentMessages.any {
+                    it.contains("\"exec_id\":\"exec-1\"")
+                }
+            )
+
+            factory.lastListener!!.onMessage(
+                factory.lastWebSocket!!,
+                """
+                {
+                  "type": "EXEC_RESULT",
+                  "exec_id": "exec-1",
+                  "status": "success",
+                  "result": "/workspace"
+                }
+                """.trimIndent()
+            )
+
+            assertEquals(
+                ExecOutcome.Success("/workspace"),
+                pendingOutcome.await()
+            )
+        }
+
+    @Test
+    fun `executeTool does not require the local conversation to match`() =
+        runBlocking {
+            repository.connect(
+                agentAddress = "0xAGENT",
+                conversationId = "conversation-1"
+            )
+            awaitUntil(retry = { simulateConnected("conversation-1") }) {
+                repository.isConnected()
+            }
+            val pendingOutcome = async(start = CoroutineStart.UNDISPATCHED) {
+                repository.executeTool(
+                    ExecRequest(
+                        execId = "exec-2",
+                        tool = "shell",
+                        argsJson = """{"command":"pwd"}""",
+                        agentAddress = "0xAGENT"
+                    )
+                )
+            }
+
+            awaitUntil { factory.lastWebSocket!!.sentMessages.any { it.contains("\"exec_id\":\"exec-2\"") } }
+
+            factory.lastListener!!.onMessage(
+                factory.lastWebSocket!!,
+                """
+                {
+                  "type": "EXEC_RESULT",
+                  "exec_id": "exec-2",
+                  "status": "success",
+                  "result": "/workspace"
+                }
+                """.trimIndent()
+            )
+
+            assertEquals(
+                ExecOutcome.Success("/workspace"),
+                pendingOutcome.await()
+            )
+        }
 
     @Test
     fun `interrupt sends an INTERRUPT frame on the underlying AgentConnection`() = runTest(testDispatcher) {
@@ -286,6 +572,59 @@ class ConnectionRepositoryImplTest {
         assertEquals("This agent is offline. Start it, then reconnect.", state.message)
     }
 
+    // ── W16AAPPLE-12: a refused OIP version ──────────────────────────
+
+    private fun simulateVersionRejection() {
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,""" +
+                """"protocol":{"name":"oip","version":"0.2","min_version":"0.2","max_version":"0.2"}}"""
+        )
+    }
+
+    @Test
+    fun `a refused OIP version is one readable, non-retryable error`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateVersionRejection() }) {
+            repository.connectionState.value is ConnectionState.Error
+        }
+
+        val state = repository.connectionState.value as ConnectionState.Error
+        assertEquals(
+            "This agent uses a different version of the chat protocol (oip/0.2) than this app (oip/0.1). " +
+                "Update the app or the agent, then reconnect.",
+            state.message
+        )
+        assertFalse("nothing may retry a version mismatch automatically", state.retryable)
+    }
+
+    @Test
+    fun `a refused OIP version after an earlier CONNECTED is still fatal`() = runTest(testDispatcher) {
+        // Unlike a business-logic ERROR on a live session, which stays a
+        // non-fatal chat event: the refusal means the connection is over.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) {
+            repository.connectionState.value is ConnectionState.Connected
+        }
+
+        simulateVersionRejection()
+        awaitUntil { repository.connectionState.value is ConnectionState.Error }
+
+        assertFalse((repository.connectionState.value as ConnectionState.Error).retryable)
+    }
+
+    @Test
+    fun `an ordinary connect-time ERROR stays retryable`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateError("forbidden: Denied by fast rules") }) {
+            repository.connectionState.value is ConnectionState.Error
+        }
+
+        assertTrue((repository.connectionState.value as ConnectionState.Error).retryable)
+    }
+
     @Test
     fun `an ERROR frame after CONNECTED does not flip connectionState and forwards as ConnectionErrorOccurred`() = runBlocking {
         // e.g. "Insufficient ConnectOnion Credits" on an already-established
@@ -311,6 +650,60 @@ class ConnectionRepositoryImplTest {
             "connectionState must stay Connected for a post-connection business error",
             repository.connectionState.value is ConnectionState.Connected
         )
+    }
+
+    @Test
+    fun `the relay's agent offline on a live socket is not added to the conversation`() = runBlocking {
+        // W16AAPPLE-93: the relay sends it when the Host drops off mid-turn,
+        // then drops the socket; the reconnect is what the user sees.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+        }
+
+        val received = withTimeout(3000L) {
+            val deferred = async { repository.observeEvents().first { it is ChatEvent.ConnectionErrorOccurred } }
+            while (deferred.isActive) {
+                simulateError("Agent not connected: 0xc31dd64abc")
+                simulateError("Insufficient ConnectOnion Credits")
+                delay(20)
+            }
+            deferred.await()
+        } as ChatEvent.ConnectionErrorOccurred
+
+        assertEquals("Insufficient ConnectOnion Credits", received.message)
+        assertTrue(repository.connectionState.value is ConnectionState.Connected)
+    }
+
+    // ── W16AAPPLE-82, -90: a refused reconnect ends in Error ────────
+
+    @Test
+    fun `a reconnect refused for the clock ends in Error naming the date and time, though the attempt had connected`() = runBlocking {
+        // Unlike the business error above: the ERROR answers the reconnect's
+        // own CONNECT, so the session is not coming back. Before, this left
+        // the state on Reconnecting for good.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        val first = factory.lastWebSocket
+
+        // A conversation switch opens the new socket at once, with no backoff to wait out.
+        repository.switchConversation("conv-2")
+        awaitUntil { factory.lastWebSocket !== first }
+        factory.lastListener!!.onOpen(
+            factory.lastWebSocket!!,
+            Response.Builder()
+                .request(Request.Builder().url("wss://fake.example.com/ws").build())
+                .protocol(Protocol.HTTP_1_1)
+                .code(101)
+                .message("Switching Protocols")
+                .build()
+        )
+        simulateError("unauthorized: signature expired")
+
+        awaitUntil { repository.connectionState.value is ConnectionState.Error }
+        val state = repository.connectionState.value as ConnectionState.Error
+        assertEquals(ServerErrorText.CLOCK_WRONG, state.message)
+        assertTrue("Reconnect is offered", state.retryable)
     }
 
     // ── AGENT_PROFILE ────────────────────────────────────────────────
@@ -377,6 +770,125 @@ class ConnectionRepositoryImplTest {
         assertEquals(null, repository.dashboardHtml.value)
     }
 
+    // --- CONTROL_CENTER_APP (W16AAPPLE-29) ---
+
+    private val controlCenterRevision = "sha256:" + "b".repeat(64)
+
+    private fun controlCenterFrame(app: String) =
+        """{"type":"CONTROL_CENTER_APP","session_id":"s1","app":$app}"""
+
+    private val publishedApp =
+        """{"schema":"connectonion.control-app/1","sdk_version":"1","revision":"$controlCenterRevision",
+          |"url":"https://r-1.apps.example.net/index.html","capabilities":[],"review":{"status":"approved"}}"""
+            .trimMargin().replace("\n", "")
+
+    @Test
+    fun `a CONTROL_CENTER_APP frame publishes the agent's app`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        awaitUntil(retry = { simulateFrame(controlCenterFrame(publishedApp)) }) { repository.controlCenterApp.value != null }
+
+        assertEquals(controlCenterRevision, repository.controlCenterApp.value?.revision)
+    }
+
+    @Test
+    fun `an app the Host withdraws is withdrawn here too`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        awaitUntil(retry = { simulateFrame(controlCenterFrame(publishedApp)) }) { repository.controlCenterApp.value != null }
+
+        awaitUntil(retry = { simulateFrame(controlCenterFrame("null")) }) { repository.controlCenterApp.value == null }
+
+        assertNull(repository.controlCenterApp.value)
+    }
+
+    @Test
+    fun `reconnecting clears the previous agent's Control Center app`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        awaitUntil(retry = { simulateFrame(controlCenterFrame(publishedApp)) }) { repository.controlCenterApp.value != null }
+
+        repository.connect("0xAGENT2")
+
+        assertNull(repository.controlCenterApp.value)
+    }
+
+    // ── plan (W16AAPPLE-17) ──────────────────────────────────────────
+
+    private fun planFrame(vararg statuses: String) =
+        """{"type":"plan","id":"tr-plan","entries":[""" +
+            statuses.mapIndexed { i, s -> """{"content":"step $i","priority":"high","status":"$s"}""" }
+                .joinToString(",") + "]}"
+
+    @Test
+    fun `a plan frame replaces the whole plan`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        awaitUntil(retry = { simulateFrame(planFrame("in_progress", "pending")) }) { repository.plan.value.size == 2 }
+        awaitUntil(retry = { simulateFrame(planFrame("completed")) }) { repository.plan.value.size == 1 }
+
+        assertEquals(PlanStatus.COMPLETED, repository.plan.value.single().status)
+    }
+
+    @Test
+    fun `an empty plan frame clears the plan`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        awaitUntil(retry = { simulateFrame(planFrame("pending")) }) { repository.plan.value.isNotEmpty() }
+
+        awaitUntil(retry = { simulateFrame("""{"type":"plan","id":"tr-2","entries":[]}""") }) {
+            repository.plan.value.isEmpty()
+        }
+    }
+
+    @Test
+    fun `a malformed plan frame leaves the last good plan showing`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        awaitUntil(retry = { simulateFrame(planFrame("in_progress")) }) { repository.plan.value.isNotEmpty() }
+
+        // One bad entry rejects the frame whole, never a partial plan.
+        simulateFrame(
+            """{"type":"plan","id":"tr-3","entries":[""" +
+                """{"content":"ok","priority":"low","status":"pending"},""" +
+                """{"content":"bad","priority":"urgent","status":"pending"}]}"""
+        )
+        // The collector handles events in order, so once the dashboard that
+        // followed it is visible, the bad plan has been handled too.
+        awaitUntil(retry = { simulateDashboard() }) { repository.dashboardHtml.value != null }
+
+        assertEquals(listOf("step 0"), repository.plan.value.map { it.content })
+    }
+
+    @Test
+    fun `a reconnect gets the plan back from the CONNECTED snapshot`() = runTest(testDispatcher) {
+        // The Host carries its plan on the session it sends with CONNECTED,
+        // so a client coming back does not have to wait for the next update.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = {
+            simulateFrame(
+                """{"type":"CONNECTED","session_id":"sess-1","session":{"session_id":"sess-1",""" +
+                    """"plan":[{"content":"Run tests","priority":"high","status":"in_progress"}]}}"""
+            )
+        }) { repository.plan.value.isNotEmpty() }
+
+        assertEquals("Run tests", repository.plan.value.single().content)
+        assertEquals(PlanStatus.IN_PROGRESS, repository.plan.value.single().status)
+    }
+
+    @Test
+    fun `connecting again clears the previous plan`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        awaitUntil(retry = { simulateFrame(planFrame("pending")) }) { repository.plan.value.isNotEmpty() }
+
+        repository.connect("0xAGENT2")
+
+        assertTrue(repository.plan.value.isEmpty())
+    }
+
     @Test
     fun `reconnecting to a new agent clears the previous agent's profile`() = runTest(testDispatcher) {
         // Regression test: a stale AGENT_PROFILE from the agent this
@@ -391,6 +903,110 @@ class ConnectionRepositoryImplTest {
         repository.connect("0xAGENT2")
 
         assertEquals(null, repository.agentProfile.value)
+    }
+
+    // -- the published profile: slash-palette skills and agent balance --
+    //
+    // No agent actually sends AGENT_PROFILE; the palette is filled from the
+    // relay's directory on CONNECTED (fetchPublishedProfile). These run the
+    // real AgentDiscoveryService against a local directory.
+
+    private val publishedAgent = "0x" + "c5".repeat(32)
+
+    /** Every directory a test started, shut down in [shutDownDirectories] even when the test fails. */
+    private val directories = mutableListOf<MockWebServer>()
+
+    @After
+    fun shutDownDirectories() = directories.forEach { it.shutdown() }
+
+    /** A directory that answers every lookup with [body], recording the paths asked for. */
+    private fun directory(body: String): MockWebServer = MockWebServer().apply {
+        dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setBody(body)
+        }
+        start()
+        directories += this
+    }
+
+    private fun simulateFrame(json: String) {
+        factory.lastListener?.onMessage(factory.lastWebSocket!!, json)
+    }
+
+    private fun repositoryWithDirectory(server: MockWebServer) = ConnectionRepositoryImpl(
+        keyManager = keyManager,
+        relayUrl = server.url("/").toString(),
+        pendingMessageSink = sink,
+        agentConnectionFactory = { km, url -> AgentConnection(km, url, factory, signer = { _, _ -> "fake-signature" }, pendingMessageSink = sink) },
+        agentDiscovery = AgentDiscoveryService()
+    )
+
+    @Test
+    fun `on connect the agent's published skills come from the directory`() = runTest(testDispatcher) {
+        val server = directory(
+            """{"profile":{"alias":"palette-agent","model":"gemini-2.5-flash","tools":["echo"],
+              |"skills":[{"name":"explain","description":"Explain a snippet of code"},{"name":"translate"}]}}"""
+                .trimMargin()
+        )
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+
+        assertEquals(
+            listOf(AgentSkill("explain", "Explain a snippet of code"), AgentSkill("translate")),
+            repo.agentProfile.value?.skills
+        )
+        // The agent's row, not this device's: CONNECTED carries the identity
+        // the relay authenticated, and looking that up returns our own empty row.
+        assertEquals("/api/agents/$publishedAgent", server.takeRequest().path)
+    }
+
+    @Test
+    fun `known issue - the directory path keeps duplicate skill names and placeholder descriptions`() = runTest(testDispatcher) {
+        // An AGENT_PROFILE frame is cleaned by ProtocolParser.toAgentSkills
+        // (one entry per name, "No description" -> none). The directory path -
+        // the one that actually fills the palette - skips both, and the
+        // palette keys its rows on the name.
+        val server = directory(
+            """{"profile":{"skills":[{"name":"explain","description":"No description"},
+              |{"name":"explain","description":"Explain a snippet of code"}]}}""".trimMargin()
+        )
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+        val skills = repo.agentProfile.value!!.skills
+
+        knownIssue("directory skills are not de-duplicated or normalised the way AGENT_PROFILE skills are") {
+            assertEquals("one entry per name", listOf("explain"), skills.map { it.name })
+            assertTrue("placeholder description kept: $skills", skills.none { it.description == "No description" })
+        }
+    }
+
+    @Test
+    fun `a balance the agent published survives the directory filling in its skills`() = runTest(testDispatcher) {
+        val server = directory("""{"profile":{"skills":[{"name":"explain"}]}}""")
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateFrame("""{"type":"AGENT_PROFILE","name":"low-funds","skills":[],"balance_usd":0.42}""") }) {
+            repo.agentProfile.value != null
+        }
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+
+        assertEquals(0.42, repo.agentProfile.value?.balanceUsd)
+    }
+
+    @Test
+    fun `an agent's published balance reaches the live profile the low-balance bar reads`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        awaitUntil(retry = { simulateFrame("""{"type":"AGENT_PROFILE","name":"low-funds","balance_usd":0.42}""") }) {
+            repository.agentProfile.value != null
+        }
+
+        assertEquals(0.42, repository.agentProfile.value?.balanceUsd)
     }
 
     // ── approvalMode ─────────────────────────────────────────────────
@@ -448,11 +1064,16 @@ class ConnectionRepositoryImplTest {
         repository.setMode(ApprovalMode.ULW, turns = 12)
 
         assertEquals(ApprovalMode.ULW, repository.approvalMode.value)
-        assertTrue(
-            factory.lastWebSocket!!.sentMessages.any {
-                it == """{"type":"mode_change","mode":"ulw","turns":12}"""
-            }
-        )
+        // A v2 signed command: the Host executes the signed payload.
+        val expected = Json.parseToJsonElement("""{"type":"mode_change","mode":"ulw","turns":12}""")
+         assertTrue(
+             factory.lastWebSocket!!.sentMessages.any {
+                val payload = Json.parseToJsonElement(it).jsonObject["payload"]?.jsonObject
+                payload != null &&
+                    JsonObject(payload - setOf("to", "timestamp", "nonce")) == expected &&
+                    it.contains("\"signature\"")
+             }
+         )
     }
 
     @Test
@@ -563,5 +1184,304 @@ class ConnectionRepositoryImplTest {
         repository.connect("0xAGENT2")
 
         assertTrue(!repository.modePending.value)
+    }
+
+    // ── Host-managed modes (W16AAPPLE-18) ────────────────────────────
+    // A ConnectOnion 1.7+ Host advertises `session_modes` on CONNECTED and
+    // answers mode_change itself (ws_router/mode.py). Fixtures follow
+    // websocket-protocol.md's CONNECTED example and handle_mode_change's frames.
+
+    private fun simulateHostModes(current: String = "auto", turnsLeft: String = "null") {
+        simulateFrame(
+            """{"type":"CONNECTED","session_id":"sess-1","status":"connected",
+              |"session_modes":{"currentModeId":"$current","turnsLeft":$turnsLeft,"availableModes":[
+              |{"id":"read-only","name":"Read only"},{"id":"auto","name":"Auto"},
+              |{"id":"full-access","name":"Full access"}]}}""".trimMargin()
+        )
+    }
+
+    /** The signed payloads of every mode_change sent, without the envelope's to/timestamp/nonce. */
+    private fun sentModeChanges(): List<JsonObject> =
+        factory.lastWebSocket!!.sentMessages.mapNotNull { sent ->
+            val payload = Json.parseToJsonElement(sent).jsonObject["payload"]?.jsonObject
+            payload?.takeIf { it["type"]?.toString() == "\"mode_change\"" }
+                ?.let { JsonObject(it - setOf("to", "timestamp", "nonce")) }
+        }
+
+    @Test
+    fun `session_modes on CONNECTED makes the Host the authority for mode and catalogue`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+
+        val modes = repository.sessionModes.value
+        assertEquals(listOf(ApprovalMode.READ_ONLY, ApprovalMode.AUTO, ApprovalMode.FULL_ACCESS), modes.available)
+        assertEquals(listOf(ApprovalMode.READ_ONLY, ApprovalMode.AUTO), modes.cycle)
+        assertEquals(ApprovalMode.AUTO, repository.approvalMode.value)
+        assertFalse(repository.modePending.value)
+    }
+
+    @Test
+    fun `CONNECTED in full access carries the Host's turn budget`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes(current = "full-access", turnsLeft = "7") }) {
+            repository.approvalMode.value == ApprovalMode.FULL_ACCESS
+        }
+
+        assertEquals(7, repository.sessionModes.value.turnsLeft)
+    }
+
+    @Test
+    fun `a CONNECTED without session_modes keeps the legacy catalogue`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        assertEquals(SessionModes.LEGACY, repository.sessionModes.value)
+        assertEquals(ApprovalMode.SAFE, repository.approvalMode.value)
+    }
+
+    @Test
+    fun `setMode on a Host-managed connection sends the exact mode and never a turn budget`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+        factory.lastWebSocket!!.sentMessages.clear()
+
+        repository.setMode(ApprovalMode.FULL_ACCESS, turns = 50)
+
+        assertEquals(
+            listOf(Json.parseToJsonElement("""{"type":"mode_change","mode":"full-access"}""")),
+            sentModeChanges()
+        )
+        assertEquals(ApprovalMode.FULL_ACCESS, repository.approvalMode.value)
+        assertTrue(repository.modePending.value)
+    }
+
+    @Test
+    fun `a mode the connection does not offer is never sent`() = runTest(testDispatcher) {
+        // The Host has no alias reader: "safe" would only come back refused.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+        factory.lastWebSocket!!.sentMessages.clear()
+
+        repository.setMode(ApprovalMode.SAFE)
+
+        assertTrue(sentModeChanges().isEmpty())
+        assertEquals(ApprovalMode.AUTO, repository.approvalMode.value)
+        assertFalse(repository.modePending.value)
+    }
+
+    @Test
+    fun `a legacy connection does not send the Host's vocabulary either`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+        factory.lastWebSocket!!.sentMessages.clear()
+
+        repository.setMode(ApprovalMode.READ_ONLY)
+
+        assertTrue(sentModeChanges().isEmpty())
+        assertEquals(ApprovalMode.SAFE, repository.approvalMode.value)
+    }
+
+    @Test
+    fun `the Host's mode_changed confirms the request and carries its budget`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+        repository.setMode(ApprovalMode.FULL_ACCESS)
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"mode_changed","mode":"full-access","turns_left":20,"session_id":"sess-1"}""")
+        }) { !repository.modePending.value }
+
+        assertEquals(ApprovalMode.FULL_ACCESS, repository.approvalMode.value)
+        assertEquals(20, repository.sessionModes.value.turnsLeft)
+    }
+
+    @Test
+    fun `mode_budget_changed counts down and expiry back to auto clears the budget`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes(current = "full-access", turnsLeft = "3") }) {
+            repository.approvalMode.value == ApprovalMode.FULL_ACCESS
+        }
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"mode_budget_changed","id":"b1","mode":"full-access","turns_left":2,"previous_turns_left":3}""")
+        }) { repository.sessionModes.value.turnsLeft == 2 }
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"mode_changed","id":"m9","mode":"auto","turns_left":null,"triggered_by":"full_access_expired"}""")
+        }) { repository.approvalMode.value == ApprovalMode.AUTO }
+
+        assertNull(repository.sessionModes.value.turnsLeft)
+    }
+
+    @Test
+    fun `the Host refusing a busy mode change rolls the chip back`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+
+        repository.setMode(ApprovalMode.READ_ONLY)
+        assertEquals(ApprovalMode.READ_ONLY, repository.approvalMode.value)
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"ERROR","code":-32000,"message":"Session is busy","retryable":true}""")
+        }) { !repository.modePending.value }
+
+        assertEquals(ApprovalMode.AUTO, repository.approvalMode.value)
+    }
+
+    @Test
+    fun `the Host refusing a mode change for a missing session rolls the chip back`() = runTest(testDispatcher) {
+        // session/mode.py's -32002. Without it the chip sat on the new mode, pending, for good.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes() }) { repository.sessionModes.value.hostManaged }
+
+        repository.setMode(ApprovalMode.READ_ONLY)
+        assertTrue(repository.modePending.value)
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"ERROR","code":-32002,"message":"Session not found"}""")
+        }) { !repository.modePending.value }
+
+        assertEquals(ApprovalMode.AUTO, repository.approvalMode.value)
+    }
+
+    @Test
+    fun `reconnecting forgets the Host's catalogue`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateHostModes(current = "read-only") }) { repository.sessionModes.value.hostManaged }
+
+        repository.connect("0xAGENT2")
+
+        assertEquals(SessionModes.LEGACY, repository.sessionModes.value)
+        assertEquals(ApprovalMode.SAFE, repository.approvalMode.value)
+    }
+
+    // ── hostSessionStatus (W16AAPPLE-18) ─────────────────────────────
+
+    @Test
+    fun `hostSessionStatus follows CONNECTED and is not released with it`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+        }
+
+        repository.releaseSessionStatus()
+
+        assertEquals(ServerSessionStatus.RUNNING, repository.hostSessionStatus.value)
+    }
+
+    @Test
+    fun `a SESSION_STATUS reply about this session is shown`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected("sess-1") }) { repository.connectionState.value is ConnectionState.Connected }
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"SESSION_STATUS","session_id":"sess-1","status":"not_found"}""")
+        }) { repository.hostSessionStatus.value == ServerSessionStatus.NOT_FOUND }
+    }
+
+    @Test
+    fun `a SESSION_STATUS reply about another session is not shown`() = runBlocking {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("connected", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.CONNECTED
+        }
+
+        // Wait for the reply itself to come through, so the assertion below is not vacuous.
+        withTimeout(3000L) {
+            val deferred = async {
+                repository.observeEvents().first { it is ChatEvent.SessionStatusReceived }
+            }
+            while (deferred.isActive) {
+                simulateFrame("""{"type":"SESSION_STATUS","session_id":"sess-OLD","status":"not_found"}""")
+                delay(20)
+            }
+            deferred.await()
+        }
+
+        assertEquals(ServerSessionStatus.CONNECTED, repository.hostSessionStatus.value)
+    }
+
+    @Test
+    fun `an OUTPUT returns hostSessionStatus to idle`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+        }
+
+        awaitUntil(retry = { simulateFrame("""{"type":"OUTPUT","result":"done"}""") }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.CONNECTED
+        }
+    }
+
+    private fun sentSessionStatusQueries(): List<String> =
+        factory.lastWebSocket!!.sentMessages.filter { it.contains("\"SESSION_STATUS\"") }
+
+    @Test
+    fun `joined while running, a turn that fails with an ERROR goes back to idle and asks SESSION_STATUS`() =
+        runTest(testDispatcher) {
+            // ws_router/agent_io.py ends a failed run with this ERROR instead of an OUTPUT.
+            repository.connect("0xAGENT")
+            awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+                repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+            }
+            factory.lastWebSocket!!.sentMessages.clear()
+
+            awaitUntil(retry = {
+                simulateFrame("""{"type":"ERROR","code":-32603,"message":"Unable to run agent"}""")
+            }) { repository.hostSessionStatus.value == ServerSessionStatus.CONNECTED }
+
+            val query = Json.parseToJsonElement(sentSessionStatusQueries().first()).jsonObject
+            assertEquals(Json.parseToJsonElement("""{"session_id":"sess-1"}"""), query["session"])
+        }
+
+    @Test
+    fun `an ERROR in other wording while running is settled by the SESSION_STATUS reply`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+        }
+        factory.lastWebSocket!!.sentMessages.clear()
+
+        awaitUntil(retry = { simulateError("Insufficient ConnectOnion Credits") }) {
+            sentSessionStatusQueries().isNotEmpty()
+        }
+        assertEquals("not settled until the Host says", ServerSessionStatus.RUNNING, repository.hostSessionStatus.value)
+
+        awaitUntil(retry = {
+            simulateFrame("""{"type":"SESSION_STATUS","session_id":"sess-1","status":"connected"}""")
+        }) { repository.hostSessionStatus.value == ServerSessionStatus.CONNECTED }
+    }
+
+    @Test
+    fun `an ERROR while idle asks nothing`() = runBlocking {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("connected", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.CONNECTED
+        }
+        factory.lastWebSocket!!.sentMessages.clear()
+
+        withTimeout(3000L) {
+            val deferred = async { repository.observeEvents().first { it is ChatEvent.ConnectionErrorOccurred } }
+            while (deferred.isActive) {
+                simulateError("Insufficient ConnectOnion Credits")
+                delay(20)
+            }
+            deferred.await()
+        }
+
+        assertTrue(sentSessionStatusQueries().isEmpty())
+        assertEquals(ServerSessionStatus.CONNECTED, repository.hostSessionStatus.value)
+    }
+
+    @Test
+    fun `reconnecting resets hostSessionStatus`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnectedWith("running", serverNewer = false) }) {
+            repository.hostSessionStatus.value == ServerSessionStatus.RUNNING
+        }
+
+        repository.connect("0xAGENT2")
+
+        assertEquals(ServerSessionStatus.UNKNOWN, repository.hostSessionStatus.value)
     }
 }
