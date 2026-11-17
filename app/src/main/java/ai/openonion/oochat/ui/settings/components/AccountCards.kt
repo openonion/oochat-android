@@ -145,7 +145,8 @@ internal fun AccountSection(
     apiKey: String?,
     onBackupSeed: () -> Unit,
     onImportKey: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    accountProblem: String? = null
 ) {
     Column(modifier = Modifier.padding(horizontal = MaterialTheme.spacing.lg)) {
         Column(modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = MaterialTheme.spacing.sm)) {
@@ -169,7 +170,8 @@ internal fun AccountSection(
             apiKey = apiKey,
             onBackupSeed = onBackupSeed,
             onImportKey = onImportKey,
-            onReset = onReset
+            onReset = onReset,
+            accountProblem = accountProblem
         )
     }
     // Wider than the gap between settings groups (`xl`), which is wider than
@@ -184,7 +186,8 @@ internal fun IdentityCard(
     apiKey: String?,
     onBackupSeed: () -> Unit,
     onImportKey: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    accountProblem: String? = null
 ) {
     val copyToClipboard = rememberClipboard()
 
@@ -206,6 +209,18 @@ internal fun IdentityCard(
             value = apiKey?.truncateMiddle(12, 6) ?: "Not authenticated",
             onCopy = apiKey?.let { key -> { copyToClipboard("API key", key) } }
         )
+        accountProblem?.let { problem ->
+            Text(
+                text = problem,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(
+                    start = MaterialTheme.spacing.md2,
+                    end = MaterialTheme.spacing.md2,
+                    bottom = MaterialTheme.spacing.sm
+                )
+            )
+        }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         IdentityActionRow(
