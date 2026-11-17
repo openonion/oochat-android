@@ -77,9 +77,11 @@ class OnboardingViewModelTest {
         configRepository = configRepository
     )
 
+    private val address = "0x" + "ab".repeat(32)
+
     private fun validForm(
         serverUrl: String = "https://relay.example.com",
-        agentAddress: String = "0xabc123",
+        agentAddress: String = address,
         apiKey: String = ""
     ) = AgentFormState(serverUrl = serverUrl, agentAddress = agentAddress, apiKey = apiKey)
 
@@ -135,7 +137,7 @@ class OnboardingViewModelTest {
         var savedCalled = false
         val form = AgentFormState(
             serverUrl = "  https://relay.example.com/  ",
-            agentAddress = "  0xabc123  ",
+            agentAddress = "  ${address.uppercase().replace("0X", "0x")}  ",
             apiKey = "  my-key  "
         )
 
@@ -147,9 +149,28 @@ class OnboardingViewModelTest {
         val saved = configRepository.savedConfig
         assertNotNull(saved)
         assertEquals("https://relay.example.com", saved!!.serverUrl)
-        assertEquals("0xabc123", saved.agentAddress)
+        // Trimmed and lower-cased, as Add Agent saves it (W16AAPPLE-57).
+        assertEquals(address, saved.agentAddress)
         assertEquals("my-key", saved.apiKey)
         assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `Setup rejects an agent address the Add Agent form rejects`() = runTest(testDispatcher) {
+        val vm = createVm()
+        var saved = false
+
+        vm.connect(AgentFormState(serverUrl = "https://oo.openonion.ai", agentAddress = "0xabc123"), onSaved = { saved = true })
+        testScheduler.runCurrent()
+
+        // AgentViewModel's doc says the two "agree on what's a valid agent".
+        // Setup used to save any 0x… string, which can never be dialled
+        // (W16AAPPLE-61).
+        assertFalse("a 0x address that is not 64 hex must not be saved", saved)
+        assertEquals(
+            "Please enter a valid agent address (0x followed by 64 hex characters)",
+            vm.errorMessage.value
+        )
     }
 
     @Test
