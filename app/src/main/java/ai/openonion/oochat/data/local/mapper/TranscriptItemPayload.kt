@@ -27,8 +27,7 @@ import kotlinx.serialization.json.Json
  * what the agent was allowed to do, which is transcript like any other.
  *
  * The remaining gates (AskUser, Onboard*, PlanReview, UlwTurnsReached) are
- * still excluded — none of them carries its answer on the item yet, so there
- * is nothing to restore them into.
+ * still excluded. AskUser now keeps its answer on the item, but is not saved yet.
  */
 @Serializable
 sealed class TranscriptItemPayload {
@@ -55,7 +54,13 @@ sealed class TranscriptItemPayload {
         val content: String? = null,
         val tokensTotal: Int? = null,
         val costUsd: Double? = null,
-        val contextPercent: Double? = null
+        val contextPercent: Double? = null,
+        /**
+         * [ChatItem.Thinking.kind]; absent on rows written before reasoning
+         * had one. Not serialised as `kind`: that is this codec's class
+         * discriminator.
+         */
+        @SerialName("reasoning_kind") val kind: String? = null
     ) : TranscriptItemPayload()
 
     /**
@@ -130,7 +135,10 @@ sealed class TranscriptItemPayload {
         val approved: Boolean,
         val scope: String,
         val mode: String? = null,
-        val feedback: String? = null
+        val feedback: String? = null,
+        val refused: Boolean = false,
+        /** Kept so a STALE_ANSWER arriving after a reload still finds its card. */
+        val requestId: String? = null
     ) : TranscriptItemPayload()
 
     @Serializable
@@ -158,7 +166,8 @@ sealed class TranscriptItemPayload {
     data class ModeChanged(
         override val id: String,
         val mode: String,
-        val triggeredBy: String? = null
+        val triggeredBy: String? = null,
+        val turnsLeft: Int? = null
     ) : TranscriptItemPayload()
 }
 
@@ -224,7 +233,8 @@ object TranscriptItemCodec {
             content = item.content,
             tokensTotal = item.tokensTotal,
             costUsd = item.costUsd,
-            contextPercent = item.contextPercent
+            contextPercent = item.contextPercent,
+            kind = item.kind
         )
         // A turn that is only a footer (no reply text of its own) — the live
         // llm_call/llm_result row. RUNNING is skipped: llm_result replaces it
@@ -284,7 +294,9 @@ object TranscriptItemCodec {
                 approved = d.approved,
                 scope = d.scope,
                 mode = d.mode,
-                feedback = d.feedback
+                feedback = d.feedback,
+                refused = d.refused,
+                requestId = item.requestId
             )
         }
         is ChatItem.FilesReceivedItem -> TranscriptItemPayload.FilesReceived(
@@ -301,7 +313,8 @@ object TranscriptItemCodec {
         is ChatItem.ModeChangedItem -> TranscriptItemPayload.ModeChanged(
             id = item.id,
             mode = item.mode,
-            triggeredBy = item.triggeredBy
+            triggeredBy = item.triggeredBy,
+            turnsLeft = item.turnsLeft
         )
         else -> null
     }
@@ -336,7 +349,8 @@ object TranscriptItemCodec {
             content = payload.content,
             tokensTotal = payload.tokensTotal,
             costUsd = payload.costUsd,
-            contextPercent = payload.contextPercent
+            contextPercent = payload.contextPercent,
+            kind = payload.kind
         )
         is TranscriptItemPayload.TurnThinking -> ChatItem.Turn(
             id = payload.id,
@@ -386,7 +400,8 @@ object TranscriptItemCodec {
             tool = payload.tool,
             arguments = payload.arguments,
             description = payload.description,
-            decision = ApprovalDecision(payload.approved, payload.scope, payload.mode, payload.feedback)
+            decision = ApprovalDecision(payload.approved, payload.scope, payload.mode, payload.feedback, payload.refused),
+            requestId = payload.requestId
         )
         is TranscriptItemPayload.FilesReceived -> ChatItem.FilesReceivedItem(
             id = payload.id,
@@ -402,7 +417,8 @@ object TranscriptItemCodec {
         is TranscriptItemPayload.ModeChanged -> ChatItem.ModeChangedItem(
             id = payload.id,
             mode = payload.mode,
-            triggeredBy = payload.triggeredBy
+            triggeredBy = payload.triggeredBy,
+            turnsLeft = payload.turnsLeft
         )
     }
 
