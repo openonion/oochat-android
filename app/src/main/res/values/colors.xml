@@ -5,5 +5,5 @@
         Kept in sync with colorScheme.primary in Theme.kt so the splash →
         Compose handoff is seamless.
     -->
-    <color name="onion_green">#FF006E1C</color>
+    <color name="onion_green">#FF14532D</color>
 </resources>

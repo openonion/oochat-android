@@ -83,13 +83,20 @@ class RoomPendingMessageSink(
         }
     }
 
-    override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) {
+    override fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Unit
+    ) {
         // Snapshot the watermark first: a send racing this flush (an INPUT
         // written while CONNECTED is being processed) enqueues behind it and
         // is left for the next pass rather than being reordered into this one.
         val maxId = synchronized(lock) { dao.newestIdForAgent(agentAddress) } ?: return
         while (true) {
-            val row = synchronized(lock) { dao.claimNextForAgent(agentAddress, sessionId, maxId) } ?: break
+            val row = synchronized(lock) {
+                dao.claimNextForAgent(agentAddress, sessionId, conversationId, maxId)
+            } ?: break
             val spilled = readSpill(row.id)
             send(
                 QueuedMessage(
