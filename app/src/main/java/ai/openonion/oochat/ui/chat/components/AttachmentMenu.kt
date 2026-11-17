@@ -1,10 +1,13 @@
 package ai.openonion.oochat.ui.chat.components
 
+import ai.openonion.oochat.ui.theme.Elevation
+import ai.openonion.oochat.ui.theme.hairline
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -17,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
@@ -218,9 +220,10 @@ private fun AttachmentMenuPanel(
     Column(
         modifier = Modifier
             .width(240.dp)
-            .shadow(elevation = 8.dp, shape = RoundedCornerShape(16.dp), clip = false)
-            .clip(RoundedCornerShape(16.dp))
+            .shadow(elevation = Elevation.hairline, shape = MaterialTheme.shapes.extraLarge, clip = false)
+            .clip(MaterialTheme.shapes.extraLarge)
             .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(MaterialTheme.hairline, MaterialTheme.shapes.extraLarge)
     ) {
         AttachmentMenuItem(
             icon = Icons.Default.PhotoCamera,
@@ -272,7 +275,7 @@ private fun AttachmentMenuItem(
         Box(
             modifier = Modifier
                 .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(MaterialTheme.shapes.large)
                 .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)),
             contentAlignment = Alignment.Center
         ) {

@@ -1,16 +1,19 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.SessionActivity
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -127,5 +130,98 @@ class ChatTopBarComposeTest {
         state = ConnectionState.Error(message = "boom")
         composeRule.waitForIdle()
         composeRule.onNodeWithContentDescription("Connection failed").assertExists()
+    }
+
+    // ── Session status (W16AAPPLE-18) ──────────────────────────────────
+
+    private fun setBar(activity: SessionActivity?, model: String? = "gemini-2.5-flash") {
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "research-assistant",
+                    connectionState = ConnectionState.Connected(address = "0xabc"),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    modelName = model,
+                    sessionActivity = activity
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the session status leads the subtitle, ahead of the model`() {
+        setBar(SessionActivity.RUNNING)
+
+        composeRule.onNodeWithTag("chat_top_bar_subtitle").assertTextEquals("Running · gemini-2.5-flash")
+    }
+
+    @Test
+    fun `each session status has its own words`() {
+        var activity by mutableStateOf<SessionActivity?>(SessionActivity.IDLE)
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "t",
+                    connectionState = ConnectionState.Connected(address = "0xabc"),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    sessionActivity = activity
+                )
+            }
+        }
+        mapOf(
+            SessionActivity.IDLE to "Idle",
+            SessionActivity.RUNNING to "Running",
+            SessionActivity.AWAITING_USER to "Waiting for you",
+            SessionActivity.NOT_FOUND to "Session not found"
+        ).forEach { (value, words) ->
+            activity = value
+            composeRule.onNodeWithTag("chat_top_bar_subtitle").assertTextEquals(words)
+        }
+    }
+
+    @Test
+    fun `no status and no model leaves no subtitle`() {
+        setBar(activity = null, model = null)
+
+        composeRule.onNodeWithTag("chat_top_bar_subtitle").assertDoesNotExist()
+    }
+
+    // ── the Rem menu item (W16AAPPLE-69) ──
+
+    private fun openMenu(connected: Boolean) {
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "research-assistant",
+                    connectionState = if (connected) ConnectionState.Connected(address = "0xabc") else ConnectionState.Disconnected,
+                    isConnected = connected,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("More options").performClick()
+    }
+
+    @Test
+    fun `Rem is in the menu on a live connection`() {
+        openMenu(connected = true)
+
+        composeRule.onNodeWithText("Rem").assertExists()
+    }
+
+    @Test
+    fun `Rem is not in the menu while disconnected`() {
+        openMenu(connected = false)
+
+        composeRule.onNodeWithText("View logs").assertExists()
+        composeRule.onNodeWithText("Rem").assertDoesNotExist()
     }
 }

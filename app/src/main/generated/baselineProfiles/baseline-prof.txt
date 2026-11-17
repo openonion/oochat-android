@@ -19649,7 +19649,6 @@ HSPLai/openonion/oochat/ui/theme/TypeKt;-><clinit>()V
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getAppTypography()Landroidx/compose/material3/Typography;
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getSectionLabel(Landroidx/compose/material3/Typography;)Landroidx/compose/ui/text/TextStyle;
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getSectionOverline(Landroidx/compose/material3/Typography;)Landroidx/compose/ui/text/TextStyle;
-HSPLai/openonion/oochat/ui/theme/TypeKt;->manrope(I)Landroidx/compose/ui/text/font/Font;
 Lai/openonion/oochat/util/FileLogger;
 HSPLai/openonion/oochat/util/FileLogger;->$r8$lambda$YqBTJzWoqgH4_VYxYmctN_LooX4()Lkotlin/Unit;
 HSPLai/openonion/oochat/util/FileLogger;->$r8$lambda$cVU0QTrmpg-dGPTJT5dprwt4n3k(Ljava/lang/String;Ljava/lang/String;)Lkotlin/Unit;
