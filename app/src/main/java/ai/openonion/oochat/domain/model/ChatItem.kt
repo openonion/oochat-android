@@ -20,6 +20,15 @@ enum class UserMessageState {
     QUEUED,
 
     /**
+     * On the wire, but sent into a turn that was still running, so the host may
+     * take it as runtime input. In that case it answers `RUNTIME_INPUT_ACK`
+     * (queued) or `RUNTIME_INPUT_REJECTED` (not taken) and the bubble stays
+     * here until one arrives. Unlike [QUEUED] it is not held back: it has been
+     * sent, so it does not pin to the tail of the running turn's output.
+     */
+    AWAITING_ACK,
+
+    /**
      * Delivery failed and will not be retried on its own. The bubble says so
      * and offers to send it again — the only state the user has to act on.
      */
@@ -79,8 +88,19 @@ sealed class ChatItem {
         // Context window occupancy at that same llm_result, as a 0.0-1.0
         // fraction (see ServerEvent.contextPercent's own doc for why this
         // isn't the 0-100 scale CompactItem's fields use).
-        val contextPercent: Double? = null
-    ) : ChatItem()
+        val contextPercent: Double? = null,
+        /**
+         * Set only on the agent's own reasoning — a `thinking` frame with
+         * text (re_act.py's `intent`, reflect.py's `reflect`), as opposed to
+         * an llm_call status or a connection error that also lands in
+         * [content]. Non-null means [content] is something the agent thought,
+         * rendered as reasoning rather than as a reply or a failure.
+         */
+        val kind: String? = null
+    ) : ChatItem() {
+        /** True for a reasoning item — see [kind]. */
+        val isReasoning: Boolean get() = kind != null
+    }
 
     /**
      * One complete assistant "turn": the model thought about it ([thinking])
@@ -225,7 +245,7 @@ sealed class ChatItem {
     /**
      * The agent (or a plugin acting on its behalf) switched session mode —
      * a `mode_changed` server event. [mode] is one of "safe" | "plan" |
-     * "accept_edits" | "ulw" (raw, not an enum: unlike [ThinkingStatus] etc.
+     * "accept_edits" | "ulw" (a legacy Host; see below for 1.7+) (raw, not an enum: unlike [ThinkingStatus] etc.
      * this is free-form content the server may extend, not a fixed UI state
      * machine). [triggeredBy] is one of "user" | "agent" | "ulw_checkpoint"
      * when the server sends it — plan_mode.py's exit path omits the field
@@ -237,11 +257,16 @@ sealed class ChatItem {
      * Either way it is authoritative for
      * [ai.openonion.oochat.data.repository.ConnectionRepository.approvalMode],
      * which the mode chip renders.
+     *
+     * A 1.7+ Host sends the same frame for "read-only" | "auto" |
+     * "full-access", with [turnsLeft] set for full access only, and
+     * [triggeredBy] "full_access_expired" when the budget ran out.
      */
     data class ModeChangedItem(
         override val id: String,
         val mode: String,
-        val triggeredBy: String? = null
+        val triggeredBy: String? = null,
+        val turnsLeft: Int? = null
     ) : ChatItem()
 }
 

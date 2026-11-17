@@ -22,7 +22,8 @@ their owners start and stop them.
 
 If you were given an address instead, scroll to **Or enter Agent Address
 manually** and paste it. An address is `0x` followed by 64 hex characters. The
-QR button in the top right scans one from a screen or a printout.
+QR button in the top right scans one from a screen or a printout, including
+the code behind the **Share** button on chat.openonion.ai.
 
 **Relay Server or Direct Connection.** Leave it on *Relay Server* unless you
 were told otherwise — the relay handles agents behind home routers, which is
@@ -133,6 +134,23 @@ bottom left sets how often they have to ask:
 **Ultra work is fenced off deliberately** — it carries a warning and a turn
 budget, and the app drops back to Safe when the budget runs out. Use it when you
 are watching, not when you are away.
+
+Agents on a newer host offer a different set, and the chip shows only what the
+agent offers:
+
+| Mode | What it means |
+|---|---|
+| **Read only** | Ask before anything that changes files or runs commands. |
+| **Auto** | Run routine edits and commands; ask before risky ones. The default. |
+| **Full access** | Fully autonomous, for a number of turns the agent's host sets. The chip shows how many are left, and drops back to Auto when they run out. |
+
+On these agents the mode can't be changed while the agent is working; the chip
+waits until the turn finishes.
+
+The line under the agent's name in the top bar says what it is doing:
+**Running**, **Waiting for you** (a card needs your answer), **Idle**, or
+**Session not found** (after a dropped connection, the agent said it no longer
+holds this conversation's live session).
 
 When a permission card appears you can **Allow once**, **Trust for this
 session**, **Reject**, or ask the agent to **Explain** what it is about to do.
