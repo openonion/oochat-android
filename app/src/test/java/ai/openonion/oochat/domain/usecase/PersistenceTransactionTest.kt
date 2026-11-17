@@ -2,11 +2,13 @@ package ai.openonion.oochat.domain.usecase
 
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.local.db.entity.AgentEntity
+import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import ai.openonion.oochat.data.local.mapper.TranscriptItemCodec
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.Role
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.UserMessageState
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -154,6 +156,43 @@ class PersistenceTransactionTest {
         )
 
         assertTrue(database.messageDao().getMessagesListBySession(sessionId).isEmpty())
+    }
+
+    @Test
+    fun `saving a message again keeps a failed delivery already recorded`() = runTest(testDispatcher) {
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+        val item = ChatItem.User(id = "u1", content = "hello")
+        suspend fun persist() = transaction.persistMessageAtomically(
+            sessionId = sessionId,
+            item = item,
+            onTitleUpdate = { _, _ -> },
+            onPreviewUpdate = { _, _, _ -> }
+        )
+        persist()
+        database.messageDao().updateDeliveryState("u1", ChatMessageEntity.DELIVERY_FAILED)
+
+        // insertMessage is REPLACE: without carrying it over, any re-save (a
+        // resend that was never saved, a replay) would quietly mark it sent.
+        persist()
+
+        assertEquals(ChatMessageEntity.DELIVERY_FAILED, database.messageDao().getDeliveryStateById("u1"))
+    }
+
+    @Test
+    fun `a message saved already failed is recorded as failed in the same write`() = runTest(testDispatcher) {
+        val sessionId = "session-1"
+        insertSession(sessionId, "Existing")
+
+        // A message held behind a running turn is saved like this at the tap.
+        transaction.persistMessageAtomically(
+            sessionId = sessionId,
+            item = ChatItem.User(id = "u1", content = "hello", state = UserMessageState.FAILED),
+            onTitleUpdate = { _, _ -> },
+            onPreviewUpdate = { _, _, _ -> }
+        )
+
+        assertEquals(ChatMessageEntity.DELIVERY_FAILED, database.messageDao().getDeliveryStateById("u1"))
     }
 
     @Test
