@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.settings.components
 
+import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.ui.components.ConfirmationSheet
 import ai.openonion.oochat.ui.theme.ButtonToken
 import ai.openonion.oochat.ui.theme.spacing
@@ -63,7 +64,7 @@ import kotlinx.coroutines.delay
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun BackupSeedSheet(export: ai.openonion.oochat.crypto.KeyManager.BackupExport, onDismiss: () -> Unit) {
+internal fun BackupSeedSheet(export: KeyManager.BackupExport, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState()
     var revealed by remember { mutableStateOf(false) }
     val copyState = rememberCopyState()
@@ -108,8 +109,25 @@ internal fun BackupSeedSheet(export: ai.openonion.oochat.crypto.KeyManager.Backu
                 return@Column
             }
 
-            when (export) {
-                is ai.openonion.oochat.crypto.KeyManager.BackupExport.Phrase -> {
+            val legacyKeyHex = (export as? KeyManager.BackupExport.Phrase)?.legacyPrivateKeyHex
+            when {
+                // The phrase predates SLIP-0010 and restores a different
+                // identity now, so the key is the backup that counts.
+                legacyKeyHex != null -> {
+                    LegacyHexBackup(
+                        privateKeyHex = legacyKeyHex,
+                        copied = copyState.copied,
+                        onCopy = {
+                            clipboard.setText(AnnotatedString(legacyKeyHex))
+                            copyState.markCopied()
+                            clipboardSecret = legacyKeyHex
+                        },
+                        explanation = "This identity was created before recovery phrases switched to the ConnectOnion CLI's derivation. " +
+                            "Its recovery phrase now restores a different, empty identity — only the private key below restores this one. " +
+                            "Import it with \"Import Recovery Key\"."
+                    )
+                }
+                export is KeyManager.BackupExport.Phrase -> {
                     SeedWarningCard()
                     Spacer(modifier = Modifier.height(MaterialTheme.spacing.lg))
 
@@ -159,7 +177,7 @@ internal fun BackupSeedSheet(export: ai.openonion.oochat.crypto.KeyManager.Backu
                         }
                     }
                 }
-                is ai.openonion.oochat.crypto.KeyManager.BackupExport.LegacyHexKey -> {
+                export is KeyManager.BackupExport.LegacyHexKey -> {
                     LegacyHexBackup(
                         privateKeyHex = export.privateKeyHex,
                         copied = copyState.copied,
@@ -299,17 +317,28 @@ private fun MnemonicWordGrid(words: List<String>) {
     }
 }
 
-/** Fallback for identities that predate mnemonics: raw hex key + copy. */
+/**
+ * Raw hex key + copy: for identities with no phrase (imported from hex, or
+ * older than mnemonics), and (with its own [explanation]) for those whose
+ * phrase predates SLIP-0010.
+ */
 @Composable
-private fun LegacyHexBackup(privateKeyHex: String, copied: Boolean, onCopy: () -> Unit) {
+private fun LegacyHexBackup(
+    privateKeyHex: String,
+    copied: Boolean,
+    onCopy: () -> Unit,
+    // Also what a hex import leaves (the phrase is dropped with it), so this
+    // must not claim the identity predates phrases.
+    explanation: String = "This identity has no recovery phrase: it was imported from its private key, or created before recovery phrases were supported. The raw private key below is what restores it."
+) {
     Text(
-        "Legacy Identity",
+        "Back Up Your Private Key",
         style = MaterialTheme.typography.titleLarge,
         fontWeight = FontWeight.Bold
     )
     Spacer(modifier = Modifier.height(MaterialTheme.spacing.sm))
     Text(
-        "This identity was created before recovery phrases were supported, so there's no 12-word phrase for it — only the raw private key below.",
+        explanation,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -338,7 +367,7 @@ private fun LegacyHexBackup(privateKeyHex: String, copied: Boolean, onCopy: () -
 }
 
 /**
- * Bottom sheet accepting a 12/24-word recovery phrase OR a raw hex private
+ * Bottom sheet accepting a 12–24-word recovery phrase OR a raw hex private
  * key to restore/switch identity — matches Figma's Import Key sheet
  * (mnemonic-only there; Android's [KeyManager.importFromPhraseOrHex] also
  * accepts the hex form, same as the onboarding flow's import already does).
@@ -349,11 +378,15 @@ internal fun ImportKeySheet(onImport: (String) -> Unit, onDismiss: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     val wordCount = input.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
-    val looksValid = wordCount == 12 || wordCount == 24 || input.trim().removePrefix("0x").length == 128
+    val looksValid = wordCount in KeyManager.PHRASE_WORD_COUNTS || input.trim().removePrefix("0x").length == 128
 
     ConfirmationSheet(
         title = "Import Key",
-        subtitle = "Enter your 12-word recovery phrase, or a raw 64-byte hex private key, to restore an Ed25519 identity.",
+        // The second sentence is for W16AAPPLE-97: someone restoring onto a
+        // new phone never saw the old phone's Settings warning, and an old
+        // phrase now restores quietly, into a different and empty identity.
+        subtitle = "Enter your 12-word recovery phrase, or a raw 64-byte hex private key, to restore an Ed25519 identity. " +
+            "A phrase from an older version of this app now restores a different identity, so import that identity's private key instead.",
         subtitleSpacingBefore = MaterialTheme.spacing.xs,
         onDismiss = onDismiss,
         content = {

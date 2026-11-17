@@ -21,8 +21,16 @@ agents currently online.
 their owners start and stop them.
 
 If you were given an address instead, scroll to **Or enter Agent Address
-manually** and paste it. An address is `0x` followed by 64 hex characters. The
-QR button in the top right scans one from a screen or a printout.
+manually** and paste it. An address is `0x` followed by 64 hex characters.
+
+**Or scan a QR code.** The QR button in the top right opens the camera. It reads
+the code behind the **Share** button on chat.openonion.ai, a code that holds just
+the address, `connectonion://agent/0x…`, and `https://your-server/0x…` for an
+agent on a server of its own. A code it understands fills the form below, and
+**Connect** goes in. Any other QR code is refused with a message above the
+Connect button, and the form stays as it was. The camera only reads the code:
+nothing is recorded or uploaded. To make a code for your own agent, put its
+address into any QR generator.
 
 **Relay Server or Direct Connection.** Leave it on *Relay Server* unless you
 were told otherwise — the relay handles agents behind home routers, which is
@@ -69,8 +77,12 @@ Some agents publish named skills. Type `/` to see them.
 <img src="screenshots/slash-command-palette.png" alt="Typing a slash in the composer lists the agent's published skills, each with its description" width="300">
 
 Each entry shows the description the agent gave it, so you do not have to guess
-what a command does or how it is spelled. **An empty palette is not a fault** —
-it means this agent publishes no skills, which many do not.
+what a command does or how it is spelled. A skill the agent did not describe
+shows its name alone. **An empty palette is not a fault** —
+it means this agent publishes no skills, which many do not, or that it has not
+let you in yet. Skills only appear once you are in, for example after entering
+an invite code. The agent's Edit screen lists them under **What this agent can
+do**.
 
 ---
 
@@ -89,7 +101,9 @@ The first dictation on a phone may pause a second or two on **Preparing…**
 while the app works out whether the phone's own speech recogniser can be used.
 If it cannot, the app records and has the audio transcribed instead — you get
 the same editable text, just only once you stop talking rather than as you
-speak. Either way the audio is not stored and not sent anywhere else.
+speak. Either way the audio is not stored and not sent anywhere else. A
+recording under a second, usually an accidental tap, is dropped with
+"Recording too short. Try again."
 
 > On an emulator, dictation is not worth judging: the microphone is the host
 > machine's and what the emulator reports about it does not match a phone.
@@ -107,14 +121,62 @@ before they are sent.
 ## 5a. An agent's own Home page
 
 Some agents send the app a page of their own — a status board, a form, a set of
-shortcuts, whatever their author built. When one does, a **grid icon appears in
-the top bar** beside the agent's name; tap it to open the page, and use back to
-return to the chat.
+shortcuts, whatever their author built. When one does, a tab named **Dashboard**
+or, for a Control Center, **Control Center** appears next to **Chat** at the top of
+the screen; tap it to open the page, and tap **Chat** or use back to return to the
+conversation.
 
 The page is the agent's, not the app's, so what it contains is up to whoever
 wrote the agent. It is displayed in a locked-down view: it cannot reach the
-network, cannot store anything, and cannot navigate anywhere. If no icon
-appears, this agent has not sent one.
+network, cannot store anything, and cannot navigate anywhere. If there is neither
+a tab nor an icon, this agent has not sent one.
+
+Some agents publish a full **Control Center** instead: a reviewed web app that
+can show live information and act for you. The same tab opens it. Anything it
+does for you, such as sending a message or running a skill, appears in the chat
+as a message from you, so you can always see it. It cannot use your camera,
+microphone or location, read your clipboard, or open other sites. Going back to
+the chat while it is working leaves the work running. If it stops unexpectedly,
+the screen says so; tap **Reload** to start it again.
+
+Switching between the tabs loses nothing: the chat keeps what you had typed and
+how far you had scrolled, and the page keeps whatever it was showing. The
+keyboard closes when you switch. Running a skill from the page's tab sends its
+message and takes you to the Chat tab, where the turn it started is.
+
+On a tablet, or a foldable that is open, the page does not get a tab: it sits
+beside the chat, so you can use both at once. The tabs and the back arrow are not
+shown then, because the page is already open. Running a skill from the page sends
+its message and leaves the page where it is. Fold the device and the page goes
+back to its tab, and whatever you had typed in the chat is still there. A phone,
+even turned on its side, uses the tabs.
+
+A device that cannot show a Control Center app has no tab for it. A grid icon in
+the chat's top bar opens a screen that says so.
+
+The page is only open while the chat is. Go from the chat to Settings, Logs or the
+agent list and it is closed; when you come back it is loaded again from the start.
+A Control Center app starts afresh too, so whatever you had open or half-filled in
+it is gone, though anything it already did shows in the chat as before.
+
+## 5b. Your agent's Rem notebook
+
+If you own the agent, it keeps a notebook called **Rem** about your people,
+projects and tools. Open it from the chat's **⋮** menu, then **Rem**. Pages are
+grouped by kind (People, Projects and so on); tap one to read it. A link to
+another person or project opens that page. On a tablet the list and the page sit
+side by side.
+
+Rem is read-only here, and only the agent's owner can open it. Anyone else sees
+**Only the owner can read this Rem**, with the command the owner would run on
+the agent's computer to add you. Other messages tell you when the agent has no
+notebook yet (`co rem init` creates one), when it is too large to open on a
+phone, or when the agent did not answer. **Try again** appears only where
+reading again could help.
+
+Passwords, keys and tokens in a page show as `[redacted]`. Locations on the
+owner's computer show as `[path removed]`, or as `~` for their home folder, and
+the notebook's own location is never shown.
 
 ---
 
@@ -133,6 +195,23 @@ bottom left sets how often they have to ask:
 **Ultra work is fenced off deliberately** — it carries a warning and a turn
 budget, and the app drops back to Safe when the budget runs out. Use it when you
 are watching, not when you are away.
+
+Agents on a newer host offer a different set, and the chip shows only what the
+agent offers:
+
+| Mode | What it means |
+|---|---|
+| **Read only** | Ask before anything that changes files or runs commands. |
+| **Auto** | Run routine edits and commands; ask before risky ones. The default. |
+| **Full access** | Fully autonomous, for a number of turns the agent's host sets. The app asks you to confirm before turning it on. The chip shows how many are left, and drops back to Auto when they run out. |
+
+On these agents the mode can't be changed while the agent is working; the chip
+waits until the turn finishes.
+
+The line under the agent's name in the top bar says what it is doing:
+**Running**, **Waiting for you** (a card needs your answer), **Idle**, or
+**Session not found** (after a dropped connection, the agent said it no longer
+holds this conversation's live session).
 
 When a permission card appears you can **Allow once**, **Trust for this
 session**, **Reject**, or ask the agent to **Explain** what it is about to do.
@@ -213,6 +292,13 @@ write down, **Import Key** to restore an identity onto a new phone, and **Reset
 Identity**, which discards the current one. Without the recovery phrase a reset
 or a wiped phone means a new identity and no way back to the old one.
 
+The phrase gives the same identity in the ConnectOnion CLI (`co auth recover`).
+An identity made by an older version of the app keeps working, but its phrase
+now restores a different, empty identity. Settings says so under the wallet
+address when that is the case, and **Back up seed phrase** then shows the
+identity's private key, which is what restores it. **Import Key** says the same,
+for anyone restoring onto a new phone.
+
 Conversations and attachments are stored on the device. Voice recordings are
 never saved.
 
@@ -220,12 +306,17 @@ never saved.
 
 ## 11. When something goes wrong
 
-**"Waiting to send…" under a message.** You are offline. It is queued on the
-device and goes out by itself when the connection returns — including after the
-app is killed.
+**"Waiting to send…" under a message.** You are offline. You can still write
+and send while offline: the message is queued on the device and goes out when
+the connection returns, including after the app is killed. If the banner has
+given up reconnecting, tap **Reconnect**. Tapping **Stop** on the connecting
+banner discards queued messages; the ones on screen turn red so you can send
+them again.
 
-**"Not sent · Tap to try again" in red.** The message did not leave the device.
-Tap it to send it again; it keeps its place in the conversation.
+**"Not sent · Tap to try again" in red.** The message did not reach the agent.
+Tap it, or tap **Retry** in the bar above the message box, to send it again. It
+moves to the bottom of the chat so its reply lands under it. It still shows as
+not sent after the app is closed and reopened.
 
 **A reply says "Failed" with a Retry button.** The agent's turn ended without an
 answer, usually a dropped connection. Retry asks again.

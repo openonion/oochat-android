@@ -61,7 +61,7 @@ class TranscriptTapDismissesKeyboardComposeTest {
                     items = items,
                     timestamps = items.associate { it.id to 1_700_000_000_000L },
                     wasCleared = false,
-                    onRespond = {},
+                    onRespond = { _, _ -> },
                     onApprove = { _, _, _, _, _ -> },
                     onOnboard = { _, _, _ -> },
                     onPlanReviewResponse = {},

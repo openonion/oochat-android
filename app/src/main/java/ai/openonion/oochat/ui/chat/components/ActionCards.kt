@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -60,7 +61,10 @@ internal fun AskUserCard(
     item: ChatItem.AskUser,
     onRespond: (String) -> Unit
 ) {
-    var submitted by remember(item.id) { mutableStateOf(false) }
+    // Local as well as on the item: the tap disables at once, before the
+    // ViewModel's copy of the card comes back with its answer.
+    var tapped by remember(item.id) { mutableStateOf(false) }
+    val submitted = tapped || item.answer != null
 
     // No Card: the option buttons already carry the weight. [ApprovalCard]
     // keeps its card — that one is a decision gate, this is a question.
@@ -73,7 +77,7 @@ internal fun AskUserCard(
         Text(text = item.text, style = MaterialTheme.typography.bodyMedium)
         item.options.forEachIndexed { index, option ->
             val onClick = {
-                submitted = true
+                tapped = true
                 onRespond(option)
             }
             // One filled button, not N. No "recommended" flag exists on the
@@ -99,16 +103,36 @@ internal fun AskUserCard(
                 }
             }
         }
+        if (item.refused) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Devices,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(MaterialTheme.spacing.xs))
+                Text(
+                    NO_LONGER_WAITING,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
     }
 }
+
+/** The Host refused an answer: it was no longer waiting (another device answered, or the turn ended). */
+private const val NO_LONGER_WAITING = "No longer waiting for an answer"
 
 /**
  * No riskLevel field exists on the wire protocol, so the Figma badge/coloring is dropped. Buttons instead port oo-chat-web's approval-buttons.tsx: two allow tiers, three reject modes matching APPROVAL_RESPONSE.scope/mode.
  */
-private enum class ApprovalOutcome { APPROVED, APPROVED_SESSION, SKIPPED, STOPPED }
+private enum class ApprovalOutcome { APPROVED, APPROVED_SESSION, SKIPPED, STOPPED, NOT_APPLIED }
 
 /** The wire-level answer, mapped to the confirmation copy shown in its place. */
 private fun ApprovalDecision.toOutcome(): ApprovalOutcome = when {
+    refused -> ApprovalOutcome.NOT_APPLIED
     approved && scope == "session" -> ApprovalOutcome.APPROVED_SESSION
     approved -> ApprovalOutcome.APPROVED
     mode == "reject_hard" -> ApprovalOutcome.STOPPED
@@ -441,6 +465,11 @@ private fun ApprovalConfirmationBar(tool: String, outcome: ApprovalOutcome, args
             Icons.Default.Block,
             MaterialTheme.colorScheme.error,
             "Execution stopped"
+        )
+        ApprovalOutcome.NOT_APPLIED -> Triple(
+            Icons.Default.Devices,
+            MaterialTheme.colorScheme.outline,
+            "$NO_LONGER_WAITING: $tool"
         )
     }
     // The receipt this leaves behind is otherwise indistinguishable from
