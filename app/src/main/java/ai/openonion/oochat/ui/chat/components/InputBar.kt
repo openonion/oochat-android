@@ -2,6 +2,7 @@ package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.ui.common.rememberPermissionGate
 import ai.openonion.oochat.ui.theme.spacing
@@ -37,9 +38,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -53,14 +57,20 @@ private data class PickedFile(val uri: Uri, val name: String)
 
 @Composable
 fun InputBar(
+    // Status only, like [isAgentWorking]: it no longer locks the field. A
+    // message sent while disconnected (or mid-reconnect) goes to the outbox and
+    // out on the next CONNECTED, as the user guide promises (W16AAPPLE-102).
+    // Only the approval chip, which talks to a live agent, still needs it.
     isConnected: Boolean,
     awaitingOnboardCode: Boolean = false,
-    isSending: Boolean,
+    // Whether there is an agent for a message to go to, connected or not.
+    // Without one the send path has nowhere to queue it (ChatViewModel's
+    // sendMessage returns early), so the field stays locked.
+    hasAgent: Boolean = true,
     // True while the agent has a running turn. It no longer locks anything:
     // the relay accepts an INPUT on a running session as runtime input
     // (ws_router/session.py's INPUT branch), so a message sent now reaches the
-    // agent mid-run. It only adds the Stop control below the field. Distinct
-    // from [isSending], which reflects the *connection* being mid-(re)connect.
+    // agent mid-run. It only adds the Stop control below the field.
     isAgentWorking: Boolean = false,
     // Tool-approval mode chip, on the row below the field alongside the session
     // usage. Defaults keep the dozens of existing InputBar call sites
@@ -69,6 +79,9 @@ fun InputBar(
     // True while approvalMode is only requested, not yet agent-confirmed —
     // see ConnectionRepository.modePending's doc.
     modePending: Boolean = false,
+    // Which modes the chip and sheet offer, and whether the Host owns them —
+    // see ConnectionRepository.sessionModes.
+    sessionModes: SessionModes = SessionModes.LEGACY,
     usage: SessionUsageTotals = SessionUsageTotals(0, 0.0, null),
     // The connected agent's published skills (AgentLiveProfile.skills), which
     // are the whole candidate set for the `/` palette. Empty for most agents,
@@ -86,10 +99,20 @@ fun InputBar(
     onVoiceTranscriptConsumed: () -> Unit = {},
     onQueryVoiceAmplitude: () -> Float = { 0f },
     onStop: () -> Unit = {},
+    draft: ChatComposerDraft = ChatComposerDraft(),
+    draftKey: String? = null,
+    onDraftChange: (ChatComposerDraft) -> Unit = {},
+    // The empty chat's layout (W16AAPPLE-113): the field as a card in the
+    // middle of the screen, every control on one row inside it, and no shelf.
+    centred: Boolean = false,
+    focusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var input by remember { mutableStateOf(TextFieldValue("")) }
+    val initialDraft = remember(draftKey) { draft }
+    var input by remember(draftKey) {
+        mutableStateOf(TextFieldValue(initialDraft.text, TextRange(initialDraft.text.length)))
+    }
     // One cap across images *and* files, not one each. The modern photo picker
     // enforces it in its own UI; the gallery and document fallbacks cannot —
     // they let you select fifty — so they are truncated on the way back, and
@@ -114,8 +137,14 @@ fun InputBar(
         }
         return existing + incoming
     }
-    var attachedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var attachedFiles by remember { mutableStateOf<List<PickedFile>>(emptyList()) }
+    var attachedImages by remember(draftKey) {
+        mutableStateOf(initialDraft.imageUris.mapNotNull { it.takeIf(String::isNotBlank)?.let(Uri::parse) })
+    }
+    var attachedFiles by remember(draftKey) {
+        mutableStateOf(initialDraft.files.mapNotNull { file ->
+            file.uri.takeIf(String::isNotBlank)?.let { PickedFile(Uri.parse(it), file.name) }
+        })
+    }
     // Null when no dictation is running. Held here, not in the ViewModel, because
     // the field's text is here — see [DictationAnchor].
     var dictationAnchor by remember { mutableStateOf<DictationAnchor?>(null) }
@@ -127,14 +156,42 @@ fun InputBar(
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var showModeSheet by remember { mutableStateOf(false) }
     val fieldInteractionSource = remember { MutableInteractionSource() }
+    val latestOnDraftChange by rememberUpdatedState(onDraftChange)
+
+    fun makeDraft(
+        text: String = input.text,
+        images: List<Uri> = attachedImages,
+        files: List<PickedFile> = attachedFiles
+    ) = ChatComposerDraft(
+        text = text,
+        imageUris = images.map(Uri::toString),
+        files = files.map { ChatComposerFile(it.uri.toString(), it.name) }
+    )
+
+    fun publishDraft(
+        text: String = input.text,
+        images: List<Uri> = attachedImages,
+        files: List<PickedFile> = attachedFiles
+    ) {
+        latestOnDraftChange(makeDraft(text, images, files))
+    }
+
+    LaunchedEffect(draftKey, draft) {
+        if (makeDraft() == draft) return@LaunchedEffect
+        input = TextFieldValue(draft.text, TextRange(draft.text.length))
+        attachedImages = draft.imageUris.mapNotNull { it.takeIf(String::isNotBlank)?.let(Uri::parse) }
+        attachedFiles = draft.files.mapNotNull { file ->
+            file.uri.takeIf(String::isNotBlank)?.let { PickedFile(Uri.parse(it), file.name) }
+        }
+    }
 
     // Text is required even with attachments staged: the relay rejects any
     // INPUT with an empty prompt regardless of images/files, in both the
     // new-turn and interject paths. Offering the send here only produced a
     // "prompt required" error every time. TextInputField's placeholder says
     // why while attachments are waiting.
-    val canSend = isConnected && !isSending && input.text.isNotBlank()
-    val fieldEnabled = isConnected
+    val fieldEnabled = composerEnabled(hasAgent, awaitingOnboardCode, isConnected)
+    val canSend = fieldEnabled && input.text.isNotBlank()
     // Dictation only writes into this field, so it needs no more than the field
     // itself does; it still waits out a dictation, because finishing one now
     // belongs to the waveform and this slot has nothing left to offer until the
@@ -161,13 +218,17 @@ fun InputBar(
         input = TextFieldValue("")
         attachedImages = emptyList()
         attachedFiles = emptyList()
+        publishDraft(text = "", images = emptyList(), files = emptyList())
     }
 
     // Every update is recomputed from the anchor, so a stream of partials
     // replaces its own last guess instead of appending each one.
     LaunchedEffect(voiceInput.transcript, voiceInput.phase) {
         val anchor = dictationAnchor ?: return@LaunchedEffect
-        DictationMerge.merge(anchor, voiceInput.transcript)?.let { input = it }
+        DictationMerge.merge(anchor, voiceInput.transcript)?.let {
+            input = it
+            publishDraft(text = it.text)
+        }
         if (!voiceInput.isBusy) {
             dictationAnchor = null
             onVoiceTranscriptConsumed()
@@ -184,7 +245,10 @@ fun InputBar(
     ) { uris ->
         if (uris.isNotEmpty()) {
             val fresh = uris.filterNot(attachedImages::contains)
-            accepted(attachedImages, fresh, attachedFiles.size)?.let { attachedImages = it }
+            accepted(attachedImages, fresh, attachedFiles.size)?.let {
+                attachedImages = it
+                publishDraft(images = it)
+            }
         }
     }
 
@@ -194,7 +258,10 @@ fun InputBar(
     ) { uris ->
         if (uris.isNotEmpty()) {
             val fresh = uris.filterNot(attachedImages::contains)
-            accepted(attachedImages, fresh, attachedFiles.size)?.let { attachedImages = it }
+            accepted(attachedImages, fresh, attachedFiles.size)?.let {
+                attachedImages = it
+                publishDraft(images = it)
+            }
         }
     }
 
@@ -203,7 +270,10 @@ fun InputBar(
     ) { uris ->
         if (uris.isNotEmpty()) {
             val fresh = uris.filterNot(attachedImages::contains)
-            accepted(attachedImages, fresh, attachedFiles.size)?.let { attachedImages = it }
+            accepted(attachedImages, fresh, attachedFiles.size)?.let {
+                attachedImages = it
+                publishDraft(images = it)
+            }
         }
     }
 
@@ -245,7 +315,10 @@ fun InputBar(
         if (success && uri != null) {
             // The camera adds one, but it still has to fit the same budget.
             accepted(attachedImages, listOf(uri).filterNot(attachedImages::contains), attachedFiles.size)
-                ?.let { attachedImages = it }
+                ?.let {
+                    attachedImages = it
+                    publishDraft(images = it)
+                }
         }
         pendingCameraUri = null
     }
@@ -274,7 +347,10 @@ fun InputBar(
             // OpenMultipleDocuments has no built-in cap, so it is applied here
             // after merging with whatever was already picked.
             val fresh = picked.filterNot { p -> attachedFiles.any { it.uri == p.uri } }
-            accepted(attachedFiles, fresh, attachedImages.size)?.let { attachedFiles = it }
+            accepted(attachedFiles, fresh, attachedImages.size)?.let {
+                attachedFiles = it
+                publishDraft(files = it)
+            }
         }
     }
 
@@ -324,14 +400,23 @@ fun InputBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 16.dp)
+            .then(
+                // Centred, the card sits on the page itself; its parent sets the margins.
+                if (centred) {
+                    Modifier
+                } else {
+                    Modifier
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 16.dp)
+                }
+            )
     ) {
         if (showModeSheet) {
             ApprovalModeSheet(
                 current = approvalMode,
                 onSelect = onSelectApprovalMode,
-                onDismiss = { showModeSheet = false }
+                onDismiss = { showModeSheet = false },
+                modes = sessionModes
             )
         }
 
@@ -350,7 +435,11 @@ fun InputBar(
                 itemsIndexed(attachedImages, key = { _, it -> it.toString() }) { index, uri ->
                     AttachmentThumbnail(
                         uri = uri,
-                        onRemove = { attachedImages = attachedImages - uri },
+                        onRemove = {
+                            val next = attachedImages - uri
+                            attachedImages = next
+                            publishDraft(images = next)
+                        },
                         index = index,
                         total = attachedImages.size
                     )
@@ -366,7 +455,11 @@ fun InputBar(
                 itemsIndexed(attachedFiles, key = { _, it -> "file-${it.uri}" }) { _, file ->
                     AttachmentFileChip(
                         name = file.name,
-                        onRemove = { attachedFiles = attachedFiles - file }
+                        onRemove = {
+                            val next = attachedFiles - file
+                            attachedFiles = next
+                            publishDraft(files = next)
+                        }
                     )
                 }
             }
@@ -409,62 +502,112 @@ fun InputBar(
             onSelect = {
                 val completed = SlashCommandMatcher.completion(it)
                 input = TextFieldValue(completed, TextRange(completed.length))
+                publishDraft(text = completed)
             }
         )
 
+        val onFieldChange: (TextFieldValue) -> Unit = { edited ->
+            dictationAnchor = dictationAnchor?.let {
+                DictationMerge.onFieldChanged(it, input.text, edited.text)
+            }
+            input = edited
+            publishDraft(text = edited.text)
+        }
+        // Idle: mic and Send. Running: Stop takes the circle, with Send
+        // beside it once there is a follow-up to queue. The mic stays
+        // through a dictation started before the turn, so it can finish.
+        val sendControls: @Composable () -> Unit = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!isAgentWorking || voiceInput.isBusy) {
+                    MicButton(enabled = micEnabled, onClick = requestMicPermission)
+                }
+                if (!isAgentWorking || canSend) {
+                    SendButton(enabled = canSend, onClick = ::submit, quietWhenDisabled = centred)
+                }
+                if (isAgentWorking) {
+                    StopButton(onClick = onStop)
+                }
+            }
+        }
+        val approvalChip: @Composable () -> Unit = {
+            ApprovalModeChip(
+                mode = approvalMode,
+                // Switching mode is a message to a running agent; with no live
+                // socket there is nothing to send it to. A Host that owns the
+                // mode also refuses a change mid-turn ("Session is busy"), so
+                // there the chip waits for the turn instead of inviting one.
+                enabled = isConnected && !(sessionModes.hostManaged && isAgentWorking),
+                // Only offline reads as switched off; held for a running turn,
+                // it still shows the mode in force.
+                dimmed = !isConnected,
+                pending = modePending,
+                turnsLeft = sessionModes.turnsLeft,
+                onCycle = onCycleApprovalMode,
+                onOpenSheet = { showModeSheet = true }
+            )
+        }
+
+        if (centred) {
+            val attachmentCount = attachedImages.size + attachedFiles.size
+            CentredTextInputField(
+                value = input,
+                onValueChange = onFieldChange,
+                placeholder = composerPlaceholder(
+                    isConnected = isConnected,
+                    awaitingOnboardCode = awaitingOnboardCode,
+                    hasAgent = hasAgent,
+                    isAgentWorking = isAgentWorking,
+                    attachmentCount = attachmentCount,
+                    idle = "Ask a question or describe a task…"
+                ),
+                enabled = fieldEnabled,
+                interactionSource = fieldInteractionSource,
+                minTextHeight = if (LocalConfiguration.current.screenWidthDp >= 600) 82.dp else 66.dp,
+                focusRequester = focusRequester,
+                leadingTools = {
+                    AttachmentMenuButton(
+                        enabled = fieldEnabled,
+                        onCameraClick = requestCameraPermission,
+                        onGalleryClick = { launchImagePicker() },
+                        onFileClick = { filePicker.launch(arrayOf("*/*")) }
+                    )
+                    approvalChip()
+                },
+                trailingTools = {
+                    if (attachmentCount > 0) AttachmentCountBadge(attachmentCount)
+                    sendControls()
+                }
+            )
+            return@Column
+        }
+
         TextInputField(
             value = input,
-            onValueChange = { edited ->
-                dictationAnchor = dictationAnchor?.let {
-                    DictationMerge.onFieldChanged(it, input.text, edited.text)
-                }
-                input = edited
-            },
+            onValueChange = onFieldChange,
             isConnected = isConnected,
             awaitingOnboardCode = awaitingOnboardCode,
+            hasAgent = hasAgent,
+            enabled = fieldEnabled,
             isAgentWorking = isAgentWorking,
             interactionSource = fieldInteractionSource,
             attachmentCount = attachedImages.size + attachedFiles.size,
             onCameraClick = requestCameraPermission,
             onGalleryClick = { launchImagePicker() },
             onFileClick = { filePicker.launch(arrayOf("*/*")) },
-            trailingContent = {
-                // Mic and Send both, always: dictation appends to whatever is
-                // already in the field, so the two stopped being alternatives.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MicButton(enabled = micEnabled, onClick = requestMicPermission)
-                    SendButton(enabled = canSend, onClick = ::submit)
-                }
-            }
+            focusRequester = focusRequester,
+            trailingContent = sendControls
         )
 
-        // The composer's secondary shelf. Stop lives here rather than in the
-        // send slot: sending is a real option mid-run now, so Stop needed a
-        // home of its own, and a fourth button would not fit inside the pill.
+        // The composer's secondary shelf: approval mode, and what the session
+        // has cost so far.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = MaterialTheme.spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ApprovalModeChip(
-                mode = approvalMode,
-                // Switching mode is a message to a running agent; with no live
-                // socket there is nothing to send it to.
-                enabled = isConnected,
-                pending = modePending,
-                onCycle = onCycleApprovalMode,
-                onOpenSheet = { showModeSheet = true }
-            )
+            approvalChip()
             Spacer(modifier = Modifier.weight(1f))
-            if (isAgentWorking) {
-                // Live throughout a dictation now: the mic slot no longer turns
-                // into a second square glyph, so there is nothing to confuse it
-                // with, and interrupting a runaway agent should not need to wait
-                // for the sentence you are dictating at it to finish.
-                StopButton(onClick = onStop)
-                Spacer(modifier = Modifier.padding(horizontal = MaterialTheme.spacing.xxs))
-            }
             SessionUsageSummary(usage)
         }
     }
@@ -487,6 +630,19 @@ fun InputBar(
  * getData, so both shapes are read.
  */
 /** Attachments per message, images and files counted together — see InputBar's fitting(). */
+/**
+ * Whether the composer takes input. The one rule, shared with ChatScreen's
+ * dimming so the box can never look locked while it works, or the reverse.
+ *
+ * Not gated on the connection: offline, the message is queued (W16AAPPLE-102).
+ * A gate still waiting for an invite code is the exception, since that code
+ * goes in the card above, not here. Paired with !isConnected, as in
+ * TextInputField's placeholder: the flag also follows an unanswered gate card,
+ * which must not lock a connected composer.
+ */
+internal fun composerEnabled(hasAgent: Boolean, awaitingOnboardCode: Boolean, isConnected: Boolean): Boolean =
+    hasAgent && !(awaitingOnboardCode && !isConnected)
+
 private const val MAX_ATTACHMENTS = 3
 
 /**

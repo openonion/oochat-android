@@ -169,9 +169,8 @@ have your own key. See §4.
 ## 4. Configuration and secrets
 
 **Nothing to configure before building.** No secret is compiled into the APK
-and there is no file to fill in. What is configurable — the relay, the agent,
-an optional per-agent API key — the user sets inside the running app, and it
-is kept in encrypted storage on the device.
+and there is no file to fill in. The relay and agent settings are entered inside
+the running app and kept in encrypted storage on the device.
 
 | Item | Status |
 |---|---|
@@ -192,7 +191,13 @@ Everything configurable is set **inside the app**:
 |---|---|---|
 | Relay / server URL | Onboarding, or the agent form | `https://oo.openonion.ai` |
 | Direct connection | Mode toggle on the same panel | off (relay) |
-| API key (optional) | Agent form | empty — stored in `EncryptedSharedPreferences`, excluded from cloud backup and device transfer, and never sent anywhere but the agent it belongs to |
+
+The former per-agent API key field has been removed. Legacy stored values remain
+only for compatibility and are ignored by connection logic. Connection
+authentication uses the device's Ed25519 signature on CONNECT, and an
+invite-gated agent uses an invite code or payment (`docs/protocol.md`). The
+account API key used by voice transcription is a separate credential
+(`docs/protocol.md`, voice input).
 
 ---
 
@@ -221,11 +226,11 @@ if a card asks for an invite code, the code is `OpenOnion`.
 
 Two things that are working as intended and can read as faults:
 
-- **The `/` command palette stays empty on both.** It lists the skills an agent
-  publishes to the relay's directory, fetched from `/api/agents/<address>` on
-  connect. Both of these agents publish an empty `skills` list — verified
-  against the live directory on 2026-08-09 — so there is nothing for the palette
-  to show. An agent that publishes skills will populate it.
+- **The `/` command palette stays empty on both.** It lists the skills the
+  agent's Host sends in `AGENT_PROFILE` once it has let you in, never the
+  relay's public directory. Both of these agents have an empty `skills` list —
+  verified against the live directory on 2026-08-09 — so there is nothing for
+  the palette to show. An agent with skills will populate it once you are in.
 - **Dictation may pause for a couple of seconds the first time**, showing
   "Preparing…". On a device with no usable speech recogniser the app spends that
   window proving the recogniser is dead before falling back to server

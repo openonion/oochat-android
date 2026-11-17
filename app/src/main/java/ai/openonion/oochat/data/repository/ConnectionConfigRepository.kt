@@ -1,6 +1,7 @@
 package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.domain.model.canonicalAgentAddress
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -52,4 +53,19 @@ interface ConnectionConfigRepository {
      * Update the agent address for the current configuration.
      */
     suspend fun updateAgentAddress(address: String?)
+}
+
+/**
+ * Saves [address] as the saved config's agent when that config is the direct
+ * server at [serverUrl] and names no agent (W16AAPPLE-98). Such a config comes
+ * from a version of the app that allowed it: the server URL then stood in for
+ * the address, which the Host refuses. Once the server's /info has named the
+ * agent, saving it lets the chat screen, and every later start, connect to it.
+ * A config that already names an agent, or another server, is left as it is.
+ */
+suspend fun ConnectionConfigRepository.adoptResolvedAddress(serverUrl: String, address: String) {
+    val config = getConfig() ?: return
+    if (!config.agentAddress.isNullOrBlank()) return
+    if (config.serverUrl.trim() != serverUrl.trim()) return
+    updateAgentAddress(canonicalAgentAddress(address))
 }

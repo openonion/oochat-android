@@ -9,6 +9,126 @@ For the complete server-side contract, see
 `connectonion-self-deploy/docs/network/websocket-protocol.md`. That repository
 is an internal reference implementation, not an Android project dependency.
 
+## OIP conformance status
+
+This Android client currently targets the OIP 0.1 WebSocket profile. The
+conformance checklist records the frames and lifecycle behaviors implemented by
+the client, together with automated evidence for each status.
+
+- **Supported** means the frame or behavior is implemented and covered by tests.
+- **Partial** means it is recognized but intentionally limited or only partly
+  represented by the Android client.
+- **Missing** means it is defined by the referenced protocol profile but is not
+  implemented here.
+
+OIP 0.2 has not yet been adopted by the Android client. Its status is recorded
+as missing/deferred until version negotiation, frame schemas, and compatibility
+tests are implemented.
+
+The authoritative ConnectOnion OIP implementation reference is the
+[OIP network package](https://github.com/openonion/connectonion/tree/main/connectonion/network/oip).
+
+### Client-to-server frame checklist
+
+| Frame | Status | Evidence |
+| --- | --- | --- |
+| `CONNECT` | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `INPUT` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `EXEC` | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `WIKI_READ` | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `PONG` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `ASK_USER_RESPONSE` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `APPROVAL_RESPONSE` | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `INTERRUPT` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `PLAN_REVIEW_RESPONSE` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `ULW_RESPONSE` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `mode_change` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt) |
+| `ONBOARD_SUBMIT` | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `SESSION_STATUS` request | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `PROVIDER_PERMISSION_CHANGE` | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`WorkRoomPermissionsTest`](../app/src/test/java/ai/openonion/oochat/ui/workroom/WorkRoomPermissionsTest.kt), [`ProviderPermissionControlTest`](../app/src/test/java/ai/openonion/oochat/domain/model/ProviderPermissionControlTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt); a Work Room's provider permission mode (W16AAPPLE-43) |
+| `PROVIDER_INPUT` | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`WorkRoomInputsTest`](../app/src/test/java/ai/openonion/oochat/ui/workroom/WorkRoomInputsTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt); a message typed into a Work Room (W16AAPPLE-35) |
+| `SESSION_SYNC` index request | Supported | [`SessionSyncProtocolTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SessionSyncProtocolTest.kt), [`SessionSyncClientTest`](../app/src/test/java/ai/openonion/oochat/network/SessionSyncClientTest.kt), [`SessionSyncRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/SessionSyncRepositoryImplTest.kt), [`SyncRecentChatsUseCaseTest`](../app/src/test/java/ai/openonion/oochat/domain/usecase/SyncRecentChatsUseCaseTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt); complete indexes are atomically reconciled on connect and reconnect, with one full retry for an expired cursor |
+| OIP 0.2 descriptor | Missing / deferred | No Android implementation or compatibility test |
+
+### Server-to-client frame checklist
+
+| Frame | Status | Evidence |
+| --- | --- | --- |
+| `PING` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `CONNECTED` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `AGENT_PROFILE` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `DASHBOARD_SNAPSHOT` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `CONTROL_CENTER_APP` | Partial | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt); [`ControlCenterPageTest`](../app/src/test/java/ai/openonion/oochat/ui/controlcenter/ControlCenterPageTest.kt), [`ControlCenterHostTest`](../app/src/test/java/ai/openonion/oochat/ui/controlcenter/ControlCenterHostTest.kt), [`ControlCenterWebViewTest`](../app/src/test/java/ai/openonion/oochat/ui/controlcenter/ControlCenterWebViewTest.kt), and on a device [`ControlCenterBridgeTest`](../app/src/androidTest/java/ai/openonion/oochat/ui/controlcenter/ControlCenterBridgeTest.kt); the app is shown on the agent's Home, but it is given no device capabilities and `conversation: "new"` is refused |
+| `CONTROL_CENTER_STATE` | Partial by design | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt); the status and error are logged, and the administrator's history and update schedule are not used |
+| `llm_call` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `llm_result` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `thinking` | Supported | [`StreamingFramesSpecTest`](../app/src/test/java/ai/openonion/oochat/network/StreamingFramesSpecTest.kt) |
+| `tool_call` | Supported | [`StreamingFramesSpecTest`](../app/src/test/java/ai/openonion/oochat/network/StreamingFramesSpecTest.kt) |
+| `tool_result` | Supported | [`StreamingFramesSpecTest`](../app/src/test/java/ai/openonion/oochat/network/StreamingFramesSpecTest.kt) |
+| `provider_invocation` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`WorkRoomsTest`](../app/src/test/java/ai/openonion/oochat/domain/model/WorkRoomsTest.kt) |
+| `provider_activity` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`WorkRoomsTest`](../app/src/test/java/ai/openonion/oochat/domain/model/WorkRoomsTest.kt) |
+| `provider_message` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`WorkRoomsTest`](../app/src/test/java/ai/openonion/oochat/domain/model/WorkRoomsTest.kt) |
+| `provider_artifact` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`WorkRoomsTest`](../app/src/test/java/ai/openonion/oochat/domain/model/WorkRoomsTest.kt) |
+| `provider_session` | Not yet: ignored as unknown frames (W16AAPPLE-40) | - |
+| `PROVIDER_PERMISSION_ACK` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`WorkRoomPermissionsTest`](../app/src/test/java/ai/openonion/oochat/ui/workroom/WorkRoomPermissionsTest.kt); settles the permission control, and only `accepted: true` is an acceptance |
+| `PROVIDER_INPUT_ACK` | Supported | [`ProtocolParserWorkRoomTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt), [`WorkRoomInputsTest`](../app/src/test/java/ai/openonion/oochat/ui/workroom/WorkRoomInputsTest.kt); clears a Work Room draft only when `accepted` is `true` |
+| `plan` | Supported | [`StreamingFramesSpecTest`](../app/src/test/java/ai/openonion/oochat/network/StreamingFramesSpecTest.kt) |
+| `agent_image` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `assistant` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `session_sync` | Partial | [`ProtocolParserSessionSyncTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserSessionSyncTest.kt); assistant messages are replayed, while other session entries are not rendered as separate items |
+| `SESSION_SYNC_RESULT` index response | Supported | [`SessionSyncProtocolTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SessionSyncProtocolTest.kt), [`SessionSyncClientTest`](../app/src/test/java/ai/openonion/oochat/network/SessionSyncClientTest.kt), [`SessionSyncRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/SessionSyncRepositoryImplTest.kt), [`SyncRecentChatsUseCaseTest`](../app/src/test/java/ai/openonion/oochat/domain/usecase/SyncRecentChatsUseCaseTest.kt); pages are combined and revision-aware changes plus the final cursor are committed to Room together |
+| `user_input` | Partial by design | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt); ignored because the local user message is authoritative |
+| `ask_user` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt) |
+| `approval_needed` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`ProtocolParserWorkRoomApprovalTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserWorkRoomApprovalTest.kt), [`WorkRoomApprovalReconnectTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/WorkRoomApprovalReconnectTest.kt); from inside a Work Room too (W16AAPPLE-36) |
+| `ONBOARD_REQUIRED` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `ONBOARD_SUCCESS` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `intent` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `eval` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `compact` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `tool_blocked` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `plan_review` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `files_received` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `diff_preview` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `ulw_turns_reached` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `mode_changed` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt) |
+| `mode_budget_changed` | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt) |
+| `RUNTIME_INPUT_ACK` | Supported | [`ProtocolParserRuntimeInputTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserRuntimeInputTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `OUTPUT` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `EXEC_RESULT` | Supported | [`ProtocolParserExecTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserExecTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `WIKI_RESULT` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`RemNotebookTest`](../app/src/test/java/ai/openonion/oochat/domain/model/RemNotebookTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| `ERROR` | Supported | [`ProtocolParserTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserTest.kt), [`ProtocolParserVersionRejectionTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserVersionRejectionTest.kt), [`ProtocolParserRuntimeInputTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserRuntimeInputTest.kt) |
+| `SESSION_STATUS` response | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt) |
+
+### Lifecycle and security evidence
+
+| Capability | Status | Evidence |
+| --- | --- | --- |
+| OIP 0.1 descriptor is sent in `CONNECT` | Supported | [`OutgoingMessagesTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/OutgoingMessagesTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| Incompatible protocol versions fail once without a reconnect loop | Supported | [`ProtocolParserVersionRejectionTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserVersionRejectionTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`ConnectToAgentUseCaseTest`](../app/src/test/java/ai/openonion/oochat/domain/usecase/ConnectToAgentUseCaseTest.kt) |
+| `signed_commands` capability is enabled by `CONNECT` | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| Signed command payloads contain a nonce and timestamp | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt), [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| Signed command replay and tampering are rejected | Supported | [`SignedCommandTest`](../app/src/test/java/ai/openonion/oochat/data/protocol/SignedCommandTest.kt) |
+| `session_id` is restored and sent on reconnect | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`ConnectionRepositorySessionPersistenceTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositorySessionPersistenceTest.kt) |
+| `last_msg_id` is sent for replay recovery | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt), [`ProtocolParserLiveFlowTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserLiveFlowTest.kt) |
+| `session_modes` on `CONNECTED` sets the mode and the modes on offer | Supported | [`ProtocolParserStatusEventsTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserStatusEventsTest.kt), [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt) |
+| `server_newer` session data is merged | Supported | [`ConnectionRepositoryImplTest`](../app/src/test/java/ai/openonion/oochat/data/repository/ConnectionRepositoryImplTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt) |
+| Recent Chat index refreshes on connect and reconnect | Supported | [`SyncRecentChatsUseCaseTest`](../app/src/test/java/ai/openonion/oochat/domain/usecase/SyncRecentChatsUseCaseTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt) |
+| Reconnect retries use bounded backoff and stop after the attempt limit | Supported | [`AgentConnectionRobolectricTest`](../app/src/test/java/ai/openonion/oochat/network/AgentConnectionRobolectricTest.kt) |
+| Runtime input acknowledgement is handled without ending the turn | Supported | [`ProtocolParserRuntimeInputTest`](../app/src/test/java/ai/openonion/oochat/network/ProtocolParserRuntimeInputTest.kt), [`ChatViewModelTest`](../app/src/test/java/ai/openonion/oochat/ui/chat/ChatViewModelTest.kt) |
+| OIP 0.2 negotiation and frame compatibility | Missing / deferred | No Android implementation or compatibility test |
+
+### Checklist maintenance
+
+Every pull request that changes a wire frame, parser branch, signing rule,
+reconnect rule, or compatibility behavior must update the affected checklist row
+and its evidence links.
+
+A frame or behavior may be marked **Supported** only when its implementation and
+automated evidence are present in the same branch. If support is intentionally
+limited, the row must remain **Partial** and explain the limitation. Deferred
+protocol versions or frames remain **Missing / deferred** until implementation
+and compatibility tests are available.
+
 ## Connection target and lifecycle
 
 The default relay is `Constants.DEFAULT_SERVER_URL`:
@@ -21,7 +141,47 @@ https://oo.openonion.ai
 
 - Relay connections use `wss://.../ws/input` for an HTTPS relay, or
   `ws://.../ws/input` for an HTTP relay.
-- Direct agent connections use the supplied URL and connect to `/ws`.
+- Direct agent connections connect to the server URL's `/ws`
+  (`AgentConnection.directSocketUrl`): `wss://` for an `https://` or `wss://`
+  server, `ws://` for `http://`, `ws://` or no scheme, read in any case, with
+  any trailing slash dropped (W16AAPPLE-54, W16AAPPLE-55). A server URL that
+  already ends in `/ws`, as the Host announces its socket, is dialled as is,
+  as the ConnectOnion client does; the Host accepts only the exact path `/ws`
+  (W16AAPPLE-118).
+- A direct agent is always named by its address in CONNECT, never by its
+  server URL, which the Host refuses ("wrong recipient"). A config saved by an
+  older version with a server and no address gets the address from the
+  server's `GET /info` (`AgentDiscoveryService.infoUrl`: `https://` for an
+  `https://` or `wss://` server, `http://` for `http://` or `ws://`, without a
+  trailing `/ws`), and it is saved to the config (W16AAPPLE-98).
+
+Which one an agent gets is `resolveServerRoute` in `ConnectionConfig.kt`
+(W16AAPPLE-56), from the agent's saved server URL and `connectionMode`:
+
+| Saved server | `connectionMode` | Route |
+|---|---|---|
+| A default relay (any spelling in `Constants.DEFAULT_SERVER_URLS`) | any | The default relay's `/ws/input` |
+| Any other server | `relay` | Through that server as a self-hosted relay: its `/ws/input`, with `to` set |
+| Any other server | `direct`, or none recorded | Direct, at its `/ws` |
+
+A Host's relay is configurable (`relay_url` in its config), so a self-hosted
+relay is a supported setup. Discovery on a relay the user typed in saves its
+agents as `relay` on that relay, the agent form saves the mode the user picked,
+and an agent first reached through a link or onboarding is saved with the mode
+it was reached by. The same route is used for the chat socket, its reconnects,
+the cold-start config Loading dials, and the Recent Chat index
+(`SessionSyncClient`).
+
+A self-hosted relay URL loses any trailing `/` before `/ws/input` is appended,
+since discovery saves the URL as the user typed it.
+
+Before database version 17 the mode was never read, and an agent the chat saved
+after a direct connect kept the column's `relay` default.
+`AppDatabase.MIGRATION_16_17` therefore marks every `relay` agent on a
+non-default server as `direct`, which is the route each of them has always
+used, except agents saved by discovery (their row id is the agent's address,
+where the form and the chat's auto-save use a UUID). Those really are on the
+relay they were found on, so they stay `relay` and now connect through it.
 
 `WebSocketFactory` is the seam used to create an OkHttp `WebSocket` from a
 `Request` and `WebSocketListener`. Production uses `OkHttpWebSocketFactory`;
@@ -29,9 +189,15 @@ tests can inject a different implementation.
 
 After a transient socket failure or close, `AgentConnection` retries up to five
 times with exponential delays of 2, 4, 8, 16, and 32 seconds. It emits a
-`ConnectionEvent.Reconnecting` while retrying. A pending onboarding gate
+`ConnectionEvent.Reconnecting` while retrying. Each retry sends a new `CONNECT`
+carrying `session_id` and, once agent events have been handled on that session,
+`last_msg_id`, so the Host can replay what was missed; see
+[Reconnect and replay](#reconnect-and-replay).
+A pending onboarding gate
 suppresses automatic reconnects until the user acts, and a rejected onboarding
-submission opens a fresh connection so the server can send a new gate.
+submission opens a fresh connection so the server can send a new gate. A Host
+that refuses the client's OIP version ends the cycle with no reconnect at all;
+see [Incompatible protocol version](#incompatible-protocol-version).
 
 ## Client to server frames
 
@@ -47,12 +213,14 @@ They are `@Serializable` Kotlin data classes and are encoded with
 | Field | Meaning |
 | --- | --- |
 | `type` | Always `"CONNECT"`. |
-| `payload` | `ConnectPayload(timestamp, to)`; this is the signed payload. |
+| `protocol` | The OIP protocol descriptor, `OipProtocol.DESCRIPTOR`. See below. |
+| `payload` | `ConnectPayload(timestamp, to, nonce, signed_commands, extensions, session_sync_only)`; this is the signed payload. `nonce` is a fresh random UUID; `signed_commands` is always `1`. The final two fields are absent on ordinary chat connections and reserved for an index-only Session Sync connection. See [Signed commands](#signed-commands). |
 | `from` | The local Ed25519 address. |
 | `signature` | Hex Ed25519 signature over the canonical payload JSON. |
 | `timestamp` | Unix time in seconds. The same value is used in `payload`. |
 | `to` | Target agent address for relay mode; absent for direct mode. |
 | `session_id` | Optional persisted server-session identifier. |
+| `last_msg_id` | Optional. The Host's id for the last agent-log frame this connection handled on `session_id`; sent on a `CONNECT` for that same session (a reconnect, or a switch back) and ignored by the Host unless the session is still running. Unsigned, like `session_id`. See [Reconnect and replay](#reconnect-and-replay). |
 | `session` | Optional `SessionState` snapshot. |
 
 `AgentConnection.sendConnectMessage()` builds the payload and uses
@@ -60,14 +228,226 @@ They are `@Serializable` Kotlin data classes and are encoded with
 signature. Keeping one timestamp for the signed payload and envelope avoids a
 signature mismatch.
 
+The Host refuses a CONNECT signature it has seen before. Ed25519 is
+deterministic and the timestamp is in whole seconds, so the `nonce` is what
+keeps two CONNECTs in the same second distinct. `AgentConnection.nextConnectTimestamp()`
+also never repeats a second, as a second guard.
+
+#### Protocol descriptor
+
+Every `CONNECT`, including the one re-sent after an onboarding gate, declares
+the OIP version the client speaks:
+
+```json
+"protocol": {"name": "oip", "version": "0.1", "min_version": "0.1", "max_version": "0.1"}
+```
+
+The descriptor is defined once, in
+`app/src/main/java/ai/openonion/oochat/data/protocol/OipProtocol.kt`, and
+matches `OIP_PROTOCOL` in `connectonion-react`'s `src/connect/protocol.ts`.
+It sits at the top level of the envelope and is not signed. The Host reads
+`data.get("protocol")` from the envelope and verifies the signature over
+`payload` alone, so adding the descriptor does not change the signed bytes.
+
+The Host compares only `name` and `version`, in `supports_oip()` in
+`connectonion/network/host/protocol.py`. It accepts a `CONNECT` with no
+descriptor only during the rolling compatibility window. That window covers
+1.7.x and may close no earlier than 1.8.0a1 (2026-09-15). If the Host does not
+support the declared version, it answers with a non-retryable
+`{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,"protocol":{…}}`.
+The client treats that as final; see
+[Incompatible protocol version](#incompatible-protocol-version).
+
+Covered by `OutgoingMessagesTest`, which checks the serialised `CONNECT`
+frame, and by `AgentConnectionRobolectricTest`, which checks the frame sent
+when the socket opens and that the descriptor is not part of the signed
+payload.
+
+#### Incompatible protocol version
+
+When the Host refuses the descriptor, or accepts the `CONNECT` but advertises
+another version in its `CONNECTED` (W16AAPPLE-73), the client shows one error
+and does not reconnect on its own. Retrying would send the same descriptor and be refused
+the same way, so each attempt would cost battery and add another copy of the
+error.
+
+1. `ProtocolParser` turns an `ERROR` whose `code` is `-32010`
+   (`OipProtocol.UNSUPPORTED_VERSION_CODE`) into
+   `ConnectionEvent.ProtocolRejected`. The event carries the Host's version
+   from the frame's `protocol` descriptor, for example `oip/0.2`, or null if
+   the descriptor is missing or malformed. The name and version are
+   peer-controlled and end up in `app.log` and in the error text, so anything
+   other than a short token (letters, digits, `.`, `_`, `+`, `-`, at most 32
+   characters) also reads as null. Every other `ERROR`, including ones with a
+   string `code`, stays a `ConnectionError`. A `CONNECTED` whose `protocol`
+   descriptor fails `OipProtocol.supports()` becomes the same event, and its
+   session is not taken on. The check matches connectonion-react's
+   `supportsOip()`: a missing or null descriptor is accepted (a Host from before
+   descriptors), and otherwise `name` and `version` must be exactly ours; other
+   fields, such as `websocket_path` and `extensions`, are ignored. The app never
+   reads as connected, so messages queued while connecting are not sent to that
+   Host.
+2. `AgentConnection` marks the cycle as rejected, cancels any scheduled
+   reconnect, and closes the socket itself. The Host leaves the socket open
+   after its `ERROR`, and a later drop would otherwise start the reconnect
+   ladder. While the cycle is rejected, `attemptReconnect()`, `retryNow()` and
+   the socket reopen behind a conversation switch do nothing. That covers
+   socket drops, the network coming back, the app returning to the
+   foreground, and a switch that raced the refusal. Only a new `connect()`,
+   meaning the user trying again, clears the flag.
+3. `ConnectionRepositoryImpl` publishes
+   `ConnectionState.Error(retryable = false)` with the message from
+   `ServerErrorText.incompatibleProtocol()`, for example: "This agent uses a
+   different version of the chat protocol (oip/0.2) than this app (oip/0.1).
+   Update the app or the agent, then reconnect." It does this even if the
+   attempt had already connected, because an auto-reconnect after a Host
+   upgrade can be the `CONNECT` that is refused.
+4. `ConnectToAgentUseCase` does not make its usual second attempt after a
+   non-retryable error.
+5. `ChatViewModel` adds the message to the chat once. Its stale-session
+   suppression applies only to retryable errors, so a Host version that
+   happens to read like a stale-session error cannot hide the message.
+   `ConnectionBanner` titles the error "Incompatible version" rather than
+   "Connection failed", and keeps its Reconnect action: nothing recovers on its
+   own, and once the app or the agent is updated, that is the user's way back.
+
+Covered by `ProtocolParserVersionRejectionTest`, by the W16AAPPLE-12 and
+W16AAPPLE-73 sections of `AgentConnectionRobolectricTest`, and by `ConnectionRepositoryImplTest`,
+`ConnectToAgentUseCaseTest`, `ServerErrorTextTest`, `ChatViewModelTest`, and `ConnectionBannerTest`.
+
 When reconnecting, `ConnectionRepositoryImpl` restores the saved
 `SessionState` through `SessionStore`, calls `AgentConnection.setSession()`,
 and the next `CONNECT` includes its `session_id`. This is how a server session
 is resumed after an app restart or connection loss.
+A reconnect on the same
+`AgentConnection` also names the last event it handled; see
+[Reconnect and replay](#reconnect-and-replay).
+
+
+### Signed commands
+
+Every `CONNECT` signs `payload.signed_commands: 1`. This turns on the Host's
+v2 command gate for that socket. After that, every application command must
+carry its own Ed25519 signature, or the Host answers with an `ERROR` and does
+not act on it. Without the gate, anyone able to write to the socket, such as a
+relay, could inject commands or replay captured ones under the identity
+`CONNECT` authenticated. The capability is inside the signature, so it cannot
+be stripped to downgrade the socket. A pre-v2 Host ignores it.
+
+The envelope is built by `SignedCommand.envelope()` in
+`app/src/main/java/ai/openonion/oochat/data/protocol/SignedCommand.kt`, and
+`AgentConnection.signedCommand()` signs it with the connection's identity:
+
+```json
+{
+  "type": "APPROVAL_RESPONSE", "approved": true, "scope": "once",
+  "payload": {
+    "type": "APPROVAL_RESPONSE", "approved": true, "scope": "once",
+    "to": "0x3d40…", "timestamp": 1760000000, "nonce": "550e8400-…"
+  },
+  "from": "0xClientPublicKey",
+  "signature": "…"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| top-level fields | The command exactly as it was sent before v2, for a pre-v2 Host, which never reads `payload`. |
+| `payload` | The whole command plus `to`, `timestamp` and `nonce`. This is what is signed, and the only part a v2 Host executes. |
+| `payload.to` | The agent address `CONNECT` named. Signed on direct connections too, even though a direct `INPUT` carries no top-level `to`, so a command captured for one agent cannot be delivered to another. |
+| `payload.timestamp` | Unix time in seconds. The Host refuses one more than 300 seconds from its own clock. |
+| `payload.nonce` | A fresh random UUID per frame. Two identical commands in the same second would otherwise sign identical bytes, and the second would be refused as a replay. |
+| `from` | The local Ed25519 address. |
+| `signature` | Hex Ed25519 signature over `KeyManager.canonicalJson(payload)`: keys sorted at every depth, no whitespace, non-ASCII as UTF-8. |
+
+The Host's checks, in `authenticated_command_payload` in
+`connectonion/network/host/auth.py`, and the `ERROR` message each one sends:
+
+| Check | Refusal |
+| --- | --- |
+| Timestamp within 300 seconds | `unauthorized: signature expired` |
+| `payload.to` is the agent `CONNECT` named (relay connections) | `unauthorized: wrong recipient` |
+| Signature verifies against `from` | `unauthorized: invalid signature` |
+| `from` is the identity that opened the socket | `unauthorized: command signer does not own this connection` |
+| `payload.type` equals the frame's `type` | `unauthorized: signed command type mismatch` |
+| `payload.nonce` present | `unauthorized: signed command nonce required` |
+| Signature never used before (a shared, persistent ledger) | `unauthorized: signed command already used` |
+
+Signed: `INPUT`, `EXEC`, `ASK_USER_RESPONSE`, `APPROVAL_RESPONSE`, `INTERRUPT`,
+`PLAN_REVIEW_RESPONSE`, `ULW_RESPONSE`, `mode_change`, `WIKI_READ`, `PROVIDER_INPUT` and
+`PROVIDER_PERMISSION_CHANGE`. These are the frames
+the Host leaves unsigned on purpose (`SignedCommand.EXEMPT_TYPES`, matching
+`exempt` in `ws_router/session.py`):
+
+- `CONNECT` and `ONBOARD_SUBMIT` carry their own signatures.
+- `PONG` is a transport frame.
+- `SESSION_STATUS` on a live socket uses the identity `CONNECT` verified.
+
+If no identity is loaded, a command is dropped rather than sent unsigned.
+
+**Costs and gaps.**
+
+- An `INPUT`'s images and files are carried twice: once at the top level and
+  once in the signed payload. A message with attachments is therefore about
+  twice its old size on the wire.
+- Every signed timestamp must be within 300 seconds of the Host's clock, and
+  a phone's clock can be off by more. So the client signs with the server's
+  time (W16AAPPLE-90). `network/HostClock` reads the HTTP `Date` header of each
+  WebSocket upgrade and applies the difference to `CONNECT`, every signed
+  command and `ONBOARD_SUBMIT` on that socket:
+  - No `Date` header: the device clock, as before.
+  - Each new socket takes its own reading.
+  - The correction is bounded to 30 minutes (`HostClock.MAX_OFFSET_MS`). On
+    the relay path the header comes from the relay, and the Host records a
+    signature as used only once it has passed the expiry check. A relay that
+    moved the clock forward could therefore hold a command and deliver it up
+    to that much later. Past the bound the device clock is used.
+  - `nextConnectTimestamp()` follows a clock that has gone back by more than
+    5 seconds (the user fixed the date, or the correction arrived) instead of
+    holding every later `CONNECT` past the old, wrong second.
+
+  When the correction cannot help, the refusal (`unauthorized: signature
+  expired`) is shown as `ServerErrorText.CLOCK_WRONG`, advice to check the
+  device's date and time. That covers a connection error, a refused reconnect
+  and a refused invite code.
+
+  Account sign-in at `oo.openonion.ai/api/v1/auth` (the bearer token for voice
+  transcription) has the same five-minute window, and the app signs in again
+  on every launch (W16AAPPLE-91). `AccountRepositoryImpl` keeps its own
+  `HostClock`, corrected by each sign-in response that carries a `Date`
+  (`HostClock.correctFrom()`; a response without one keeps the correction),
+  with the same 30-minute bound. A 401 whose `Date` moves the correction by a
+  minute or more is retried once, signed with the server's time. A refusal is
+  blamed on the clock only when the server's time is more than five minutes
+  from the timestamp actually signed, so a retry signed with the server's time
+  never is. That failure is an `AccountClockException`, carrying the refusal as
+  its cause: dictation says to check the date and time instead of "Try again",
+  and Settings says so under the account. Covered by `AccountRepositoryImplTest`
+  (MockWebServer, real signatures), `HostClockTest`, `ChatViewModelTest` and
+  `SettingsViewModelTest`.
+- Every refusal comes back as an ordinary `ERROR`. On a live session it
+  surfaces as a `ConnectionError` like any other; in reply to a reconnect's
+  `CONNECT` it ends the reconnect (see [When a reconnect fails](#when-a-reconnect-fails)).
+  A correct client never triggers one except through the clock.
+- A command dropped for want of an identity is only logged; the UI is
+  not told. CONNECT needs the same keys, so this cannot happen on a live
+  connection in practice.
+
+Covered by `SignedCommandTest`, which signs every command type with real Ed25519
+and checks it against a model of the Host's gate. That covers a byte-for-byte
+canonical form taken from Python's own `json.dumps` (including tabs, control
+characters, DEL, U+2028 and emoji, where JSON encoders differ), a rejected replay, a fresh
+nonce for each repeated command, and refusal of an edited, relabelled,
+foreign-signed, misaddressed or stale command. Also covered by the W16AAPPLE-16
+section of `AgentConnectionRobolectricTest`, which checks the frames
+`AgentConnection` actually sends, the `CONNECT` capability and nonce, and that
+`PONG` and `SESSION_STATUS` stay unsigned.
 
 ### `INPUT` — `InputMsg`
 
-`INPUT` sends one user prompt.
+`INPUT` sends one user prompt. It is a [signed command](#signed-commands); the
+table below lists the command fields, which appear both at the top level and in
+the signed `payload`.
 
 | Field | Meaning |
 | --- | --- |
@@ -83,13 +463,186 @@ passes their data URLs through the connection layer. `AgentConnection` tracks
 the latest `input_id`; an `OUTPUT` for a different input is ignored in relay
 mode.
 
+### `EXEC` — `ExecMessage`
+
+`EXEC` asks the agent to run one named tool immediately with a JSON object of
+arguments. It is a client-requested tool command, separate from a conversational
+`INPUT` that may cause the agent to choose and run several tools itself.
+
+It is a [signed command](#signed-commands), built like every other one:
+`AgentConnection.signedCommand()` wraps `ExecMessage` in `SignedCommand.envelope()`.
+The table lists the command fields, which appear both at the top level and in
+the signed `payload`:
+
+| Field | Meaning |
+| --- | --- |
+| `type` | Always `"EXEC"`. |
+| `exec_id` | UUID identifying this tool command. |
+| `tool` | Name of the tool to run. |
+| `args` | JSON object containing the tool arguments. |
+| `to` | Target agent address. Kept at the top level too, for a pre-v2 relay that routes on it. |
+
+The envelope then adds `timestamp` and `nonce` to the signed `payload`, and
+`from` and `signature` beside it, exactly as for `INPUT`:
+
+```json
+{
+  "type": "EXEC", "exec_id": "request-id", "tool": "read_file",
+  "args": { "path": "README.md" }, "to": "agent-address",
+  "payload": {
+    "type": "EXEC", "exec_id": "request-id", "tool": "read_file",
+    "args": { "path": "README.md" }, "to": "agent-address",
+    "timestamp": 1730000000, "nonce": "fresh-request-value"
+  },
+  "from": "0xClientPublicKey",
+  "signature": "…"
+}
+```
+
+The Host's `ws_router/exec.py` reads `exec_id`, `tool` and `args`.
+
+The Android client waits for the server's `EXEC_RESULT` with the same `exec_id`.
+See [EXEC_RESULT](#exec_result) in the server-to-client section. It does
+not retry the command automatically after a timeout.
+
+Two refusals arrive as a plain `ERROR` with no `exec_id`, and both fail every
+waiting EXEC card at once instead of leaving it to time out:
+
+- `code: "provider_station_only"`: a Work Room Host takes no EXEC. It concerns
+  EXEC alone, so it is shown on the cards only, not again as a chat error.
+- `"authenticate first"`: refuses every command on the socket. On a connected
+  socket it means the Host lost the session, so the client reconnects
+  ([below](#when-a-reconnect-fails)). Nothing is sent again by itself.
+
+Any other refusal, such as a signed-command `unauthorized: …`, could belong to
+an `INPUT` instead, so a waiting EXEC is left to its timeout.
+
+### `WIKI_READ` — `RemReadMessage` (Rem)
+
+`WIKI_READ` asks the Host for its owner's Rem notebook (W16AAPPLE-69), as O Chat's
+private Rem page does (oo-chat #246, renamed from Wiki in #267). Rem was called
+Wiki until connectonion 1.9.0; the frames kept the old name. The Host's handler
+is `ws_router/rem.py` `handle_rem_read`.
+
+```json
+{"type": "WIKI_READ", "request_id": "6f1c…"}
+{"type": "WIKI_RESULT", "request_id": "6f1c…", "ok": true, "html": "<!doctype html>…"}
+{"type": "WIKI_RESULT", "request_id": "6f1c…", "ok": false, "error": "co rem is available only to the Host owner"}
+```
+
+It is a signed command, sent only on a ready socket and never queued.
+`AgentConnection.readRem()` waits 25 seconds for the `WIKI_RESULT` with its
+`request_id`, the same wait as O Chat. The outcome is a `RemOutcome`:
+
+| Host answer | Outcome |
+|---|---|
+| `ok: true` with the reader page | `Loaded`, the pages taken out of the page (below) |
+| `co rem is available only to the Host owner` | `NotOwner` |
+| `co rem is not available on this Host` | `NoNotebook` |
+| `co rem reader exceeds the 16 MiB limit` | `TooLarge` |
+| `Authentication required` (the Host restarted, or its session crashed, while the relay kept the socket open) | The client reconnects and `readRem()` reads once more, within the same 25-second wait (W16AAPPLE-108). `SessionLost` when the app will not reconnect by itself (lost again within the minute) or that read is refused too, both leaving Reconnect offered; `NotConnected` if the reconnect does not land in time |
+| `ERROR` `unknown message type: 'WIKI_READ'` (a Host older than Rem) | `HostTooOld`, and not shown again as a chat error |
+| Nothing within 25 s | `NoAnswer` |
+| The socket closes first | `NotConnected` |
+| Anything else | `Failed`; the Host's wording is logged, not shown |
+
+`html` is the Host's whole `rem/reader.py` page. The app does not display it.
+It reads the notebook snapshot embedded on the page's `const REM = {…};` line
+and keeps only each page's category, title, update time and Markdown text
+(`RemNotebook.parse`). The rest of that snapshot (the notebook's folder on the
+owner's machine, source folders, run logs, mail accounts) is dropped. The page itself
+is never logged. Parsing happens in `readRem()` once the answer is in, off the
+socket's thread, so a large notebook does not hold up chat frames.
+
+The contents list only the pages the Host reader lists (`listedRecords` in
+`rem/reader.html`). Pages held for review (`needs_review`), services still on a
+people page (`service`), duplicate skill catalog entries (`catalog_parent`),
+`skills/catalog/index.md` and the `notes` and `logs` categories are left off.
+They stay in the notebook, so a link still opens them (`RemPage.listed`).
+
+Rem labels a private sentence or clause with `[personal]` (family, home, trips)
+or `[sensitive]` (health, private money, legal, ID numbers), before its
+citations: `Recovering from knee surgery. [sensitive] [3]`. O Chat starts with
+these passages hidden, and the app has no way to show them, so
+`RemPassages.hide` drops each one, with its label and citations, using the same
+pattern as the Host reader's `privatePassages` (connectonion 1.9.3rc30): labels
+in either ASCII or full-width brackets (`［sensitive］［2］`) and in any case,
+clauses ending in `.!?;:,` or their Chinese forms with or without a space after,
+and no break at a dot inside a word or number (`harbour.com`, `120.5k`), inside
+quotes or inside code and links. A line left with nothing but labelled
+passages reads *Hidden labelled passage*. A list item left empty is removed.
+A label the pattern cannot cut around hides its whole line. Code blocks are
+left alone.
+
+Each kept title and page body then goes through `RemPrivacy.sanitize`, since
+pages are written from the owner's mail, chats and files:
+
+- Private key blocks, credentials in URLs (`https://user:…@host`), and token
+  shapes (Anthropic/OpenAI `sk-…`, GitHub `ghp_…`/`github_pat_…`, Slack `xox…`,
+  AWS `AKIA…`, Google `AIza…`, JWTs, `Bearer …`) become `[redacted]`.
+- So does the value of a named secret written with `:` or `=` (`password: …`,
+  `api key = …`, `invite code: …`, `OPENAI_API_KEY=…`, `DB_PASS=…`). Prose such
+  as "the token expired" is left alone, and so is code that reads a secret
+  rather than holding one: a call or an index (`await getToken()`,
+  `request.form["password"]`), a variable (`$TOKEN`), a dotted name
+  (`process.env.TOKEN`) or a keyword (`None`, `string`). An env name counts
+  only when it is a secret word or ends in `_` and one, so `BYPASS=1` and
+  `SORT_KEY=name` are kept.
+- Home folders (`/Users/<name>`, `/home/<name>`, `C:\Users\<name>`) are shown as
+  `~`, except inside a web address or a relative path
+  (`docs.example.com/home/…`, `src/home/…`). Any other absolute path becomes `[path removed]`. Web addresses and the
+  relative links between pages are kept.
+
+These are the app's own rules (`SensitiveText`, W16AAPPLE-50), which every
+other screen applies to what the agent sends. Neither OIP 0.1 nor 0.2 says
+what a client may display, so where paths go is this app's choice, by surface:
+
+| Surface | Credentials | Home folder | Other absolute paths |
+|---|---|---|---|
+| Transcript, tool and approval cards, diff previews, Work Room steps and files, EXEC output, the Control Center feed (`SensitiveText.redact`) | `[redacted]` | `~` | Kept: they are what the user is deciding on (W16AAPPLE-36), as O Chat shows them |
+| Error text, the reply notification, the Logs and Recovery screens, conversation titles, Rem (`SensitiveText.redactWithoutPaths`) | `[redacted]` | `~` | `[path removed]`: nothing is decided from them, and they are seen on the lock screen or pasted elsewhere |
+
+`ChatItemPrivacy` applies this to each chat item on its way to
+`ChatViewModel.uiState` (which the Work Room screen reads too) and the Control
+Center. The live Todo List (`ChatViewModel.plan`) and the agent's Home page
+(`ChatViewModel.dashboardHtml`, through `DashboardDocument.redactForDisplay`)
+are redacted the same way, except for a skill button's `data-ochat-skill` and
+`data-ochat-args`, which are sent back when tapped and so keep what the agent
+wrote. A Work Room run's progress and result summaries go through
+`SensitiveText.summaryText`, which replaces a raw payload as an error would, but
+without calling it one. Error text (a failed turn or Work Room run, compaction, blocked tool or
+invite, an EXEC error, the snackbar) goes through
+`SensitiveText.errorText`: a raw payload, meaning an object (JSON, a Python
+dict, bare keys), an array, an object's repr, a Python, JVM or JavaScript stack
+trace, or an HTML error page, is replaced whole by a fixed sentence, and anything else loses its
+paths as above. The items the ViewModel keeps, persists and answers from are
+never redacted, so a plan approval or a tapped `ask_user` option goes back as
+the agent wrote it (the option by its position, since two can redact alike),
+and Retry resends the user's message by its id, as they typed it. The user's
+own messages are redacted on screen like anything else.
+
+A link to another page (`[Harbour](../orgs/harbour.md)`, resolved from the page
+it is on by `RemNotebook.pageLinkedFrom`) opens that page. Any other link stays
+plain text. Citation markers (`[1]`, `[W12]`) show as plain text; the Host
+reader shows them as chips.
+
+Retrying cannot change `TooLarge`, `SessionLost` or `HostTooOld`, so those screens
+offer no **Try again**.
+
+
 ### Control and response frames
+
+Every control frame below except `PONG` is a signed command.
+`mode_change` (`ModeChangeMessage`, sent by `AgentConnection.setMode()`) is
+signed the same way; see [Session mode](#session-mode) for its two
+vocabularies. `SESSION_STATUS` (`SessionStatusQuery`) is unsigned; see
+[SESSION_STATUS](#session_status).
 
 | Frame model | Wire `type` | When it is sent |
 | --- | --- | --- |
 | `PongMessage` | `PONG` | Automatically after a server `PING`. |
-| `AskUserResponse` | `ASK_USER_RESPONSE` | The user answers an `ask_user` card. |
-| `ApprovalResponse` | `APPROVAL_RESPONSE` | The user allows or denies an `approval_needed` request. `scope` defaults to `"once"`; `mode` (`"reject_soft"`, `"reject_hard"`, or `"reject_explain"`) is only meaningful when `approved` is false. |
+| `AskUserResponse` | `ASK_USER_RESPONSE` | The user answers an `ask_user` card. `request_id` is that event's `id`. |
+| `ApprovalResponse` | `APPROVAL_RESPONSE` | The user allows or denies an `approval_needed` request. `scope` defaults to `"once"`; `mode` (`"reject_soft"`, `"reject_hard"`, or `"reject_explain"`) is only meaningful when `approved` is false. `request_id` is the event's `id`, left out when the event had none; the Host requires it when the session is open on more than one device. |
 | `InterruptMessage` | `INTERRUPT` | The user asks the agent to stop gracefully. No payload — the agent finishes the current step and returns a closing message rather than stopping mid-tool-call. |
 | `PlanReviewResponse` | `PLAN_REVIEW_RESPONSE` | The user answers a `plan_review` gate. Carries a single free-text `message`; the server treats it as a follow-up message, not a structured accept/reject verdict. |
 | `UlwResponse` | `ULW_RESPONSE` | The user answers a `ulw_turns_reached` checkpoint. `action` is `"continue"` or `"switch_mode"`; `turns` applies only when continuing, `mode` (`"safe"`, `"plan"`, `"accept_edits"`, or `"ulw"`) only when switching. |
@@ -119,39 +672,275 @@ types are returned as `ConnectionEvent.Unknown` and do not alter the chat.
 | Server `type` | Fields used by this client | Client behaviour |
 | --- | --- | --- |
 | `PING` | — | Emits `Ping`; `AgentConnection` sends `PONG`. |
-| `CONNECTED` | `session_id`, `session` | Marks the connection ready and persists the supplied session. |
+| `AGENT_PROFILE` | `session_id`, `name`, `address`, `model`, `tools`, `skills`, `balance_usd` | Emits `AgentProfileReceived` with the agent's connection profile, tools, skills, and optional balance. The Host sends this only once CONNECT has passed its trust gate, and it is the app's only source of skills: the relay's public profile (`/api/agents/<address>`) lists skills to anyone with the address, so it is never read (W16AAPPLE-71). Skills go through `AgentSkill.cleaned()`: nameless entries dropped, one entry per name (the first wins), and a blank or `"No description"` description read as none. |
+| `DASHBOARD_SNAPSHOT` | `html` | Emits `DashboardSnapshotReceived` for a non-blank dashboard within the size limit; oversized or blank content is ignored. |
+| `CONTROL_CENTER_APP` | `app.schema`, `app.sdk_version`, `app.revision`, `app.url`, `app.capabilities`, `app.review.status` | Emits `ControlCenterAppReceived`. The app is kept only when it is approved, speaks bridge version 1, is pinned to a `sha256:` revision and is served over `https` with no credentials, query or fragment; anything else, or `app: null`, reads as no app. See [Control Center](#control-center). |
+| `CONTROL_CENTER_STATE` | `state.status`, `state.error.code`, `state.error.message` | Emits `ControlCenterStateReceived`, which is logged: it is what explains an app that is missing. |
+| `CONNECTED` | `session_id`, `status`, `server_newer`, `session`, `session_modes`, `protocol` | A `protocol` descriptor naming another OIP version emits `ProtocolRejected` instead (see [Incompatible protocol version](#incompatible-protocol-version)). Otherwise, marks the connection ready and persists the supplied session. `status` and `server_newer` reach the chat screen, which acts on them once: see [CONNECTED status](#connected-status). `status` also sets the top bar's status line, and `session_modes` makes the Host the authority for the mode: see [Session status and mode](#session-status-and-mode). |
 | `llm_call` | `id`, `model` | Creates a running `ChatItem.Turn` / thinking item. |
 | `llm_result` | `id`, `status`, `model`, `duration_ms` | Updates the matching thinking item to done or error. |
-| `thinking` | `id`, `content`, `model` | Emits completed thinking metadata, or streams assistant text when `content` is present. |
-| `tool_call` | `tool_id`, `id`, `name`, `args` | Creates a running `ChatItem.ToolCall`. |
-| `tool_result` | `tool_id`, `id`, `name`, `status`, `result` | Updates a tool call to done or error. |
+| `thinking` | `id`, `content`, `kind`, `model` | With `content`, the agent's reasoning: a `ChatItem.Thinking` under the frame's `id` with `kind` set (`intent`, `reflect`, or `reasoning` when absent), rendered as a collapsible "Thought" rather than as a reply. Without `content`, completed thinking metadata on a `ChatItem.Turn`. See [Streaming frames](#streaming-frames). |
+| `tool_call` | `tool_id`, `id`, `name`, `args`, `status` | Creates a `ChatItem.ToolCall` keyed on `tool_id`. `pending`, `running`, `in_progress` or no status is running; anything else is an error. |
+| `tool_result` | `tool_id`, `id`, `name`, `status`, `result`, `timing_ms` | Updates the `ChatItem.ToolCall` with the same `tool_id`. Only `completed`, `success` or `done` is done; every other status, or none, is an error. |
+| `plan` | `entries[].content`, `entries[].priority`, `entries[].status` | Replaces the agent's Todo List (`ConnectionEvent.PlanUpdated`); an empty list clears it. Not a chat item: shown as `PlanPanel` above the transcript. A plan with any invalid entry is ignored whole. |
 | `agent_image` | `image` | Creates an image-only agent item. The value is a URL or base64 data URL. |
 | `assistant` | `content` | Creates an assistant turn using a stable content-derived ID. |
 | `session_sync` | `session.messages` | Replays non-empty assistant messages from the server snapshot. |
 | `user_input` | — | Ignored because the local `ChatItem.User` is already the source of truth. |
 | `ask_user` | `id`, `text`, `options`, `multi_select` | Creates an answer card and enters a waiting state. |
-| `approval_needed` | `id`, `tool`, `arguments`, `description`, `batch_remaining` | Creates an approval card and enters a waiting state. `batch_remaining` previews the next queued tool calls in the current approval batch. |
+| `approval_needed` | `id`, `tool`, `arguments`, `description`, `batch_remaining`, and from a Work Room `provider`, `invocationId`, `parentToolCallId`, `activityId`, `providerApproval` | Creates an approval card and enters a waiting state. `batch_remaining` previews the next queued tool calls in the current approval batch. A frame naming a Claude Code or Codex run is that run's request; see [Approvals in a Work Room](#approvals-in-a-work-room). |
 | `ONBOARD_REQUIRED` | `id`, `methods`, `payment_amount`, `payment_address` | Creates an onboarding card and enters a waiting state. |
-| `ONBOARD_SUCCESS` | `id`, `level`, `message` | Creates a success card; the connection re-authenticates on the live socket. |
+| `ONBOARD_SUCCESS` | `id`, `level`, `message` | Creates a success card. The client does not send CONNECT again: the Host completes the CONNECT it held back and sends CONNECTED itself, and a second CONNECT is refused with "already authenticated: open a new connection" (W16AAPPLE-83). The connection waits up to `CONNECTED_TIMEOUT_MS` for that CONNECTED, on the first socket too (see [When a reconnect fails](#when-a-reconnect-fails)). |
 | `intent` | `id`, `status`, `ack`, `is_build` | Updates a `ChatItem.IntentItem`. Status is `UNDERSTOOD` only when `status` is exactly `"understood"`, otherwise `ANALYZING`. |
 | `eval` | `id`, `status`, `passed`, `summary`, `expected`, `eval_path` | Updates a `ChatItem.EvalItem` holding the agent's self-grading result. Status is `DONE` only when `status` is exactly `"done"`, otherwise `EVALUATING`. |
-| `compact` | `id`, `status`, `context_before`, `context_after`, `context_percent`, `message`, `error` | Updates a `ChatItem.CompactItem` tracking context-window compaction. Status is `DONE` for `"done"`, `ERROR` for `"error"`, otherwise `COMPACTING` — the one status event with three terminal states rather than two. |
+| `compact` | `id`, `status`, `context_before`, `context_after`, `context_percent`, `message`, `error` | Updates a `ChatItem.CompactItem` tracking context-window compaction. Status is `DONE` for `"done"`, `ERROR` for `"error"`, otherwise `COMPACTING` — the one status event with three terminal states rather than two. Rendered as a subtle divider in the chat timeline (see [Compaction in the timeline](#compaction-in-the-timeline)). |
+| `diff_preview` | `id`, `path`, `preview`, `truncated`, `file_exists` | Creates a `ChatItem.DiffPreviewItem` showing the pending file change before its approval request. |
 | `tool_blocked` | `id`, `tool`, `reason`, `message`, `command` | Creates a `ChatItem.ToolBlockedItem` for a tool call that policy vetoed before it ran. Missing `tool`, `reason`, and `message` default to the empty string. |
 | `plan_review` | `id`, `plan_content` | Creates a `ChatItem.PlanReviewItem` and enters a waiting state until the user answers with `PLAN_REVIEW_RESPONSE`. |
 | `files_received` | `id`, `files[].name`, `files[].path` | Creates a `ChatItem.FilesReceivedItem` listing files the agent returned; an absent `files` array yields an empty list. |
 | `ulw_turns_reached` | `id`, `turns_used`, `max_turns` | Creates a `ChatItem.UlwTurnsReachedItem` and enters a waiting state until the user answers with `ULW_RESPONSE`. Both counters default to `0`. |
+| `RUNTIME_INPUT_ACK` | `session_id`, `id` | Emits `ConnectionEvent.RuntimeInputAcknowledged`: the host queued an `INPUT` that arrived mid-turn for the running turn's next iteration. `id` is the host's own UUID for the queued item, **not** the `input_id` we sent, so it cannot name the message it answers — see [Runtime input](#runtime-input). Not an `OUTPUT`: it does not end the turn. |
 | `OUTPUT` | `input_id`, `result`, `session` | Emits the final output when it belongs to the current input, or for any direct connection; updates the session snapshot. |
-| `ERROR` | `message`, `error` | Emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
+| `EXEC_RESULT` | `exec_id`, `status`, `result`, `error`, `tool`, `duration_ms` | Completes the pending direct `EXEC` request with a success or error outcome. |
+| `WIKI_RESULT` | `request_id`, `ok`, `html`, `error` | Completes the pending Rem read with the same `request_id`; see [WIKI_READ](#wiki_read--remreadmessage-rem). Not a chat item. |
+| `mode_changed` | `id`, `mode`, `triggered_by`, `turns_left` | Creates a `ChatItem.ModeChangedItem` (a thin "Switched to … mode" divider) and sets the mode chip; authoritative whether it answers this client's `mode_change` or the agent switched on its own. See [Session mode](#session-mode). |
+| `mode_budget_changed` | `mode`, `turns_left` | Emits `ConnectionEvent.ModeBudgetChanged`: full access's turn budget counted down. Not a chat item. |
+| `SESSION_STATUS` | `session_id`, `status` | Emits `SessionStatusReceived`. Settles turns a drop failed, and sets the top bar's status line when it is about the session on screen. See [SESSION_STATUS](#session_status). |
+| `ERROR` | `code`, `protocol`, `retryable`, `session_id`, `request_id`, `message`, `error` | With `code` `-32010`, emits `ProtocolRejected` (see [Incompatible protocol version](#incompatible-protocol-version)). With `code` `"RUNTIME_INPUT_REJECTED"`, emits `RuntimeInputRejected` instead of an error: the socket and the running turn are healthy, and `ConnectionError` could start the reconnect ladder (see [Runtime input](#runtime-input)). With `code` `"STALE_ANSWER"` (the Host was no longer waiting on that request: another device answered first, or the turn ended), emits `AnswerRefused` with `request_id`, for the same reason; the approval or ask_user card with that id then says "No longer waiting for an answer", and nothing is re-sent. With no `request_id`, a card is marked only if it is the one answered card sent without an id. `retryable` is read as true only for a literal boolean `true`. Every other `ERROR` emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
+
+### `EXEC_RESULT`
+
+`EXEC_RESULT` reports the outcome of one client-requested tool command. The
+`exec_id` connects the result to the pending `EXEC` request.
+
+A successful result has this form:
+
+```json
+{
+  "type": "EXEC_RESULT",
+  "exec_id": "request-id",
+  "status": "success",
+  "tool": "read_file",
+  "result": "file contents",
+  "duration_ms": 42.0
+}
+```
+
+An error result has this form:
+
+```json
+{
+  "type": "EXEC_RESULT",
+  "exec_id": "request-id",
+  "status": "error",
+  "tool": "delete_file",
+  "error": "Permission denied",
+  "duration_ms": 18.0
+}
+```
+
+The parser accepts a success only when `result` is present and accepts an
+error only when `error` is present. Frames with a missing `exec_id`, missing
+required content, or an unsupported status are ignored as unknown frames.
 
 For `assistant`, `thinking` text, `agent_image`, and `session_sync`, the parser
 uses `stableAssistantId()` to make replayed messages idempotent. This prevents
 the same assistant response from appearing multiple times after reconnecting.
+That is the second line of defence: `AgentConnection` first drops a repeat of a
+frame it has already handled (see [Reconnect and replay](#reconnect-and-replay)).
 
 The status and checkpoint events reuse the server's `id` instead. When a frame
 omits it the parser generates a UUID, so that frame cannot be correlated with a
 later update for the same item. `llm_result` and `tool_result` are stricter:
 with no `id` (or `tool_id`) there is nothing to update, so they parse to
 `ConnectionEvent.Unknown` rather than inventing one.
+
+### Streaming frames
+
+Checked against connectonion's own emitters (`core/tool_executor.py`,
+`core/wire_events.py`, `useful_plugins/re_act.py`,
+`useful_events_handlers/reflect.py`, `core/agent.py`) and the reference web
+client's mapper (`connectonion-react`'s `chat-item-mapper.ts`). Covered by
+`StreamingFramesSpecTest`, one section per frame type.
+
+**Stable ids.** Every logged frame carries its own trace `id`, which moves the
+replay cursor. The chat item a frame becomes is keyed on the id that names the
+*thing*, so a replay lands on the item already on screen:
+
+| Frame | Chat item id |
+| --- | --- |
+| `thinking` with text | the frame's `id` (a `thinking-` prefixed content hash if it has none, so it can never share an id with a reply of the same text) |
+| `tool_call`, `tool_result` | `tool_id`, the LLM's call id that tool_executor.py puts on both. Each frame's own `id` differs between the two and is only a fallback. |
+| `llm_call`, `llm_result` | the shared `id` |
+
+**Tool status.** On the live wire `wire_events.py` rewrites tool statuses to
+OIP's lifecycle: a start is `pending` or `in_progress`, a result is `completed`
+or `failed`. A replayed or older trace can still say `success`, `error`,
+`not_found` or `interrupted`. A result is terminal, so only a known success is
+shown as done; a missing or unknown status is shown as failed, as the Host's own
+replay (`session/ui.py`) and the web client do. `timing_ms` (float
+milliseconds) is kept on the item.
+
+**One bubble per turn.** A turn (everything between two of the user's
+messages) shows only its newest thought; a "Show all N thoughts" toggle above
+it lists the earlier ones, oldest first (`groupReasoningByTurn`,
+`ReasoningBubble`). The toggle's state is held by `MessageList` per turn, so it
+stays open as new thoughts arrive.
+
+**Reasoning versus reply.** `re_act` and `reflect` also append their reasoning
+to the session's `messages` as an assistant entry, so every `session_sync`
+after a `thinking` frame lists that text again as if it were a reply. The
+reducer drops a snapshot reply whose text is reasoning already on screen, and
+`mergeServerTranscript` counts stored reasoning rows as local copies, so the
+transcript replayed on CONNECT does not add it either.
+
+**Reconnect.** A `tool_result` updates the `ToolCall` with its `tool_id` in
+place, wherever it sits in the list. A replayed `tool_call` for a call already
+on screen never reopens it: the card keeps its status and result and only takes
+the `args` or name it was missing (a result can reach the list before its start
+when a replay begins mid-run). Replaying a whole execution over the list it
+produced leaves the list unchanged.
+
+**Plan.** Session state, not transcript, as in the web client's
+`CurrentTodoListPanel`. `ConnectionRepository.plan` holds what the panel shows,
+and `AgentConnection`'s session carries the same plan as `SessionState.plan`:
+
+- A `plan` frame replaces both.
+- A session snapshot (CONNECTED, `session_sync`, OUTPUT) with a valid `plan`
+  replaces it. One with no `plan`, or a malformed one, keeps the plan already
+  held for the same session (`remote-agent.ts`'s `_applySessionSnapshot` rule);
+  a different session's plan is never carried over.
+- The session, plan included, is saved with the rest of it
+  (`session_states.plan_json`, added in database v13) and echoed on CONNECT,
+  which the Host adopts as the session, so the agent's next turn keeps its
+  plan.
+- `connect()` and a conversation switch show the stored plan of the
+  conversation being opened. Nothing on the wire would bring it back otherwise:
+  the Host sends a session on CONNECTED only when its copy is newer
+  (`server_newer`) and replays frames only into a running turn.
+
+A stored plan that no longer decodes is dropped on its own; the rest of the
+session still restores.
+
+### Compaction in the timeline
+
+When the agent's context window fills, the server compacts it: earlier turns
+are replaced by a summary. The server announces this with two `compact`
+frames that share one `id`, for example:
+
+```json
+{"type":"compact","id":"c1","status":"compacting","context_percent":91.2}
+{"type":"compact","id":"c1","status":"done","context_before":90.0,"context_after":32.951}
+```
+
+The percentages are floats from 0 to 100, so the client parses them as
+`Double`. Both frames parse to `ConnectionEvent.ChatItemUpdated`, so the
+second replaces the first in place. `CompactDivider` (in
+`ui/chat/components/StatusItemCards.kt`) draws the item as a thin, centred,
+outline-coloured line rather than a card, because nothing about it needs an
+answer:
+
+| Status | Divider text |
+| --- | --- |
+| `COMPACTING` | "Compacting context…" |
+| `DONE` | "Context compacted: 90% → 33%" (rounded), else `message`, else "Context compacted"; followed by a hint that earlier messages were summarised and the agent may not recall their details. |
+| `ERROR` | `error`, else "Compaction failed", in the error colour. There is no memory-loss hint, because nothing was summarised. |
+
+`CompactItem` is persisted with the transcript (`TranscriptItemPayload.Compact`),
+so a restored chat still shows where the agent's memory was cut. If the stream
+ends while an item is still `COMPACTING`, `resolveRunningItems()` marks it `DONE`.
+
+## Runtime input
+
+An `INPUT` that reaches a host while that session's agent is running is treated
+as *runtime input* instead of starting a second turn. The host replies at once,
+on the same socket, with one of two frames:
+
+| Host reply | Meaning | Wire shape |
+| --- | --- | --- |
+| `RUNTIME_INPUT_ACK` | Queued for the running turn. | `{"type":"RUNTIME_INPUT_ACK","session_id":"…","id":"<host uuid>"}` |
+| `ERROR` + `RUNTIME_INPUT_REJECTED` | Not taken (the turn is sealed, or the agent lacks the `runtime_input` plugin). Nothing was queued. | `{"type":"ERROR","code":"RUNTIME_INPUT_REJECTED","message":"…","session_id":"…","retryable":true}` |
+
+Source of truth: `ws_router/session.py` in openonion/connectonion, which sends
+the ACK only after `push_runtime_input` accepted the text.
+
+**Linking a reply to its message.** Neither frame carries the `input_id` we
+sent: the ACK's `id` is minted by the host. A reply can therefore only be
+linked by there being exactly one candidate. `ChatViewModel` allows one message
+awaiting an answer at a time (`pendingRuntimeInput`) and holds its send lock
+until that answer arrives or `RUNTIME_INPUT_REPLY_TIMEOUT_MS` passes, so the next
+message cannot go out while one is owed. A reply can never be handed to the wrong
+message, even when the client was wrong about a turn running and the host never
+answers.
+
+The message is registered *before* the `INPUT` leaves: the host answers the
+moment it reads it, and a reply that beat the registration would find nobody
+waiting. Only mid-turn sends are registered; an `INPUT` to an idle agent starts a
+turn and gets no such reply.
+
+**Bubble state (`UserMessageState`).** A message sent into a running turn shows
+`AWAITING_ACK` ("Sending…") until the host answers:
+
+| Event | Result |
+| --- | --- |
+| `RUNTIME_INPUT_ACK` | `SENT` |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (first time) | `QUEUED`, then held until the turn's `OUTPUT` and sent again as an ordinary `INPUT`. The same bubble is reused and the same payload is sent, images and files included. |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (second time) | `FAILED` (tap to resend). A message is repeated once, never in a loop. |
+| `RUNTIME_INPUT_REJECTED`, not retryable | `FAILED` (tap to resend) |
+| `OUTPUT` with no reply | `SENT`. The host answers a runtime `INPUT` immediately, so silence until `OUTPUT` means the message reached an agent that had just gone idle and started its own turn. |
+| No reply within `RUNTIME_INPUT_REPLY_TIMEOUT_MS` | `SENT`, for the same reason. |
+| Any other `ERROR` frame | No change. It says nothing about whether the host took this message; the host's own refusal arrives as its own event. |
+| Disconnect / reconnect | `FAILED`. No reply can arrive on a dead socket and whether the host queued it is unknown. |
+
+**After a restart.** `FAILED` is saved (`chat_messages.delivery_state`, added
+in database v14), and so is a message still in the outbox, as `QUEUED` in the
+same column (W16AAPPLE-106). `SENT` comes back `SENT`. One still in the outbox
+comes back `QUEUED` ("Waiting to send..."), since the outbox survives the restart
+and will still send it. A message
+that was awaiting an answer, or held in memory (behind a running turn, for a
+resend, or after a retryable refusal), comes back `FAILED`, since its delivery
+is unknown or the hold was lost. A new message held behind a running turn is
+saved at the tap for this reason, already `FAILED`, and its row is moved to the
+end of the conversation when it is sent, so it still reloads below the reply it
+waited behind. One gap remains; see the last item under Known gaps below.
+
+**Settling a waiting message.** The screen settles "Waiting to send..." bubbles
+by what the outbox still holds for the conversation
+(`PendingMessageSink.countForConversation`, for the chat's own agent, which may
+not be the one the connection is on yet). The outbox sends oldest first and never
+drops a message, so all but the newest that many have gone: they become `SENT`
+and are saved so. It asks on `Connected`, again when the connection reports the
+flush finished (`OutboxFlushed`, since `Connected` arrives before the flush runs),
+and when a conversation loads while already connected (on relaunch the Loading
+screen connects first, and the outbox goes out then). A send the socket refused
+mid-flush goes back into the outbox, so it and those behind it keep waiting. The
+count includes messages queued before any conversation was named, which would go
+out in whichever conversation connects next: a bubble waits a little longer
+rather than being called sent too soon.
+
+**When this happens at all.** `ChatViewModel.sendWhenTheAgentIsIdle` still holds
+ordinary messages until the running turn ends (see `architecture.md`), so a
+message only goes out mid-turn when that hold times out
+(`ChatViewModel.TURN_WAIT_TIMEOUT_MS`) or the client's view of the turn was
+stale. The ACK handling is what makes that path honest rather than silent.
+A message with images or files is never sent into a running turn, because the
+host’s runtime-input queue keeps only the text. It is held until the turn ends.
+If the turn is still running after 2 minutes, the message is marked failed
+(tap to resend) rather than sent or held forever.
+
+**Known gaps.**
+
+- A reply that arrives with nothing awaiting it is logged and ignored. If a
+  refusal crossed the turn's `OUTPUT` on the wire, the `OUTPUT` has already
+  settled the message as `SENT` and the refusal cannot be attributed, so that
+  message is not resent.
+- Hosts older than the change that made the ACK truthful acknowledge input they
+  never drain. Nothing on the wire identifies such a host.
+- A message marked `FAILED` because the connection dropped while it awaited an
+  answer may still have reached the host. Its reply can arrive in the replay,
+  but the `FAILED` mark is saved, so it stays, with a resend on offer right
+  above its own answer. `resolveFalseFailures` clears false marks only on the
+  agent's turns, not on user messages.
 
 ## Session state and recovery
 
@@ -177,8 +966,879 @@ The recovery path is therefore:
 saved SessionState -> SessionStore.getSession(agentAddress)
                    -> AgentConnection.setSession(...)
                    -> next CONNECT carries session_id
+                   -> (a reconnect on the same AgentConnection also carries last_msg_id)
                    -> CONNECTED / OUTPUT / session_sync refresh local state
 ```
+
+### Session Sync retained-session index
+
+The experimental `session-sync/0.1` extension is a different protocol surface
+from the lower-case `session_sync` event above. `session_sync` carries one open
+conversation's current `SessionState`; the extension discovers the retained
+conversation summaries owned by the Ed25519 identity that signed `CONNECT`.
+
+An index connection offers the extension and asks not to create a chat inside
+the signed CONNECT payload:
+
+```json
+{
+  "extensions": {"session-sync": ["0.1"]},
+  "session_sync_only": 1
+}
+```
+
+It omits chat `session_id` and `session`. A supporting Host answers
+`CONNECTED` with `status: "index"` and selects
+`protocol.extensions["session-sync"] == "0.1"`. `OipProtocol.supportsSessionSync`
+checks that exact selection; absence or another version fails closed.
+
+`SESSION_SYNC` is a signed command. Omitting its opaque `cursor` requests a
+full snapshot; a final `SESSION_SYNC_RESULT` returns a new cursor for the next
+incremental request. Non-final pages return `next_page_token` instead, which
+must be drained before the cursor is replaced. Each result contains changed
+`sessions` and `removed_session_ids`. An `ERROR` with `code: "cursor_expired"`
+means the caller should discard the cursor and make one full request;
+`unsupported_extension` means an older Host remains local-only.
+
+`SessionSyncProtocol.kt` models and validates these frames. `SessionSyncClient`
+opens a separate, short-lived index socket, validates the exact negotiated
+extension, signs each request and drains every page before returning one
+snapshot. A partial fetch is never presented as authoritative state: timeout,
+premature close and malformed frames close the socket and fail the operation.
+`SessionSyncRepositoryImpl` then applies only newer revisions, explicit
+removals and the final identity-and-agent-scoped cursor in one Room transaction;
+existing message rows are preserved by targeted updates rather than parent-row
+replacement. The app refreshes this index when the agent connection is established.
+
+### Reconnect and replay
+
+A dropped socket does not stop the agent. The Host keeps the running turn and a
+log of everything the agent has sent on that session, so a client that comes
+back can ask for what it missed instead of losing it.
+
+**What the client sends.** Every `CONNECT` carries `session_id`. A `CONNECT` for
+the session the connection last handled agent frames on (a retry from the ladder
+or `retryNow()`, a switch back to that session, the re-`CONNECT` after an invite
+code) also carries `last_msg_id`: the Host's own id for the last agent-log frame
+handled there. The Host ignores it unless the session is still `running`. The id
+is unsigned and sits next to `session_id` on the envelope; the signed `payload`
+is still just `timestamp`, plus `to` in relay mode. A `CONNECT` for any other
+session (a different conversation, or a stale-session rejection, which drops the
+session) sends no `last_msg_id`.
+
+**What moves the cursor.** Any frame that carries an `id`, except the frames the
+Host writes straight to the socket instead of appending to its log: `CONNECTED`,
+`OUTPUT`, `ERROR`, `PING`, `AGENT_PROFILE`, `DASHBOARD_SNAPSHOT`,
+`SESSION_STATUS`, `RUNTIME_INPUT_ACK` (whose `id` is a UUID the Host mints for the
+queued input, not a log entry), `ONBOARD_REQUIRED`, `ONBOARD_SUCCESS`,
+`CONTROL_CENTER_APP` and `CONTROL_CENTER_STATE`
+(`HOST_FRAME_TYPES` in `ProtocolParser`). The Host stamps an `id` on every entry in its log, so this
+follows new event types (`turn_result`, `provider_message`, and so on)
+without a list to maintain, whether or not the client decodes them;
+`ProtocolParser` puts it in `ParseResult.msgId`. An id on one of the excluded
+frames would name nothing the Host could rewind to. `AgentConnection` stores the
+latest id together with its session and sends it only while that session is
+still the current one; `reset()` clears it.
+
+**What the Host does.**
+
+| Session on the Host | `CONNECTED` | Replay |
+| --- | --- | --- |
+| `running`, `last_msg_id` known | `status: "running"` | Every logged frame after that id |
+| `running`, no id or an unknown one | `status: "running"` | The whole current execution |
+| `connected`: the turn finished while the client was away | `status: "connected"` | None. If the Host's copy is newer, `CONNECTED` carries it and the app merges it (`ServerTranscriptReceived`). |
+| Not found | `status: "new"` | None |
+
+The Host finds the id by searching its log from the start and resumes after the
+*first* frame that carries it. An `llm_call` and its `llm_result` share one id, as
+do the statuses of a `compact` or an `eval`, so a replay can start earlier than
+the client expects and re-send frames it already has. The Host leaves
+de-duplication to the client.
+
+**De-duplication.** `ProtocolParser` gives each frame that becomes a chat item
+(or updates one) a `dedupeKey`: a SHA-256 of the frame as the client decodes it,
+without `session_id`. `AgentConnection.handleMessage` keeps the last
+`MAX_SEEN_FRAMES` (4096) keys and drops a frame whose key it has seen straight
+after parsing, before the session is updated and before `Waiting` or any chat
+event is emitted, so a repeat changes nothing. The key is not the raw text:
+through the relay every frame carries a `conn_id` that is new for each client
+socket, so the same logged event reads differently after a reconnect. Nor is it
+the `id` alone: the Host reuses one id for `llm_call` and `llm_result` and for
+every status of a `compact` or an `eval`, so comparing ids would drop real
+updates. (`tool_call` and `tool_result` share a `tool_id`, but each frame has its
+own `id`.) Three kinds of frame have no key and
+are never dropped: the snapshots the Host re-sends on every `CONNECT`
+(`AGENT_PROFILE`, `DASHBOARD_SNAPSHOT`, `CONTROL_CENTER_APP`, `CONTROL_CENTER_STATE`); `session_sync`, whose replay carries the
+session as it is now and so never equals the original, and which is already safe
+to receive twice (a reply's id comes from its content); and frames the client
+does not decode. A dropped repeat also leaves the cursor where it was. The
+item-level idempotence described above (`stableAssistantId()`, `dedupeUI()`)
+stays as the second line of defence.
+
+**Order.** `AgentConnection` handles frames one at a time, in the order they
+arrive on the socket's reader thread; the Host replays in log order and finishes
+the replay before any live frame; and `socketGeneration` discards late frames
+from a socket the client has already replaced. Nothing sorts events, so items
+are added to the chat in log order. The one deliberate exception is that cards
+waiting for the user's answer (approval, `ask_user`, and similar) stay pinned to
+the bottom of the list.
+
+**Buffers.** Events reach the chat through two `SharedFlow`s:
+`AgentConnection.events` and the chat bus in `ConnectionRepositoryImpl`. Both
+hold `AgentConnection.EVENT_BUFFER_CAPACITY` (1024) events and drop the oldest
+when full, so a stuck collector can never stall the socket. That is a bound, not
+a guarantee: a replay of more than about a thousand events arriving while the
+chat is busy can still lose the oldest.
+
+**Known gaps.** The cursor and the keys of the frames already seen live in the `AgentConnection`
+instance, in memory. A new instance (the Reconnect button, an app restart)
+starts without them, sends no `last_msg_id`, and the Host replays the whole
+current execution; only the item-level de-duplication then protects against
+repeats. Persisting the cursor is not implemented.
+
+Covered by `OutgoingMessagesTest` (the `CONNECT` wire shape), `ProtocolParserTest`
+(`msgId` on every log frame and no host frame; a `dedupeKey` that ignores `conn_id`
+and `session_id` and separates frames that differ), `AgentConnectionRobolectricTest`
+(the cursor is sent, scoped to its session and kept out of the signed payload;
+repeats are dropped once and in order, also when the relay names the new socket
+differently; snapshots still arrive; `reset()` and a switch away and back; a
+200-frame burst arrives whole), and `ConnectionRepositoryImplTest` (the same
+burst through the chat bus).
+
+### When a reconnect fails
+
+A dropped socket climbs `AgentConnection`'s reconnect ladder: five tries, 2, 4,
+8, 16 and 32 seconds apart (`MAX_RECONNECT_ATTEMPTS`, `reconnectBackoffMs`). Only
+`CONNECTED` resets it. Three things end a try early:
+
+| What happens on the reconnect socket | What the client does |
+| --- | --- |
+| `ERROR` from the relay saying the agent is offline (`Agent not connected: …`) | A failed rung, like a dropped socket. Closes the socket and climbs. No chat error per rung. |
+| Any other `ERROR` in reply to its `CONNECT` (trust, signature, the clock) | Stops the ladder, closes the socket, emits `ConnectionEvent.ReconnectRefused`. The repository shows it as `ConnectionState.Error`, humanised, with Reconnect. |
+| No `CONNECTED` within `CONNECTED_TIMEOUT_MS` (15 s) | A failed rung. Closes the socket and climbs. |
+
+This applies only to a socket opened after the cycle had reached the agent: a
+ladder retry, `retryNow()`, or a conversation switch. The Host keeps a socket
+open after an `ERROR`, so before this (W16AAPPLE-82) no close arrived to climb
+the ladder, and the repository read the `ERROR` as a business error on a live
+session: the screen sat on "Reconnecting…" for good. An `ERROR` after
+`CONNECTED` is still a non-fatal `ConnectionErrorOccurred`, except the one below.
+
+**The Host losing the session (W16AAPPLE-108).** Through the relay the Host keeps
+one session per app connection. When it restarts, or that session's task
+crashes, the relay keeps the app's socket open, and the next frame reaches a
+new, unauthenticated session: a command is refused with `ERROR "authenticate
+first (send CONNECT)"` (ws_router/agent_io.py), a Rem read with `WIKI_RESULT`
+`error: "Authentication required"` (ws_router/rem.py). On a connected socket,
+either one makes `AgentConnection.recoverLostSession` reopen the socket under the
+same session, as a relay reattach would: the state shows `Reconnecting`, and the
+fresh `CONNECT` authenticates it again. `authenticate first` is matched only on
+an `ERROR`, and `Authentication required` only on a `WIKI_RESULT`.
+
+Nothing is sent again by itself: a turn the old session had taken may already
+have run tools, and sending it again would repeat them. If a message was still
+unanswered (no `OUTPUT` since), the client first emits a `ConnectionError` with
+its own wording (`LOST_SESSION_MESSAGE`), which the chat shows as a failed turn
+with Retry; a Retry tapped during the reconnect waits in the outbox. A turn that
+was running is failed by the chat on `Reconnecting` anyway, and un-failed if the
+new `CONNECTED` says it is still running. A Rem read waits for the reconnect and
+is sent once more, all within its one 25-second wait.
+
+At most one such reconnect a minute (`SESSION_RECOVERY_WINDOW_MS`, timed with
+`SystemClock.elapsedRealtime()`). A session lost again within the minute ends the
+way a refused reconnect does: `ReconnectRefused`, so `Error` with Reconnect, which
+the chat shows on the turn, and a Rem read returns `SessionLost`. Reconnect builds
+a new connection, so it gets its own minute.
+
+The exception is a cycle that has passed an onboarding gate (W16AAPPLE-83).
+`ConnectToAgentUseCase` stops its own timer once `ONBOARD_REQUIRED` arrives, so
+from `ONBOARD_SUCCESS` on, every `CONNECT` in that cycle is waited on like a
+reconnect's: the `CONNECTED` the Host owes for the `CONNECT` it held back, and
+each retry after it. No `CONNECTED` within `CONNECTED_TIMEOUT_MS` closes the
+socket and climbs the ladder, which ends in `Disconnected`, instead of leaving
+the screen on "Connecting..." or "Reconnecting..." for good. A new `connect()`
+starts a fresh cycle, back on the use case's timer. On a socket that is already
+connected there is nothing held back, so nothing is waited for.
+
+**An offline agent (W16AAPPLE-79).** When the ladder runs out and the last try
+ended with the relay's offline verdict, the client says so once (the relay's
+reason, or `ReconnectRefused` with it if the cycle had connected before), then
+tries again every `OFFLINE_POLL_INTERVAL_MS` (60 s). These tries are quiet: no
+`Reconnecting` per try, so the screen keeps showing why it is not connected.
+They run only while the app is on screen (`ConnectOnionApplication.isInForeground`,
+passed down as `isAppVisible`). A try that comes due in the background is
+skipped, and `retryNow()`, which the chat screen calls when it comes back,
+goes at once with a fresh ladder. A plain network failure still stops at the
+cap with `Disconnected`, as before.
+
+**Returning to the app (W16AAPPLE-46).** On a return to the app or to the network,
+with no reconnect pending, `retryNow()` checks the socket instead: it sends
+`SESSION_STATUS` for the session on screen and, if no frame arrives within
+`FOREGROUND_PROBE_TIMEOUT_MS` (5 s), reopens it on the same connection, so the
+`CONNECT` carries `last_msg_id` and only what was missed is replayed. The reply is
+not shown: the Host answers `not_found` for a session that has not run a turn since
+it started. Covered by `ForegroundReturnTest`.
+
+Covered by `AgentConnectionRobolectricTest` (the W16AAPPLE-82, -79 and -108
+sections, on a virtual clock) and `ConnectionRepositoryImplTest` (a refused
+reconnect ends in `Error` although the attempt had connected; a lost session
+shows `Reconnecting` and connects again; Reconnect gets its own recovery), and
+`ChatViewModelTest` (a message lost with the session is failed with Retry and
+sent again only by Retry).
+
+### CONNECTED status
+
+`CONNECTED` answers a `CONNECT` and says what the Host holds for the session.
+`ProtocolParser` reads `status` into `ServerSessionStatus` (`new`, `connected` or
+`running`; anything else, or none, is `UNKNOWN`) and `server_newer` into a
+boolean, and `ConnectionState.Connected` carries both to the chat screen.
+`ChatViewModel.actOnHostAnswer` acts on them once the screen knows which
+conversation it is on, whether it opened the socket or joined one that was
+already live.
+
+| `status` | The Host | The app |
+| --- | --- | --- |
+| `running` | Is mid-turn on this session and replays what the client missed (see above). | Holds the composer behind the turn exactly as if this process had sent its `INPUT`: a message typed now waits for the turn, or rides it as runtime input (see [Runtime input](#runtime-input)). A turn that a dropped connection marked Failed is un-failed, and `SESSION_STATUS` is not asked. |
+| `connected` | Is idle: alive, or restored from disk. | Whatever the screen still shows in progress belongs to a turn that ended unheard, and no frame will ever finish it. It is settled the way an `OUTPUT` would settle it and saved, so the spinner does not come back with the next launch. A turn a drop already failed stays failed until the `SESSION_STATUS` reply and the replay say whether its answer arrived. |
+| `new` | Has no record: no id was sent, the id is unknown (same id), or it is another caller's (a new id, which the app adopts). | The conversation stays on screen. A turn still in flight can never finish, so it is marked Failed (Retry), other spinning cards stop, and `SESSION_STATUS` is not asked. A conversation with nothing in flight is left alone, which is every first connect of a new conversation. |
+| none, or `index` | An older Host, or a session-index socket. | Nothing. The `SESSION_STATUS` question after a drop is the only recovery. |
+
+**The answer has a lifetime.** `ConnectionState.Connected` stays in place for as long
+as the socket does, and every chat screen created on it starts from it, so a screen
+opened an hour later would act on a turn that ended long ago. The screen therefore
+acts once and calls `releaseSessionStatus()`, which sets `status` back to `UNKNOWN`
+and `server_newer` to false. The repository also releases it by itself when the
+connection moves to another conversation (the answer was about the old one) and when
+an `OUTPUT` arrives, before the event is emitted (the turn `running` described has
+ended). A release shows up as one more `Connected` state with no status, so after a
+drop that failed a turn the Host may be asked `SESSION_STATUS` twice instead of
+once. The second reply finds nothing left to do.
+
+**`server_newer`.** `CONNECT` carries no `session`, so to the Host the client's copy is
+empty and `server_newer` is true whenever the Host has history. `CONNECTED` then
+carries the Host's `session` and `chat_items`; the app does not read `chat_items`.
+It merges the assistant replies of `session.messages` into the conversation
+(`ConversationHistoryUseCase.mergeServerTranscript`), matched by their
+content-derived id. The merge only adds what is missing and never removes or
+rewrites a local row. A message the user has not sent yet, or one that failed, is
+untouched, and applying the same transcript twice, or after the live stream already
+delivered the reply, adds nothing. The text in the composer is state of the input
+bar alone, so no connection event touches it.
+
+**The outbox.** A message typed while the socket is down is shown as queued ("Waiting
+to send…") and parked in the connection's outbox, which flushes the moment
+`CONNECTED` lands. When the screen next sees `Connected` it marks those messages
+sent, which also unpins them from the bottom of the list so the reply lands below
+the question. A message held behind a running turn stays queued: it is waiting for
+the turn, not for the socket.
+
+The composer stays usable while disconnected, so the outbox is reachable
+(W16AAPPLE-102). With no connection object at all (before the first connect, or
+after one gave up) `ConnectionRepositoryImpl.sendMessage` queues the message for
+the conversation itself. Stopping the connection keeps the outbox: the banner's
+Stop, replacing the connection (Reconnect), `ConnectToAgentUseCase`'s
+first-connect timeout and cancelling the Loading screen all leave it alone, so a
+"Waiting to send..." bubble always goes out on the next connect to its
+conversation (W16AAPPLE-106, reversing W16AAPPLE-96's drop on Stop). The outbox
+is per agent but flushes per conversation, so another conversation's queued
+messages wait until it is the one connected. Their rows are saved as queued, so
+they still say "Waiting to send..." when that conversation is opened again, or
+after a restart. Clear chat drops only the cleared conversation's queued
+messages (`PendingMessageSink.clearConversation`), with or without a
+connection, and even if another conversation is open by the time it runs: it
+names the conversation it clears (`reset(conversationId)`). A message queued
+before any conversation was named is left alone, since it may be another's.
+
+The outbox is bounded (`MAX_PENDING_MESSAGES` per agent, and
+`MAX_PENDING_ATTACHMENT_BYTES` of attachments). When it is full a new message is
+refused, not queued, and its send fails, so the bubble offers Retry; nothing
+already queued is dropped to make room. That is what lets a message that is no
+longer in the outbox be taken as sent.
+
+**Known gaps.**
+
+- Tool calls, cards and footers of a turn that finished while the app was away are
+  not rebuilt. The app merges the transcript's assistant replies only.
+- The merge matches replies by content, so two identical replies in one
+  conversation count as one.
+- After `new` the Host's agent no longer has the earlier conversation while the app
+  still shows it: `CONNECT` carries no history for the Host to adopt, as the web
+  client's does.
+
+Covered by `ProtocolParserTest` (`status` and `server_newer` off the frame),
+`AgentConnectionRobolectricTest` (they reach the connection's event),
+`ConnectionRepositoryImplTest` (they reach the state, and are released),
+`ChatViewModelTest` (each status, the failed turn that stays failed, the outbox and
+the merge) and `ProcessDeathResumeTest` (a relaunch against the fake Host's three
+answers).
+
+## Session status and mode
+
+What the agent is doing, and how much it may do unasked, are both shown on the
+chat screen at all times (W16AAPPLE-18): the status in the top bar's second
+line, ahead of the model name, and the mode in the chip under the composer.
+
+### SESSION_STATUS
+
+The client asks:
+
+```json
+{"type": "SESSION_STATUS", "session": {"session_id": "550e8400-…"}}
+```
+
+The `session_id` is nested, unlike `CONNECT`'s. The frame is unsigned
+(`SignedCommand.EXEMPT_TYPES`): on a live socket the Host answers for the
+identity `CONNECT` verified. `ConnectToAgentUseCase.querySessionStatus()` sends
+it for the current session after a reconnect that failed a turn in flight (see
+[CONNECTED status](#connected-status)). The Host answers:
+
+```json
+{"type": "SESSION_STATUS", "session_id": "550e8400-…", "status": "running"}
+```
+
+| `status` | The Host | Turns a drop failed | Status line |
+| --- | --- | --- | --- |
+| `running` | Is still running the turn. | Un-failed. | Running |
+| `connected` | Is idle; the turn ended while the socket was away. | Settled from the replay if it carries the answer, else stay failed. | Idle |
+| `not_found` | Has no live session under this id, or it is another caller's. The same answer either way, so the query is no existence oracle. | Stay failed. | Session not found |
+
+`ServerSessionStatus.fromWire` reads all three, plus `CONNECTED`'s `new`.
+
+**The status line.** `ConnectionRepository.hostSessionStatus` keeps the last
+thing the Host said about the session on screen: `CONNECTED`'s `status`, then
+each `SESSION_STATUS` reply whose `session_id` is the current session (a reply
+about a session the user has since left is ignored), then idle once an `OUTPUT`
+ends a turn. A failed turn ends with an `ERROR` instead (ws_router/agent_io.py):
+`Unable to run agent` and `Agent completed without result`
+(`ServerErrorText.endsTurn`) set it to idle at once, and any `ERROR` while it says
+running also sends `SESSION_STATUS`, whose reply has the last word. Unlike `ConnectionState.Connected.status` it is never released,
+because it is shown rather than acted on. It goes back to unknown on `connect()`
+and on a conversation switch.
+
+`SessionActivity.of` combines it with what the screen itself knows, and
+`ChatViewModel.sessionActivity` feeds `ChatTopBar`:
+
+| Shown | When |
+| --- | --- |
+| nothing | Not connected. The status dot and the connection banner speak instead. |
+| Waiting for you | A gate (approval, question, plan review…) is open on screen. |
+| Running | This app's own turn is unanswered, items are in progress, or the Host said `running`. |
+| Session not found | The last `SESSION_STATUS` reply said `not_found`, and nothing has run since. |
+| Idle | Anything else: `new`, `connected`, or a Host that says nothing. |
+
+### Session mode
+
+There are two generations of the mode protocol, and the client speaks
+whichever the Host does. `ConnectionRepository.sessionModes` (`SessionModes`)
+records which.
+
+| | Legacy Host | ConnectOnion 1.7+ Host with mode policy |
+| --- | --- | --- |
+| How the client knows | `CONNECTED` has no `session_modes`. | `CONNECTED` carries `session_modes`. |
+| Modes | `safe`, `plan`, `accept_edits`, `ulw` | `read-only`, `auto`, `full-access`, or the subset in `availableModes` |
+| Default | `safe` | `currentModeId` (the Host's default is `auto`) |
+| Who applies `mode_change` | The agent's tool_approval plugin, at its next iteration, so the answer can take a whole turn. | The Host itself (`ws_router/mode.py`), at once. |
+| Unattended mode | `ulw`, with a turn budget the user types (`turns`). | `full-access`, with a budget only the Host grants. The client never sends one. |
+| Refused when | The frame misses the agent: `ERROR` naming `mode_change`. | The session is busy, the mode is not on offer, or there is no session: `ERROR` `-32000` `Session is busy` (retryable), `-32602` `Permission mode is not available`, `-32002` `Session not found`, `mode change is unavailable`. |
+
+The 1.7+ Host has no alias for the legacy names, so `ConnectionRepositoryImpl.setMode`
+refuses any mode that is not in the connection's catalogue, in both directions,
+rather than send one that can only be refused.
+
+**`session_modes` on `CONNECTED`** (`ProtocolParser.decodeSessionModes`):
+
+```json
+"session_modes": {
+  "currentModeId": "auto",
+  "turnsLeft": null,
+  "availableModes": [
+    {"id": "read-only", "name": "Read only"},
+    {"id": "auto", "name": "Auto"},
+    {"id": "full-access", "name": "Full access"}
+  ]
+}
+```
+
+It is read field by field from a `JsonElement`, so an odd value costs only that
+value, never the `CONNECTED` frame: an unknown `currentModeId` is treated as
+`auto`, an unknown id in `availableModes` is dropped, and a `turnsLeft` that is
+not a positive integer is ignored. It is confirmed state: it sets the chip,
+clears any pending request, and replaces the catalogue.
+
+**Sending.** `mode_change` is a signed command. To a 1.7+ Host:
+
+```json
+{"type": "mode_change", "mode": "read-only"}
+```
+
+To a legacy Host, `ulw` also carries `turns`:
+
+```json
+{"type": "mode_change", "mode": "ulw", "turns": 25}
+```
+
+The chip moves at once and shows as pending (dimmed, with a sync glyph) until
+the answer. Tapping it cycles `SessionModes.cycle`, which is the catalogue
+without the unattended modes, so no number of taps reaches `ulw` or
+`full-access`. Those are entered from the sheet only, and the chip offers exit
+while one is active, back to `SessionModes.default` (`safe`, or `auto`).
+Entering `full-access` also needs an explicit confirmation ("Enable bounded full
+access?", as in the reference client's `mode-indicator.tsx`): the sheet sends no
+`mode_change` until the user taps Enable. Every pick in the sheet goes through
+`HostCeilingState`, the Host ceiling's own state machine; leaving full access
+needs no confirmation (W16AAPPLE-42). On a
+1.7+ Host the chip is disabled while a turn is running, since the Host would
+answer `Session is busy`.
+
+**Applying `mode_changed`.** It is authoritative, whatever asked for it. A mode
+the client knows sets the chip and the confirmed mode, and clears the pending
+flag. `turns_left` is kept for an unattended mode only and shown on the chip
+("full access · 12 left · exit"); any other mode clears it. The same frame is
+also a chat item: a "Switched to auto mode · turns used up" divider, persisted
+with the transcript (`TranscriptItemPayload.ModeChanged`, which now carries
+`turnsLeft`). The Host's own form:
+
+```json
+{"type": "mode_changed", "mode": "full-access", "turns_left": 20, "session_id": "550e8400-…"}
+```
+
+| `triggered_by` | Shown as |
+| --- | --- |
+| `user` | you |
+| `agent` | agent |
+| `ulw_checkpoint` | checkpoint |
+| `full_access_expired` | turns used up |
+| absent | nothing |
+
+`mode_budget_changed` (`{"mode": "full-access", "turns_left": 4,
+"previous_turns_left": 5}`) updates the chip's count when it names the current
+mode. The end of the budget comes as a `mode_changed` back to `auto`.
+
+**Rollback.** An `ERROR` that `ServerErrorText.isModeRefusal` recognises, while a
+request is pending, puts the chip back on the last confirmed mode. It matches
+the Host's exact messages rather than the JSON-RPC codes, which other commands
+reuse, and only while a request is pending, since `Session not found` is generic
+wording. `Session is busy` is shown as "The agent is working. Change mode when this
+turn finishes."
+
+**Resets.** `connect()` forgets the catalogue (back to legacy), the mode and the
+status: it may be a different Host. A conversation switch keeps the catalogue
+(the same Host) but resets the mode to its default and the status to unknown,
+until the new session's `CONNECTED` says.
+
+**Known gaps.**
+
+- An agent's own `mode_changed` in the other vocabulary (for example a 1.8
+  agent's plugin reporting `auto` on a Host that sent no `session_modes`) still
+  moves the chip, but the catalogue stays as it was. A tap from there sends the
+  catalogue's first mode, which that Host refuses, and the chip rolls back.
+- A Host's `mode_changed` is applied without checking its `session_id`; the Host
+  sends it only on the socket that asked.
+- `ULW_RESPONSE`'s `switch_mode` still uses the legacy names.
+- A turn the Host ends with no frame at all (agent_io.py's stored-run branch
+  when the run is not `done`) keeps saying "Running" until the next reconnect
+  or conversation switch: nothing arrives to settle it.
+
+Covered by `ProtocolParserStatusEventsTest` (`session_modes`, including odd
+values; `mode_changed` with `turns_left`; `mode_budget_changed`, which still moves
+the replay cursor when malformed; `SESSION_STATUS`), `ConnectionRepositoryImplTest`
+(the Host as authority, the exact frame sent with no budget, modes not on offer
+never sent, the countdown and expiry, the busy and session-not-found rollbacks, the resets, and
+`hostSessionStatus` following `CONNECTED`, replies about this session only, and
+`OUTPUT`, and settled after a turn-ending `ERROR`, including one joined while
+running), `ApprovalModeTest` (no tap reaches an unattended mode on either
+catalogue), `SessionActivityTest`, `ChatViewModelTest` (cycling and exit on a
+1.7+ Host; each status line), `ServerErrorTextTest`, `TranscriptItemCodecTest`,
+`ChatTopBarComposeTest` and `ApprovalModeControlsComposeTest`.
+
+## Work Rooms
+
+A Host with connectonion's Codex or Claude Code plugin (`co ai` installs both)
+can hand a task to that coding agent. The run is one **Work Room**
+(W16AAPPLE-33), the same view O Chat opens for it. These frames describe it,
+as `plugins/coding_agents.py`, `useful_tools/codex.py` and
+`core/provider_events.py` send them:
+
+| Frame | Fields read | Effect |
+|---|---|---|
+| `provider_invocation` | `invocationId`, `parentToolCallId`, `workroomId`, `provider`, `providerDisplayName`, `taskTitle` (or `taskSummary`), `status`, `currentSummary`, `resultSummary`, `errorSummary`, `elapsedMs`, `stateRevision`, `providerPermission` | The run's card, `ChatItem.ProviderInvocation`, keyed on `invocationId`. `status` is `running`, `awaiting_approval`, `completed`, `failed` or `cancelled`; anything else reads as running, since only the Host ends a run. |
+| `provider_activity` | `invocationId`, `activityId`, `sequence`, `kind`, `status`, `title`, `summary`, `files` | One step of the run, inside its card. `status` is `running`, `completed` or `failed`. `files` is a list of bare names. |
+| `provider_message` | `invocationId`, `messageId`, `role`, `text`, `continuationOf` | One line of the conversation with the provider, in its card. `role` is `user` or `assistant`; plain text of at most 16,000 characters. |
+| `provider_artifact` | `invocationId`, `artifactId`, `kind`, `stateRevision`, `thumbnailDataUrl`, `alt` | The run's latest picture, in its card. `kind` is `screenshot`; the picture is an inline PNG or JPEG. |
+| `tool_call` / `tool_result` carrying `invocationId` | `tool_id`, `status` | A step from a Host that sends no `provider_activity` for it, after the native steps, under the Host's generic title "Use a provider tool". Its `name` is not shown: for Codex it is the raw command or file path. |
+
+They are folded (`WorkRooms`, through `ChatEventReducer`) the way the Host
+nests them for replay (`_nest_provider_invocations` in
+`network/host/session/ui.py`):
+
+- One card per `invocationId`. A frame is usually sent twice, live and again
+  when the turn commits (a turn that is cancelled sends it live only), and a
+  reconnect replays some, so a later frame replaces the card in place and one
+  with a lower `stateRevision` than the card's changes nothing. A frame names
+  only what changed: a field it leaves out keeps its value.
+- The card takes the place of the outer agent's `codex`/`claude_code` tool card
+  (`parentToolCallId`), which is the same run, and that tool card is not shown
+  again when its `tool_result` arrives.
+- Steps are updated in place by `activityId` and kept in `sequence` order, so a
+  step keeps its place when it finishes. A native step is never replaced by a
+  compatibility `tool_call` with the same id. A step that arrives before its run
+  starts the card.
+- A frame's trace `id` moves the replay cursor (`last_msg_id`) like any other.
+
+`provider_activity` is decoded on its own (`ProviderFrames`) rather than as a
+`ServerEvent`, whose `files` is a list of objects, so the shared decode would
+drop it.
+
+The card is saved with its steps (`TranscriptItemPayload.ProviderInvocation`).
+Frames for a conversation that is not on screen are folded on their own, so
+saving merges them into the stored card (`WorkRooms.mergeStored`) rather than
+replacing it. Saving a run also deletes its outer tool call's row, and a
+conversation read back from Room never shows a run's tool card. A clear-chat
+ignores the outer tool call too, so its late result cannot bring it back. The
+Control Center app receives the card in the Host's nested shape.
+
+A run still working when the Host answers CONNECTED with `connected` (idle) or
+says it has no record of the session ended while this device was not listening,
+and an idle Host replays nothing, so the card becomes **Ended** (an outcome this
+app cannot know) instead of spinning. A later frame for the run still replaces it.
+`ended` is not a Host status, so the Control Center receives an Ended run as
+`cancelled`, with the Ended explanation as its `resultSummary`.
+
+A run still working keeps the agent busy: the composer shows Stop and a message
+typed meanwhile waits for the turn, as for any other work in flight. It is not
+"in progress" for the Streaming responses setting, though, which would hide its
+card.
+
+The card opens the Work Room screen (`WorkRoomScreen`, route `work_room/{invocationId}`),
+which reads the run from the chat's own list, so it follows new frames live.
+Its approvals, messages, pictures and permission mode are below. Stop in the
+room is W16AAPPLE-37, and the local and remote handover states are W16AAPPLE-40.
+
+### Messages and pictures in a Work Room
+
+`provider_message` and `provider_artifact` (W16AAPPLE-34) are decoded by
+`ProviderFrames` and folded into the run's card (`ChatItem.ProviderInvocation`),
+which keeps `messages` and the latest `artifact`. They are read as strictly as
+`core/provider_events.py` writes them, and a frame that is not that shape is
+dropped, its trace `id` still moving the replay cursor:
+
+- **A message** needs a `messageId` of letters, digits and `._:-`, a `role` of
+  `user` or `assistant`, and text that is not empty once trimmed. A NUL is
+  removed and text over 16,000 characters is cut with an ellipsis, as the Host
+  cuts it. A `continuationOf` that is not an id is ignored, not the message.
+- **A picture** needs `kind: "screenshot"`, a positive `stateRevision`, an
+  `artifactId` of the same shape and a `thumbnailDataUrl` that is an inline PNG
+  or JPEG (`data:image/png|jpeg;base64,`) of at most 262,144 characters. Nothing
+  is ever fetched, and SVG, HTML and links are refused. The `alt` is one of the
+  Host's two approved descriptions; any other is replaced by the first.
+
+They fold like a step does. A message is updated in place by `messageId`, so one
+sent live and again when the turn commits, or replayed after a reconnect, is
+shown once where it first arrived. The picture is the run's latest: one with a
+lower `stateRevision` than the one shown changes nothing, and an equal or higher
+one replaces it. Either may arrive before its run, and then starts the card. A
+later `provider_invocation` keeps both, as a frame names only what changed.
+
+The conversation is kept to the newest messages that fit in 200,000 characters
+(`WorkRooms.MAX_CONVERSATION_CHARS`), oldest first out, and always the newest
+message. A run is saved as one row, which Android cannot read back past about
+2 MB, and a long session can say far more; the cap, a full conversation of
+three-byte characters and the largest picture fit with room to spare
+(`TranscriptItemCodecTest`). Both are saved with the card
+(`TranscriptItemPayload.ProviderInvocation`); a row from before they existed
+reads as having none, and a saved message whose role this build does not know is
+left out rather than shown as someone else's.
+
+The room shows the picture under the task (**Latest view**, at its own
+proportions, described to TalkBack by the approved `alt`) and the conversation
+above the steps. Each message is one item for TalkBack, the speaker then the
+words. The text is drawn as Markdown so a reply's code blocks are monospace,
+with links left inert. It goes through `SensitiveText.messageText` on its way to
+the screen: secrets and home paths are masked, and a message that is itself a raw
+provider payload (it begins with a JSON object or array, a stack trace or an
+error page) is replaced by the standard "details are in the agent's logs" line,
+while a snippet quoted inside a reply is kept, since code is what the user came
+to read. The Control Center app receives neither.
+
+### Approvals in a Work Room
+
+An `approval_needed` that also carries `provider`, `invocationId` and
+`parentToolCallId` is a Claude Code or Codex request from inside that run
+(connectonion `network/io/base.py` `request_approval`). `ProviderApprovals`
+reads its `providerApproval` as `@connectonion/react` does and fails closed:
+any unexpected field drops the copy, and then only **Deny** is offered. Allow
+is offered only for `scopeClassification: "workroom"`.
+
+`WorkRoomApprovalCard` shows it in the run's Work Room and in the chat. The
+answer is `APPROVAL_RESPONSE` with `request_id`:
+
+| Button | `approved` | `scope` | `mode` |
+| --- | --- | --- | --- |
+| Allow once | `true` | `once` | |
+| Allow for this session (only when `allowSession`) | `true` | `session` | |
+| Deny | `false` | `once` | `reject_soft` |
+
+The Host reads any `scope` other than `once`/`session` as a denial. A replayed
+frame folds into the card already shown, so an open request survives a
+reconnect and an answered one is not asked again.
+
+### Messages typed into a Work Room
+
+The room's field steers the run (W16AAPPLE-35). It sends a signed
+`PROVIDER_INPUT`, never an outer `INPUT`, so the message goes to the coding
+agent and not to the agent that started it (connectonion
+`docs/codex-tool-frontend-contract.md`, "Direct Work Room messages"):
+
+| Field | Value |
+| --- | --- |
+| `invocationId` | The run's id. |
+| `stateRevision` | The run's revision as the screen holds it. The Host refuses the message (`state_changed`) if the run has moved on since, so a message is never applied to a state the user did not see. |
+| `text` | As typed, at most 12,000 characters (the Host's limit; the field stops there). |
+| `requestId` | A fresh UUID, which the answer names. |
+
+The Host answers with `PROVIDER_INPUT_ACK` (`requestId`, `invocationId`,
+`accepted`, and `stateRevision` and `reason` when it has them). It sends
+`accepted: true` only once the provider itself has taken the text: Codex's
+`turn/steer` on a live run, or the first native turn of a finished run it has
+resumed. Queuing the message on the Host is not an acceptance.
+
+`WorkRoomInputs` (owned by `ChatViewModel`, so a draft outlives leaving the
+room) keeps one draft per run and clears it only on that positive ACK for the
+request that carried it. Otherwise the text stays and the room says why:
+
+- **A refusal.** By `reason`: `state_changed`, `state_unconfirmed` and
+  `invalid_revision` say the run moved on; `not_active`,
+  `unsupported_provider`, `terminal_owns_session`, `provider_start_failed`
+  and `invalid_request` each have their own sentence, and any other reason a
+  general one. The code itself is never shown.
+- **No answer within 60 seconds** (the EXEC wait, since resuming a run can be
+  slow). The room says the message may still arrive. The request is still
+  listened for: a late acceptance clears the draft, unless the user has since
+  changed it.
+- **Not sent at all**, because no connection has finished CONNECT. Never
+  queued: by the time a queued message went out, the run it was written for
+  could have moved on.
+
+While a message waits, the field is locked and Send is a spinner. A run that
+has no `stateRevision` takes no message, nor does a Claude Code run that is
+still working: the Host steers only a live Codex run (`unsupported_provider`),
+and Claude Code takes a message once its run has ended. The ACK reaches the
+ViewModel as `ChatEvent.ProviderInputAcked`, which the reducer leaves alone and
+which is handled ahead of the per-conversation routing, since the draft it
+settles belongs to a room, not a chat.
+
+### A Work Room's provider permission mode
+
+Claude Code and Codex each have their own permission modes, and the room lets
+the user pick one for its run (W16AAPPLE-43). It is a separate control from the
+chat's approval mode (the Host ceiling, [Session mode](#session-mode)), with its
+own state machine, and neither sets the other. The ceiling is the most the
+whole agent may do; this is how the provider works inside it. The Host enforces
+that on every choice, and lowering the ceiling narrows the provider's mode on its
+own (connectonion `core/provider_permissions.py`
+`reconcile_provider_permission_events`), which then arrives as a new
+`provider_invocation`.
+
+**Reading it.** A `provider_invocation` from connectonion 1.9.3 carries
+`providerPermission`, built by `provider_permission_state`:
+
+```json
+"providerPermission": {
+  "provider": "codex",
+  "activeOptionId": "codex:workspace-ask",
+  "appliesTo": "subsequent_turn",
+  "effectiveRevision": 4,
+  "options": [
+    {"id": "codex:read-only", "label": "Read Only", "description": "…", "risk": "standard", "selectable": true},
+    {"id": "codex:full-access", "label": "Full Access", "description": "…", "risk": "elevated",
+     "selectable": false, "disabledReason": "Host permission ceiling is Auto."}
+  ]
+}
+```
+
+| Provider | Choices (`id`), lowest to highest | Elevated |
+| --- | --- | --- |
+| Codex | `codex:read-only`, `codex:workspace-ask`, `codex:workspace-auto`, `codex:full-access` | `codex:full-access` |
+| Claude Code | `claude:plan`, `claude:default`, `claude:accept-edits`, `claude:auto`, `claude:bypass-permissions` | `claude:bypass-permissions` |
+
+`ProviderFrames` reads it on its own from the raw JSON, so an odd value costs only
+the control, never the run's frame, and fails closed: an option with no `id` or
+`label` is dropped, one that does not say `selectable: true` is not selectable,
+and a state whose `activeOptionId` is not among its options is no state at all.
+It is kept on `ChatItem.ProviderInvocation.providerPermission`, folded like any
+other field (a frame that leaves it out keeps the one shown), and saved with the
+card. A run without it shows no control: an older Host, or Claude Station
+(`claude_code:station:` Work Rooms), whose mode the Host pins.
+
+**Changing it.** A signed `PROVIDER_PERMISSION_CHANGE`, handled by
+`ws_router/session.py` and committed by `network/host/provider_permissions.py`
+`commit_provider_permission`:
+
+| Field | Value |
+| --- | --- |
+| `invocationId` | The run's id. |
+| `stateRevision` | The run's revision as the screen holds it. The Host refuses a change at any other (`stale_revision`). |
+| `optionId` | The choice. |
+| `confirmRisk` | `true` only once the user has confirmed an elevated choice. The Host refuses an elevated choice without it (`confirmation_required`). |
+| `requestId` | A fresh UUID, which the answer names. |
+
+The Host answers with `PROVIDER_PERMISSION_ACK` (`requestId`, `invocationId`,
+`accepted`, and on acceptance `stateRevision` and `providerPermission`), then
+sends the run's updated `provider_invocation` at the next revision. The card
+changes from that frame only, never from the ACK, so the mode shown is always
+the one the Host committed. A change applies from the provider's next turn
+(`appliesTo: "subsequent_turn"`), and the control says so.
+
+`ProviderPermissionControlState` is the control's state machine:
+
+| State | On |
+| --- | --- |
+| Idle | A choice that is on offer, selectable and not already active: sent, then **Pending**. An elevated one: **Confirming**, nothing sent. Anything else: nothing. |
+| Confirming | Confirm: sent with `confirmRisk: true`, then Pending. Cancel: Idle. Another choice replaces it. |
+| Pending | Nothing else is sent, and it cannot be cancelled, so two changes never race at one revision. The ACK, a send that could not go out, or 15 seconds with no answer: Idle. |
+
+`WorkRoomPermissions` (owned by `ChatViewModel`, like the drafts) runs it per
+room. A refusal is shown under the control by `reason`, never the code itself:
+`stale_revision` and `invalid_revision` say the run moved on, `ceiling_denied`
+says to raise the approval mode from the chat first, `not_owner` and
+`operator_required` that only the session's owner can change it,
+`confirmation_required`, `not_found` and `unsupported_option` have their own
+sentences, and anything else a general one. Never queued, like `PROVIDER_INPUT`.
+The ACK reaches the ViewModel as `ChatEvent.ProviderPermissionAcked`, handled
+ahead of the per-conversation routing.
+
+## Control Center
+
+The Host offers two Control Centers. `DASHBOARD_SNAPSHOT` is what connectonion now
+calls the legacy one: agent-written HTML, rendered in a sealed page whose buttons
+run skills (see `DashboardDocument`). The current one is a **published app**: a
+reviewed, immutable website the Host names in `CONTROL_CENTER_APP`, which runs in
+an iframe beside the chat and talks to it over a private `MessagePort`. When the
+agent has one, it takes the legacy page's place. Upstream references:
+connectonion `docs/network/control-center.md` and `websocket-protocol.md`
+(`CONTROL_CENTER_APP`), the parent side `createControlCenterHost` in
+connectonion-react `src/control-center.ts`, and the app side
+`connectonion/cli/assets/control-center/sdk.js`.
+
+**The descriptor.** `ProtocolParser.controlCenterAppOf` keeps an `app` only when it
+is what the Host's own runtime activates: schema `connectonion.control-app/1`,
+`sdk_version` `"1"` (the bridge version this client speaks), `review.status`
+`approved`, a `revision` of `sha256:` and 64 lowercase hex characters, an
+`https` URL with a host and no credentials, query or fragment, and `capabilities`
+(if present) drawn only from `camera`, `microphone`, `geolocation`,
+`clipboard-read`, `clipboard-write` and `fullscreen`, as the React SDK requires,
+since they become the iframe's permissions. Anything else, and `app: null`, reads
+as no app. `ConnectionRepository.controlCenterApp` holds it, reset on every
+`connect()` with `dashboardHtml`.
+
+Where this differs from the React SDK, on purpose:
+
+- A refused `CONTROL_CENTER_APP` clears the app; React keeps the last valid one
+  and clears it only from `CONTROL_CENTER_STATE`. The Host always sends the two
+  together, so the result is the same from a conforming Host, and a refused one
+  never leaves an older app on screen.
+- React drops both frames unless their `session_id` is the current session's.
+  This client does not check it: the relay stamps its own `session_id` on frames
+  it forwards, so the check could drop real frames in relay mode.
+- `java.net.URI` is stricter than the Host's `urlsplit` (an underscore in a host
+  name, for example, gives no host), so such an app reads as none. This fails safe.
+
+**The bridge.** `ui/controlcenter/ControlCenterHost` is the chat's side, a port of
+`createControlCenterHost`, message for message. Every message both ways carries
+`version: 1`, the app's `revision` and a fresh per-load `epoch`; one that does not
+match all three is ignored, which is what stops a stale port. Messages arrive as
+JSON text and are dropped unparsed when over 2 MiB or nested more than 32 deep.
+The host sends a `snapshot` (numbered 1) as soon as it exists, then each change as
+the next numbered `event`, and answers `resnapshot` with the current state. A
+snapshot that would be over 2 MiB is sent without its skills and chat items. The
+app's requests:
+
+| `action` | Becomes | Checked first |
+| --- | --- | --- |
+| `send_message` | The user's next message, as typed | 1 to 10,000 characters after trimming |
+| `run_skill` | `/skill args`, arguments collapsed onto one line | A published skill's name; arguments absent, or a string of at most 2,000 characters |
+
+Every request also needs a well-formed `id` used once in this load, a connected
+agent, an object `payload`, and `conversation` `current` (the default) or `new`; at
+most 16 wait at once and 512 per load. A refusal is a `response` with
+`ok: false` and `error.code` `action_rejected`. A cancelled request gets no reply.
+
+**Actions** (`ChatViewModel.controlCenterActions`) run one at a time, and only
+while the status line is idle and no stopped turn is still closing: queued behind
+a running turn, the answer would be that turn's. The message goes through the
+ordinary send path, so it is a visible, saved user turn. The action waits for the
+turn that message starts (not merely the next `OUTPUT`) and answers with
+`result.sessionId`, the session that turn ran in, even if the user has switched
+conversation meanwhile. A failed send, an agent `ERROR`, Stop in the chat or a
+dropped connection end it with a refusal instead. `conversation: "new"` is refused
+for now. As in the React SDK, the app cancelling an action (it gave up, or timed
+out) interrupts the turn it started, as soon as it starts if its message is still
+being sent. Unlike the web O Chat, where the app sits beside the chat, on a phone it
+is a tab next to the chat's, so the user can go to the chat to watch and the app
+keeps running. The page closing (the user leaving the chat for Settings, say) only
+stops the wait and leaves the turn running. On a tablet or an open foldable it sits
+beside the chat.
+
+**The snapshot** (`ChatViewModel.controlCenterSnapshot`) carries the agent's
+address, the session, its published skills (at most 2,000, names cut to 64
+characters and descriptions to 256, and at most 512 KiB of JSON; dropping skills
+does not set `truncated`, which is about chat items), the status (`working`
+while an action or a stopped turn is in progress, otherwise read off the chat's
+own status line, so `working`, `waiting` or `idle`) and the connection (`connected`,
+`reconnecting`, or `disconnected`, which includes a first connect still in
+progress). Its chat items (`ControlCenterChatItems`) are the conversation in the
+React SDK's `ChatItem` shape, bounded as `boundControlSnapshot` does. Tool-call `args`
+and approval `arguments` go out with string values, as the app stores them.
+
+**The screen.** The agent's Home shows `ControlCenterScreen`, in its own tab on a
+phone and beside the chat on a tablet, when the agent has an app and the device's
+WebView supports message listeners, and the legacy page otherwise. An agent with an
+app and no legacy page always gets the screen. If the WebView is too old the screen
+says so, and, having no tab or pane, it is opened by the chat's Home button. An app address with no origin the frame
+can be pinned to (an IPv6 literal, say) is refused when the frame is parsed. The WebView loads our parent page at
+`https://appassets.androidplatform.net/control-center/host.html`, served by
+`WebViewAssetLoader`; any other path on that origin is a 404, never a network
+request. `ControlCenterPage.hostDocument` builds it with a CSP whose `frame-src`
+is the app's origin alone, and it frames the app, sandboxed with
+`allow-scripts allow-same-origin allow-forms`, at `app.url` plus `#co-parent=<our origin>&co-revision=<revision>`.
+`assets/control-center/host.js` answers the app's `ready` (from the app's origin
+and revision only) and relays the `MessagePort` to `ControlCenterPage`, which
+sends `connect` with a fresh epoch and runs a `ControlCenterHost` for that app
+document. A `ready` within 3 seconds of a connect is the app repeating itself; a
+later one is a reloaded app, which gets a new epoch and port.
+
+The page talks to native code through `ochatNative`, which
+`WebViewCompat.addWebMessageListener` injects only into the parent page's
+origin, and only main-frame messages from that origin are read, so the app
+cannot reach it. The main frame may show only the parent page: the sandbox stops
+the app navigating it, `shouldOverrideUrlLoading` refuses other links, and
+`onPageStarted` catches what that is not asked about (a form POST) and reloads
+the parent page. WebView does not ask about https navigations in the iframe, so
+there the CSP is what refuses another origin; `host.js` reports the violation,
+and native shows the same "navigation away is blocked" bar as the legacy page and
+reloads the app once. Nothing is opened in a browser. Frames the app embeds
+follow the app's own policy and keep its sandbox. The iframe gets no `allow`
+attribute and no WebChromeClient is set, so camera, microphone, location,
+clipboard-read and fullscreen requests are refused; popups and downloads are
+sandboxed out. Unlike the legacy page, the app keeps scripts, storage and network
+for its own origin, as it has in the web O Chat.
+
+If the WebView's renderer dies (a crash, or Android reclaiming its memory), the
+screen says the Control Center stopped and offers Reload rather than letting
+O Chat close with it, and does not reload by itself, so a crashing app cannot
+loop. While O Chat is in the background the WebView and its timers are paused.
+
+Beside the chat or in its tab, the app belongs to the chat's screen, which is only on
+screen while the user is in the chat. Switching between the chat and Home's tab keeps
+the app as it was. Leaving the chat for Settings, Logs or the agent list removes the
+pane or tab and its WebView, and coming back loads the app again from its URL, so
+whatever it held only in the page is lost.
+
+**Light and dark.** The app tells the page which theme it is in with the standard `prefers-color-scheme`
+media query, taken from the app's own Light, Dark or System setting and not the phone's, so an app
+written for both follows it. The Dashboard page gets the same. A page with no dark styles is darkened by
+the WebView where the phone's WebView supports it, unless the page opts out; one that uses
+`prefers-color-scheme` is left as it wrote it. A change of theme with the page open reloads it.
 
 ## HTTP exception
 

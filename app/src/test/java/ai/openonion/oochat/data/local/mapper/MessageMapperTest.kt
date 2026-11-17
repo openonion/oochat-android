@@ -5,6 +5,7 @@ import ai.openonion.oochat.domain.model.ChatFileAttachment
 import ai.openonion.oochat.domain.model.ChatMessage
 import ai.openonion.oochat.domain.model.Role
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -174,6 +175,34 @@ class MessageMapperTest {
     }
 
     // ── Helpers ────────────────────────────────────────────────────
+
+    // -- delivery state (W16AAPPLE-106) -------------------------------
+
+    @Test
+    fun `a message still in the outbox is saved as queued and comes back so`() {
+        val entity = MessageMapper.toEntity(createTestMessage().copy(role = Role.USER, inOutbox = true))
+
+        assertEquals(ChatMessageEntity.DELIVERY_QUEUED, entity.deliveryState)
+        val back = MessageMapper.toDomain(entity)
+        assertTrue(back.inOutbox)
+        assertFalse(back.failedToSend)
+    }
+
+    @Test
+    fun `each delivery state is written as its own value`() {
+        assertNull("sent", MessageMapper.deliveryStateOf(failedToSend = false, inOutbox = false))
+        assertEquals(ChatMessageEntity.DELIVERY_QUEUED, MessageMapper.deliveryStateOf(failedToSend = false, inOutbox = true))
+        assertEquals(ChatMessageEntity.DELIVERY_FAILED, MessageMapper.deliveryStateOf(failedToSend = true, inOutbox = false))
+        assertEquals("failed wins", ChatMessageEntity.DELIVERY_FAILED, MessageMapper.deliveryStateOf(failedToSend = true, inOutbox = true))
+    }
+
+    @Test
+    fun `a row saved before there was a queued state comes back sent`() {
+        val back = MessageMapper.toDomain(createTestEntity())
+
+        assertFalse(back.inOutbox)
+        assertFalse(back.failedToSend)
+    }
 
     private fun createTestEntity() = ChatMessageEntity(
         id = "msg-1",

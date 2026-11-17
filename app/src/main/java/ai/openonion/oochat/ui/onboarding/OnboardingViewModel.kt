@@ -1,8 +1,13 @@
 package ai.openonion.oochat.ui.onboarding
 
+import ai.openonion.oochat.Constants
+import ai.openonion.oochat.data.local.CONNECTION_MODE_DIRECT
+import ai.openonion.oochat.data.local.CONNECTION_MODE_RELAY
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.di.appContainer
+import ai.openonion.oochat.domain.model.canonicalAgentAddress
+import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.ui.agent.components.AgentFormState
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -70,8 +75,9 @@ class OnboardingViewModel @JvmOverloads constructor(
         if (!formState.isValid) return
 
         val trimmedUrl = formState.serverUrl.trim().trimEnd('/')
-        val trimmedAddress = formState.agentAddress.trim()
-        val trimmedApiKey = formState.apiKey.trim().takeIf { it.isNotBlank() }
+        // The chat screen saves this agent from the config, so it gets the
+        // same form as everywhere else (W16AAPPLE-57).
+        val trimmedAddress = canonicalAgentAddress(formState.agentAddress.trim())
 
         val error = validate(trimmedUrl, trimmedAddress)
         _errorMessage.value = error
@@ -80,12 +86,48 @@ class OnboardingViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             val config = ConnectionConfig(
                 serverUrl = trimmedUrl,
-                apiKey = trimmedApiKey,
-                agentAddress = trimmedAddress.takeIf { it.isNotBlank() }
+                agentAddress = trimmedAddress.takeIf { it.isNotBlank() },
+                // The mode the user picked, so a custom relay is gone through
+                // rather than dialled direct (W16AAPPLE-56).
+                connectionMode = if (formState.useDirectConnection) CONNECTION_MODE_DIRECT else CONNECTION_MODE_RELAY
             )
             configRepository.saveConfig(config)
             onSaved()
         }
+    }
+
+    /**
+     * What Setup's QR scanner found. A code that names an agent is returned for the form to take,
+     * and clears any earlier message. Anything else is refused: nothing is returned and
+     * [errorMessage] says so. [contents] is null when the user backed out of the scanner, which is
+     * neither, so nothing changes.
+     */
+    internal fun onScanned(contents: String?): ScannedAgent? {
+        if (contents == null) return null
+        val agent = AgentQrCode.parse(contents)
+        _errorMessage.value = if (agent == null) {
+            "That QR code isn't a ConnectOnion agent. Scan the code behind an agent's Share button, or paste its address."
+        } else {
+            null
+        }
+        return agent
+    }
+
+    /**
+     * Setup's form with the scanned [agent] in it, already connecting (W16AAPPLE-111): a code that
+     * names an agent says all there is to say, so there is no Connect to tap. The scanned server
+     * and address replace the corresponding form values, and a non-default server is dialled
+     * direct, as when it is typed. [connect] still checks it; one it refuses stays in the form
+     * returned, with the reason in [errorMessage], for the user to correct and Connect by hand.
+     */
+    internal fun connectScanned(agent: ScannedAgent, form: AgentFormState, onSaved: () -> Unit): AgentFormState {
+        val scanned = form.copy(
+            serverUrl = agent.serverUrl,
+            agentAddress = agent.agentAddress,
+            useDirectConnection = !Constants.isDefaultServerUrl(agent.serverUrl)
+        )
+        connect(scanned, onSaved)
+        return scanned
     }
 
     private fun validate(trimmedUrl: String, trimmedAddress: String): String? = when {
@@ -100,6 +142,10 @@ class OnboardingViewModel @JvmOverloads constructor(
         trimmedAddress.startsWith("wss://") || trimmedAddress.startsWith("ws://") ||
             trimmedAddress.startsWith("https://") || trimmedAddress.startsWith("http://") ->
             "Agent address should be a hex address (0x...), not a URL. Please select from the dropdown."
+        // The check Add Agent makes (AgentViewModel.validateAgentInput). Setup
+        // used to save any 0x… string, which can never be dialled (W16AAPPLE-61).
+        !AgentDiscoveryService.ADDRESS_REGEX.matches(trimmedAddress) ->
+            "Please enter a valid agent address (0x followed by 64 hex characters)"
         else -> null
     }
 }

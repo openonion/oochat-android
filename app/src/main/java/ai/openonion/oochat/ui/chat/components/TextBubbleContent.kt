@@ -5,7 +5,6 @@ import ai.openonion.oochat.ui.theme.MessageBubbleToken
 import ai.openonion.oochat.ui.theme.bubbleShape
 import ai.openonion.oochat.ui.theme.chatBody
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -14,7 +13,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun TextBubbleContent(
@@ -23,29 +21,29 @@ internal fun TextBubbleContent(
     renderMarkdown: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    // The agent's reply is the focal tier, so it gets the fill; the user's own
-    // message is outlined. It was a `primary` fill — the brightest block on
-    // screen carrying the least new information.
-    val shape = bubbleShape(isUser)
+    // The user's message sits in a faintly tinted bubble; the agent's reply is
+    // plain text — no border, fill or icon — so it reads as the answer rather
+    // than as one more step of the work above it (W16AAPPLE-112).
     val textColor = MaterialTheme.colorScheme.onSurface
 
     Box(
-        modifier = modifier
-            // Same proportional cap the image/voice bubbles use — see
-            // MessageBubbleToken.
-            .bubbleMaxWidth(MessageBubbleToken.MaxWidthFraction, MessageBubbleToken.MaxWidth)
-            .clip(shape)
-            .then(
-                if (isUser) {
-                    Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-                } else {
-                    Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
-                }
-            )
-            .padding(
-                horizontal = MessageBubbleToken.PaddingHorizontal,
-                vertical = MessageBubbleToken.PaddingVertical
-            )
+        modifier = modifier.then(
+            if (isUser) {
+                val shape = bubbleShape(isUser = true)
+                Modifier
+                    // Same proportional cap the image/voice bubbles use — see
+                    // MessageBubbleToken.
+                    .bubbleMaxWidth(MessageBubbleToken.MaxWidthFraction, MessageBubbleToken.MaxWidth)
+                    .clip(shape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = MessageBubbleToken.UserFillAlpha))
+                    .padding(
+                        horizontal = MessageBubbleToken.PaddingHorizontal,
+                        vertical = MessageBubbleToken.PaddingVertical
+                    )
+            } else {
+                Modifier
+            }
+        )
     ) {
         SelectionContainer {
             if (renderMarkdown) {
