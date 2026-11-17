@@ -2,11 +2,15 @@ package ai.openonion.oochat.ui.chat
 
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.ui.chat.components.ChatTopBar
+import ai.openonion.oochat.ui.chat.components.FailedMessagesBar
 import ai.openonion.oochat.ui.chat.components.InputBar
 import ai.openonion.oochat.ui.chat.components.LowBalanceBar
+import ai.openonion.oochat.ui.chat.components.PlanPanel
 import ai.openonion.oochat.ui.chat.components.VoiceInputState
+import ai.openonion.oochat.ui.chat.components.failedUserMessages
 import ai.openonion.oochat.ui.common.appViewModel
 import ai.openonion.oochat.ui.components.ConnectionBanner
 import ai.openonion.oochat.ui.navigation.DrawerAgentSection
@@ -109,8 +113,12 @@ fun ChatScreen(
     val agentProfile by viewModel.agentProfile.collectAsState()
     val approvalMode by viewModel.approvalMode.collectAsState()
     val modePending by viewModel.modePending.collectAsState()
+    val sessionModes by viewModel.sessionModes.collectAsState()
+    val sessionActivity by viewModel.sessionActivity.collectAsState()
+    val availableTools = agentProfile?.tools.orEmpty()
 
     val dashboardHtml by viewModel.dashboardHtml.collectAsState()
+    val plan by viewModel.plan.collectAsState()
     val activeSessionId by viewModel.activeSessionId.collectAsState()
     val itemTimestamps by viewModel.itemTimestamps.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
@@ -124,7 +132,7 @@ fun ChatScreen(
     val wasCleared by viewModel.wasCleared.collectAsState()
     val sessionUsage by viewModel.sessionUsage.collectAsState()
     val error by viewModel.error.collectAsState()
-
+    val execItems by viewModel.execItems.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
     // ModalNavigationDrawer composes its drawerContent whether or not the
@@ -146,6 +154,7 @@ fun ChatScreen(
     val renderMarkdown by viewModel.renderMarkdown.collectAsState()
     val hapticFeedbackEnabled by viewModel.hapticFeedbackEnabled.collectAsState()
     val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsState()
+    val developerToolsEnabled by viewModel.developerToolsEnabled.collectAsState()
     val haptics = LocalHapticFeedback.current
 
     // The user's font-size preference is applied app-wide by ConnectOnionTheme
@@ -312,6 +321,7 @@ fun ChatScreen(
                 },
                 awaitingOnboardCode = awaitingOnboardCode,
                 modelName = agentProfile?.model,
+                sessionActivity = sessionActivity,
                 hasDashboard = dashboardHtml != null,
                 onOpenDashboard = onNavigateToDashboard
             )
@@ -323,6 +333,8 @@ fun ChatScreen(
                 awaitingOnboardCode = awaitingOnboardCode,
                 isOffline = isOffline
             )
+
+            PlanPanel(entries = plan)
 
             MessageList(
                 items = uiState.chatItems,
@@ -346,6 +358,27 @@ fun ChatScreen(
                     .fillMaxWidth()
             )
 
+            ExecResultList(
+                items = execItems,
+                onDismiss = viewModel::dismissExec
+            )
+
+            if (developerToolsEnabled && availableTools.isNotEmpty()) {
+                ExecToolPanel(
+                    tools = availableTools,
+                    onExecute = viewModel::executeTool
+                )
+            }
+
+            // Beside the composer for the same reason as LowBalanceBar below: a
+            // failed bubble far up the transcript is one the user has to go and
+            // find. The bubble keeps its own retry.
+            val failedMessages = remember(uiState.chatItems) { uiState.chatItems.failedUserMessages() }
+            FailedMessagesBar(
+                failed = failedMessages,
+                onRetry = viewModel::resendMessage
+            )
+
             // With the composer, not in the transcript: the transcript scrolls
             // away and this is the one notice that has to still be there when
             // the reader looks back down to type.
@@ -359,6 +392,7 @@ fun ChatScreen(
                 isConnected = isConnected,
                 approvalMode = approvalMode,
                 modePending = modePending,
+                sessionModes = sessionModes,
                 usage = sessionUsage,
                 skills = agentProfile?.skills.orEmpty(),
                 onCycleApprovalMode = viewModel::cycleApprovalMode,
@@ -450,6 +484,7 @@ private fun ChatInput(
     isAgentWorking: Boolean,
     approvalMode: ApprovalMode,
     modePending: Boolean,
+    sessionModes: SessionModes,
     usage: SessionUsageTotals,
     skills: List<AgentSkill>,
     onCycleApprovalMode: () -> Unit,
@@ -473,6 +508,7 @@ private fun ChatInput(
             awaitingOnboardCode = awaitingOnboardCode,
             approvalMode = approvalMode,
             modePending = modePending,
+            sessionModes = sessionModes,
             usage = usage,
             skills = skills,
             onCycleApprovalMode = onCycleApprovalMode,

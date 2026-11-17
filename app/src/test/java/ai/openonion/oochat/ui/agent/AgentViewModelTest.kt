@@ -6,6 +6,8 @@ import ai.openonion.oochat.data.repository.AgentRepository
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.data.repository.DefaultAgentRepositoryContract
 import ai.openonion.oochat.domain.model.AgentProfile
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import android.app.Application
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -50,8 +52,9 @@ class AgentViewModelTest {
         override suspend fun getAgentById(id: String): AgentProfile? =
             agents.value.find { it.id == id }
 
+        // Case-insensitive, as AgentDao's COLLATE NOCASE lookup is.
         override suspend fun getAgentByAddress(address: String): AgentProfile? =
-            agents.value.find { it.address == address }
+            agents.value.find { it.address.equals(address, ignoreCase = true) }
 
         override suspend fun createAgent(agent: AgentProfile): AgentProfile {
             createCount++
@@ -139,6 +142,7 @@ class AgentViewModelTest {
         override fun liveSessionIdFor(agentAddress: String): String? = null
         override fun observeEvents(): Flow<ai.openonion.oochat.domain.model.ChatEvent> = kotlinx.coroutines.flow.emptyFlow()
         override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?) {}
+        override suspend fun executeTool(request: ExecRequest): ExecOutcome = ExecOutcome.NotSent("Not used in AgentViewModel tests")
         override suspend fun respond(answer: String) {}
         override suspend fun interrupt() {}
         override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {}
@@ -284,6 +288,95 @@ class AgentViewModelTest {
         viewModel.createAgent(name = "Second", address = validAddress('4'), serverUrl = "https://x.com")
 
         assertEquals(0, defaultAgentRepository.setCount)
+    }
+
+    // -- what counts as a 0x address -----------------------------------
+    //
+    // A ConnectOnion address is an Ed25519 public key: 0x + 64 hex, 66 chars.
+
+    private val formatError = "Please enter a valid agent address (0x followed by 64 hex characters)"
+
+    @Test
+    fun `createAgent rejects every near-miss of a 0x address`() = runTest {
+        val nearMisses = mapOf(
+            "63 hex characters" to "0x" + "a".repeat(63),
+            "65 hex characters" to "0x" + "a".repeat(65),
+            "no 0x prefix" to "a".repeat(64),
+            "an Ethereum-length address" to "0x" + "a".repeat(40),
+            "a non-hex character" to "0x" + "a".repeat(63) + "g",
+            "an upper-case 0X prefix" to "0X" + "a".repeat(64)
+        )
+
+        for ((what, address) in nearMisses) {
+            // The error sticks until cleared, so each case must earn its own.
+            viewModel.clearError()
+            assertFalse(what, viewModel.createAgent(name = "A", address = address, serverUrl = "https://x.com"))
+            assertEquals(what, formatError, viewModel.uiState.value.error?.message)
+        }
+        assertEquals(0, agentRepository.createCount)
+    }
+
+    @Test
+    fun `createAgent tells someone who pasted a URL into the address field what it wants instead`() = runTest {
+        assertFalse(viewModel.createAgent(name = "A", address = "https://agent.example.com", serverUrl = "https://x.com"))
+
+        val message = viewModel.uiState.value.error?.message.orEmpty()
+        assertTrue(message, message.contains("not a URL"))
+        assertTrue(message, message.contains("0x"))
+    }
+
+    @Test
+    fun `createAgent rejects an address over 200 characters`() = runTest {
+        // Which of the two messages wins is not the point - the length cap and
+        // the format check both describe it - only that nothing is saved.
+        assertFalse(viewModel.createAgent(name = "A", address = "0x" + "a".repeat(199), serverUrl = "https://x.com"))
+
+        assertTrue(viewModel.uiState.value.error != null)
+        assertEquals(0, agentRepository.createCount)
+    }
+
+    @Test
+    fun `createAgent accepts upper-case hex digits`() = runTest {
+        assertTrue(viewModel.createAgent(name = "A", address = "0x" + "AbCd".repeat(16), serverUrl = "https://x.com"))
+    }
+
+    @Test
+    fun `a valid address is saved with the name, server and routing chosen`() = runTest {
+        val address = validAddress('5')
+
+        assertTrue(
+            viewModel.createAgent(
+                name = "Research",
+                address = address,
+                serverUrl = "https://agent.example.com",
+                apiKey = "key-1",
+                connectionMode = "direct"
+            )
+        )
+
+        val saved = agentRepository.agents.value.single()
+        assertEquals(address, saved.address)
+        assertEquals("Research", saved.name)
+        assertEquals("https://agent.example.com", saved.serverUrl)
+        assertEquals("key-1", saved.apiKey)
+        assertEquals("direct", saved.connectionMode)
+        assertTrue(saved.isActive)
+        assertEquals("the first agent becomes the default", saved.id, viewModel.uiState.value.defaultAgentId)
+    }
+
+    @Test
+    fun `createAgent accepts both relay and direct server URL schemes`() = runTest {
+        // A different address for each, or the duplicate check would reject the rest.
+        val urlsAndAddresses = listOf(
+            "https://x.com" to validAddress('a'),
+            "http://10.0.0.2:8000" to validAddress('b'),
+            "wss://x.com" to validAddress('c'),
+            "ws://x.com" to validAddress('d')
+        )
+
+        for ((url, address) in urlsAndAddresses) {
+            assertTrue(url, viewModel.createAgent(name = url, address = address, serverUrl = url))
+        }
     }
 
     @Test
@@ -438,5 +531,87 @@ class AgentViewModelTest {
         viewModel.clearError()
 
         assertNull(viewModel.uiState.value.error)
+    }
+
+    // -- adding and saving agents (W16AAPPLE-57 to -61, -81) ------------
+    //
+    // These were the W16AAPPLE-47 suite's known issues; each now guards its fix.
+
+    @Test
+    fun `the same address in another letter case is the same agent`() = runTest {
+        agentRepository.agents.value = listOf(testAgent(address = "0x" + "ab".repeat(32)))
+        viewModel = buildViewModel()
+
+        val created = viewModel.createAgent(name = "Again", address = "0x" + "AB".repeat(32), serverUrl = "https://x.com")
+
+        assertFalse("the same key in capitals is the same agent", created)
+        assertEquals("Agent with this address already exists", viewModel.uiState.value.error?.message)
+    }
+
+    @Test
+    fun `a new agent's address is saved in lower case`() = runTest {
+        viewModel.createAgent(name = "A", address = "0x" + "AB".repeat(32), serverUrl = "https://x.com")
+
+        assertEquals("0x" + "ab".repeat(32), agentRepository.agents.value.single().address)
+    }
+
+    @Test
+    fun `editing an agent onto another agent's address is refused`() = runTest {
+        val taken = validAddress('1')
+        agentRepository.agents.value = listOf(testAgent("a1", address = taken), testAgent("a2", address = validAddress('2')))
+        viewModel = buildViewModel()
+
+        val updated = viewModel.updateAgent(testAgent("a2", address = taken))
+
+        // In Room the unique index turned this into a SQLiteConstraintException
+        // inside AgentEditScreenWrapper's launch.
+        assertFalse("updateAgent reported success", updated)
+        assertEquals("Agent with this address already exists", viewModel.uiState.value.error?.message)
+        assertEquals(0, agentRepository.updateCount)
+    }
+
+    @Test
+    fun `editing an agent and keeping its own address still saves`() = runTest {
+        val address = validAddress('2')
+        agentRepository.agents.value = listOf(testAgent("a2", address = address))
+        viewModel = buildViewModel()
+
+        val updated = viewModel.updateAgent(testAgent("a2", address = address.uppercase().replace("0X", "0x")))
+
+        assertTrue(updated)
+        assertEquals(address, agentRepository.agents.value.single().address)
+    }
+
+    @Test
+    fun `adding a discovered agent that is already saved leaves the saved one alone`() = runTest {
+        val address = validAddress('3')
+        agentRepository.agents.value = listOf(testAgent("saved-uuid", address = address))
+        viewModel = buildViewModel()
+
+        // Discovery ids its results by address, so this is a different id.
+        viewModel.addDiscoveredAgent(testAgent(id = address, address = address))
+
+        // In Room the insert is REPLACE on a unique address, so the saved row
+        // was deleted and re-created under the new id: its API key (kept by
+        // id in secure storage) and its place in the list were lost.
+        assertEquals(0, agentRepository.createCount)
+        assertEquals(listOf("saved-uuid"), agentRepository.agents.value.map { it.id })
+    }
+
+    @Test
+    fun `the first agent added from discovery becomes the default`() = runTest {
+        viewModel.addDiscoveredAgent(testAgent(id = "d1", address = validAddress('4')))
+
+        assertEquals("d1", defaultAgentRepository.defaultAgentId)
+    }
+
+    @Test
+    fun `Add Agent's error for a URL in the address field does not mention a dropdown`() = runTest {
+        viewModel.createAgent(name = "A", address = "https://agent.example.com", serverUrl = "https://x.com")
+        val message = viewModel.uiState.value.error?.message.orEmpty()
+
+        // The Add Agent form has no saved-agent dropdown (see
+        // AgentFormScreenComposeTest); only Edit does. createAgent backs Add.
+        assertEquals("Agent address should be a hex address (0x...), not a URL.", message)
     }
 }
