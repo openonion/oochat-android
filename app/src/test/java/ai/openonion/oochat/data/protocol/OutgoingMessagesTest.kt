@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Wire-shape tests for [ApprovalResponse]. Uses the same [Json] config as
+ * Wire-shape tests for outgoing frames. Uses the same [Json] config as
  * [ai.openonion.oochat.network.AgentConnection]'s send path
  * (encodeDefaults = true, explicitNulls = false) — AgentConnection itself
  * can't be unit-tested (needs a real Android Keystore, see
@@ -85,6 +85,118 @@ class OutgoingMessagesTest {
 
         assertEquals(
             """{"type":"SESSION_STATUS","session":{"session_id":"sess-42"}}""",
+            encoded
+        )
+    }
+
+    /**
+     * The invite-code gate's answer. The server's WS router only recognises
+     * the literal "ONBOARD_SUBMIT" and verifies the signature against
+     * `payload`, so the timestamp lives there and nowhere else — the Python
+     * SDK's `_build_onboard_submit` sends no envelope timestamp either.
+     */
+    @Test
+    fun `an invite-code ONBOARD_SUBMIT carries the code inside the signed payload only`() {
+        val encoded = json.encodeToString(
+            OnboardSubmitMessage.serializer(),
+            OnboardSubmitMessage(
+                payload = OnboardSubmitPayload(timestamp = 1_760_000_000L, inviteCode = "BETA2024"),
+                from = "0xme",
+                signature = "sig"
+            )
+        )
+
+        assertEquals(
+            """{"type":"ONBOARD_SUBMIT","payload":{"timestamp":1760000000,"invite_code":"BETA2024"},"from":"0xme","signature":"sig"}""",
+            encoded
+        )
+    }
+
+    @Test
+    fun `a payment ONBOARD_SUBMIT carries the amount and no invite code`() {
+        val encoded = json.encodeToString(
+            OnboardSubmitMessage.serializer(),
+            OnboardSubmitMessage(
+                payload = OnboardSubmitPayload(timestamp = 1_760_000_000L, payment = 10.0),
+                from = "0xme",
+                signature = "sig"
+            )
+        )
+
+        // 10.0, not 10: the relay re-encodes the payload it received before
+        // verifying, and the app signed 10.0 (see IdentityVectorsTest).
+        assertEquals(
+            """{"type":"ONBOARD_SUBMIT","payload":{"timestamp":1760000000,"payment":10.0},"from":"0xme","signature":"sig"}""",
+            encoded
+        )
+    }
+
+    /**
+     * W16AAPPLE-11. The Host's connect.py reads `data.get("protocol")` off the
+     * CONNECT envelope and rejects anything but `name == "oip"` and a matching
+     * `version`; connectonion-react's OIP_PROTOCOL is the reference value.
+     */
+    @Test
+    fun `a relay CONNECT declares the OIP descriptor at the envelope's top level`() {
+        val encoded = json.encodeToString(
+            ConnectMessage.serializer(),
+            ConnectMessage(
+                payload = ConnectPayload(timestamp = 1_760_000_000L, to = "0xagent"),
+                from = "0xme",
+                signature = "sig",
+                timestamp = 1_760_000_000L,
+                to = "0xagent",
+                sessionId = "sess-42"
+            )
+        )
+
+        assertEquals(
+            """{"type":"CONNECT","protocol":{"name":"oip","version":"0.1","min_version":"0.1","max_version":"0.1"},""" +
+                """"payload":{"timestamp":1760000000,"to":"0xagent"},"from":"0xme","signature":"sig",""" +
+                """"timestamp":1760000000,"to":"0xagent","session_id":"sess-42"}""",
+            encoded
+        )
+    }
+
+    @Test
+    fun `a reconnect CONNECT names the last message handled at the envelope top level`() {
+        val encoded = json.encodeToString(
+            ConnectMessage.serializer(),
+            ConnectMessage(
+                payload = ConnectPayload(timestamp = 1_760_000_000L, to = "0xagent"),
+                from = "0xme",
+                signature = "sig",
+                timestamp = 1_760_000_000L,
+                to = "0xagent",
+                sessionId = "sess-42",
+                lastMsgId = "ev-9f12"
+            )
+        )
+
+        // Next to session_id and outside the signed payload, which stays {timestamp, to}.
+        assertEquals(
+            """{"type":"CONNECT","protocol":{"name":"oip","version":"0.1","min_version":"0.1","max_version":"0.1"},""" +
+                """"payload":{"timestamp":1760000000,"to":"0xagent"},"from":"0xme","signature":"sig",""" +
+                """"timestamp":1760000000,"to":"0xagent","session_id":"sess-42","last_msg_id":"ev-9f12"}""",
+            encoded
+        )
+    }
+
+    @Test
+    fun `a direct CONNECT for a new session still declares the OIP descriptor`() {
+        val encoded = json.encodeToString(
+            ConnectMessage.serializer(),
+            ConnectMessage(
+                payload = ConnectPayload(timestamp = 1_760_000_000L),
+                from = "0xme",
+                signature = "sig",
+                timestamp = 1_760_000_000L
+            )
+        )
+
+        assertEquals(
+            """{"type":"CONNECT","protocol":{"name":"oip","version":"0.1","min_version":"0.1","max_version":"0.1"},""" +
+                """"payload":{"timestamp":1760000000},"from":"0xme","signature":"sig","timestamp":1760000000}""",
             encoded
         )
     }
