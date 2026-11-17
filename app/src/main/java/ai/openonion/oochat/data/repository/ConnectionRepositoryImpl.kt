@@ -2,6 +2,7 @@ package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.protocol.FileAttachment
+import ai.openonion.oochat.data.protocol.OipProtocol
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.toDomain
 import ai.openonion.oochat.domain.model.AgentLiveProfile
@@ -11,6 +12,8 @@ import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ServerSessionStatus
 import ai.openonion.oochat.domain.model.ServerTranscriptEntry
 import ai.openonion.oochat.domain.usecase.ServerErrorText
 import ai.openonion.oochat.network.AgentConnection
@@ -18,6 +21,7 @@ import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.ConnectionEvent
 import ai.openonion.oochat.network.InMemoryPendingMessageSink
 import ai.openonion.oochat.network.PendingMessageSink
+import ai.openonion.oochat.network.ProtocolParser
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
 import ai.openonion.oochat.util.runCatchingCancellable
@@ -38,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -183,9 +188,15 @@ class ConnectionRepositoryImpl(
     private val _dashboardHtml = MutableStateFlow<String?>(null)
     override val dashboardHtml: StateFlow<String?> = _dashboardHtml.asStateFlow()
 
+    // Server-session state like the mode chip, with the same resets: cleared
+    // on every connect and conversation switch, so one conversation's Todo
+    // List never shows over another's.
+    private val _plan = MutableStateFlow<List<PlanEntry>>(emptyList())
+    override val plan: StateFlow<List<PlanEntry>> = _plan.asStateFlow()
+
     // Long-lived broadcast bus for chat events. ChatViewModel.init subscribes to observeEvents() BEFORE connect() establishes the connection, so this hot bus survives the "not yet connected" window and forwards every event once a connection exists.
     private val _chatEvents = MutableSharedFlow<ChatEvent>(
-        extraBufferCapacity = 64,
+        extraBufferCapacity = AgentConnection.EVENT_BUFFER_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
@@ -224,7 +235,9 @@ class ConnectionRepositoryImpl(
                         fetchPublishedProfile()
                         _connectionState.value = ConnectionState.Connected(
                             address = event.address,
-                            session = event.session?.toDomain()
+                            session = event.session?.toDomain(),
+                            status = event.status,
+                            serverNewer = event.serverNewer
                         )
                         event.session?.let { session ->
                             // Inline, not debounced: CONNECTED is once per
@@ -269,6 +282,20 @@ class ConnectionRepositoryImpl(
                             _connectionState.value = ConnectionState.Error(message = shown)
                         }
                     }
+                    is ConnectionEvent.ProtocolRejected -> {
+                        // Fatal whether or not this attempt connected before:
+                        // an auto-reconnect after a Host upgrade can be the
+                        // CONNECT that is refused. retryable = false is what
+                        // stops ConnectToAgentUseCase spending its second attempt.
+                        FileLogger.e(LogTags.CONN_REPO, "→ Error (OIP version rejected, host=${event.hostProtocol ?: "<undeclared>"})")
+                        _connectionState.value = ConnectionState.Error(
+                            message = ServerErrorText.incompatibleProtocol(
+                                hostProtocol = event.hostProtocol,
+                                clientProtocol = "${OipProtocol.NAME}/${OipProtocol.VERSION}"
+                            ),
+                            retryable = false
+                        )
+                    }
                     is ConnectionEvent.Disconnected -> {
                         FileLogger.i(LogTags.CONN_REPO, "→ Disconnected")
                         _connectionState.value = ConnectionState.Disconnected
@@ -284,6 +311,14 @@ class ConnectionRepositoryImpl(
                         // Conflated rather than written per frame — see the
                         // session-persistence block above.
                         scheduleSessionSave(event.session)
+                        // CONNECTED, session_sync and OUTPUT all carry the
+                        // Host's plan, which is how a reconnect gets it back
+                        // without waiting for the next `plan` frame. A snapshot
+                        // with no plan, or a malformed one, keeps what is shown.
+                        ProtocolParser.decodePlan(event.session.plan)?.let { _plan.value = it }
+                    }
+                    is ConnectionEvent.PlanUpdated -> {
+                        _plan.value = event.entries
                     }
                     is ConnectionEvent.ChatItemReceived -> {
                         // The one frame that is both a chat entry and connection
@@ -308,6 +343,9 @@ class ConnectionRepositoryImpl(
                         _chatEvents.tryEmit(ChatEvent.ChatItemUpdated(event.item))
                     }
                     is ConnectionEvent.OutputReceived -> {
+                        // A finished turn ends whatever CONNECT said was running. Before the emit
+                        // below, not after it: a screen that sees the OUTPUT must not read "running".
+                        releaseSessionStatus()
                         // Inline for the same reason as CONNECTED: OUTPUT ends
                         // a turn, so it is the durable checkpoint worth paying
                         // a write for, and there is one per turn.
@@ -327,6 +365,12 @@ class ConnectionRepositoryImpl(
                     }
                     is ConnectionEvent.SessionStatusReceived -> {
                         _chatEvents.tryEmit(ChatEvent.SessionStatusReceived(event.sessionId, event.status))
+                    }
+                    is ConnectionEvent.RuntimeInputAcknowledged -> {
+                        _chatEvents.tryEmit(ChatEvent.RuntimeInputAcknowledged(event.sessionId))
+                    }
+                    is ConnectionEvent.RuntimeInputRejected -> {
+                        _chatEvents.tryEmit(ChatEvent.RuntimeInputRejected(event.sessionId, event.retryable))
                     }
                     else -> { }
                 }
@@ -348,6 +392,18 @@ class ConnectionRepositoryImpl(
         // the connection's life was pure retention. A ViewModel recreated later
         // reads the merged rows back from Room, not from here.
         _serverTranscript.value = null
+    }
+
+    override fun releaseSessionStatus() {
+        // CONNECTED said it once, but this state stays Connected for the life of the socket, and a
+        // screen created later starts from it and cannot tell a stale answer from a fresh one.
+        _connectionState.update { state ->
+            if (state is ConnectionState.Connected) {
+                state.copy(status = ServerSessionStatus.UNKNOWN, serverNewer = false)
+            } else {
+                state
+            }
+        }
     }
 
     override suspend fun switchConversation(conversationId: String?) {
@@ -380,6 +436,9 @@ class ConnectionRepositoryImpl(
         // Belongs to the conversation being left — a late subscriber must not
         // reconcile the new conversation against the previous one's history.
         _serverTranscript.value = null
+        // So does the Host's answer to the CONNECT being left: it described that session, and the
+        // new one's own CONNECTED has yet to arrive.
+        releaseSessionStatus()
         // Mode is a property of the server session, so switching conversation
         // makes it unknown again for the same reason connect() does: a
         // security-relevant control must not keep showing the mode of the
@@ -390,7 +449,11 @@ class ConnectionRepositoryImpl(
         _modePending.value = false
         // Agent profile and dashboard deliberately survive: same agent, only
         // a different conversation with it.
-        connection?.switchSession(sessionFor(conversationId))
+        val session = sessionFor(conversationId)
+        // The plan is the left conversation's. The one coming in is its stored
+        // plan: an idle session's CONNECTED carries no snapshot of its own.
+        showStoredPlan(session)
+        connection?.switchSession(session)
     }
 
     /**
@@ -403,6 +466,11 @@ class ConnectionRepositoryImpl(
      * is recoverable from its id alone, and the store only adds the
      * transcript and turn count on top.
      */
+    /** The plan [session] was saved with, or none — see SessionStateEntity.planJson. */
+    private fun showStoredPlan(session: SessionState?) {
+        _plan.value = ProtocolParser.decodePlan(session?.plan).orEmpty()
+    }
+
     private suspend fun sessionFor(conversationId: String?): SessionState? {
         if (conversationId == null) return null
         val stored = conversationId.let { sessionStore?.getSession(it) }
@@ -462,6 +530,7 @@ class ConnectionRepositoryImpl(
                 // point the previous agent's Home at the new agent's
                 // allowlist.
                 _dashboardHtml.value = null
+                _plan.value = emptyList()
 
                 runCatchingCancellable {
                     connection?.disconnect()
@@ -476,6 +545,9 @@ class ConnectionRepositoryImpl(
                     // see sessionFor.
                     currentConversationId = conversationId
                     val restoredSession = sessionFor(conversationId)
+                    // Shown before the socket opens: an idle session's CONNECTED
+                    // carries no snapshot, so the stored plan is the only one.
+                    showStoredPlan(restoredSession)
 
                     val newConnection = agentConnectionFactory(
                         keyManager ?: error("keyManager is required to connect"),

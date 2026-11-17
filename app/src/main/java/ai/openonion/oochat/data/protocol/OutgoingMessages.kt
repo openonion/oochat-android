@@ -11,19 +11,39 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ConnectMessage(
     val type: String = "CONNECT",
+    // Top-level and unsigned, as in connectonion-react's CONNECT: the Host
+    // reads data.get("protocol") off the envelope, not the signed payload.
+    // Omitting it is accepted only during the descriptor-less compatibility
+    // window, which may close from 1.8.0a1 onwards (websocket-protocol.md).
+    val protocol: ProtocolDescriptor = OipProtocol.DESCRIPTOR,
     val payload: ConnectPayload,
     val from: String,
     val signature: String,
     val timestamp: Long,
     val to: String? = null,
     @SerialName("session_id") val sessionId: String? = null,
+    @SerialName("last_msg_id") val lastMsgId: String? = null,
     val session: SessionState? = null
 )
 
+/**
+ * The signed half of [ConnectMessage].
+ *
+ * [nonce] keeps two CONNECTs from one identity in the same second distinct:
+ * Ed25519 is deterministic and [timestamp] has one-second resolution, and the
+ * Host refuses a signature it has seen before (websocket-protocol.md, "A
+ * signature is single-use").
+ *
+ * [signedCommands] opts this connection into the Host's v2 command gate (see
+ * [SignedCommand]). It is inside the signature so a relay cannot strip it and
+ * downgrade the socket to unsigned commands. A pre-v2 Host ignores it.
+ */
 @Serializable
 data class ConnectPayload(
     val timestamp: Long,
-    val to: String? = null
+    val to: String? = null,
+    val nonce: String,
+    @SerialName("signed_commands") val signedCommands: Int = SignedCommand.CAPABILITY
 )
 
 @Serializable
