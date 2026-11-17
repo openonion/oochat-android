@@ -8,6 +8,8 @@ import ai.openonion.oochat.data.local.mapper.MessageMapper
 import ai.openonion.oochat.data.local.mapper.TranscriptItemCodec
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.Role
+import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.domain.model.WorkRooms
 import androidx.room.withTransaction
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -50,7 +52,7 @@ open class PersistenceTransaction(
             // Transcript items take the item_type/payload columns and skip the
             // text path — no content, and not part of the preview or title.
             // Null here means plain chat text (below) or a gate we don't replay.
-            val transcript = TranscriptItemCodec.toPayload(item)
+            val transcript = TranscriptItemCodec.toPayload(workRoomToSave(item, sessionId))
             if (transcript != null) {
                 messageDao.insertMessage(
                     ChatMessageEntity(
@@ -111,7 +113,17 @@ open class PersistenceTransaction(
                 images = encodedImages,
                 files = MessageMapper.encodeFiles(files),
                 itemType = turnThinking?.let { TranscriptItemCodec.TURN_ITEM_TYPE },
-                payload = turnThinking
+                payload = turnThinking,
+                // Otherwise written as it changes (MessageDao.updateDeliveryState),
+                // so a re-save keeps what is recorded rather than wiping a
+                // "failed". An item already failed is saved failed in this same
+                // write: a message saved while held, so it is never on disk for
+                // even a moment as delivered.
+                deliveryState = if ((item as? ChatItem.User)?.state == UserMessageState.FAILED) {
+                    ChatMessageEntity.DELIVERY_FAILED
+                } else {
+                    messageDao.getDeliveryStateById(item.id)
+                }
             )
             messageDao.insertMessage(entity)
 
@@ -127,5 +139,21 @@ open class PersistenceTransaction(
             sessionDao.updateMessageInfo(sessionId, count, preview, now)
             onPreviewUpdate(sessionId, count, preview)
         }
+    }
+
+    /**
+     * A Claude Code or Codex run's card, made whole before it is saved
+     * (W16AAPPLE-33). A frame for a conversation that is not on screen is folded
+     * on its own and carries only what changed, so it is merged into the saved
+     * card rather than replacing it. The run is its outer tool call, so that
+     * call's own row, saved before the run started, is retired.
+     */
+    private suspend fun workRoomToSave(item: ChatItem, sessionId: String): ChatItem {
+        if (item !is ChatItem.ProviderInvocation) return item
+        item.parentToolCallId
+            ?.takeIf { messageDao.getSessionIdById(it) == sessionId }
+            ?.let { messageDao.deleteMessageById(it) }
+        val stored = messageDao.getPayloadById(item.id)?.let(TranscriptItemCodec::decode) as? ChatItem.ProviderInvocation
+        return stored?.let { WorkRooms.mergeStored(it, item) } ?: item
     }
 }

@@ -19125,12 +19125,7 @@ HSPLai/openonion/oochat/ui/agent/DiscoveryPhase;->$values()[Lai/openonion/oochat
 HSPLai/openonion/oochat/ui/agent/DiscoveryPhase;-><clinit>()V
 HSPLai/openonion/oochat/ui/agent/DiscoveryPhase;-><init>(Ljava/lang/String;I)V
 Lai/openonion/oochat/ui/agent/components/AgentFormContentKt;
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->$r8$lambda$8rNrJ8E0mmBHiBZXe_0DELwTZvY(Landroidx/compose/runtime/State;Landroidx/compose/ui/graphics/GraphicsLayerScope;)Lkotlin/Unit;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;-><clinit>()V
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AdvancedSettingsSection$lambda$35(Landroidx/compose/runtime/MutableState;)Z
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AdvancedSettingsSection$lambda$40(Landroidx/compose/runtime/State;)F
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AdvancedSettingsSection$lambda$46$lambda$45$lambda$44$lambda$43(Landroidx/compose/runtime/State;Landroidx/compose/ui/graphics/GraphicsLayerScope;)Lkotlin/Unit;
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AdvancedSettingsSection(Ljava/lang/String;Lkotlin/jvm/functions/Function1;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AgentAddressField$lambda$24(Landroidx/compose/runtime/MutableState;)Z
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AgentAddressField(Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/util/List;ZLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function2;ZLkotlin/jvm/functions/Function1;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt;->AgentAddressPill(Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function2;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
@@ -19152,8 +19147,6 @@ Lai/openonion/oochat/ui/agent/components/AgentFormContentKt$$ExternalSyntheticLa
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$$ExternalSyntheticLambda14;-><init>(Lkotlin/jvm/functions/Function1;)V
 Lai/openonion/oochat/ui/agent/components/AgentFormContentKt$$ExternalSyntheticLambda9;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$$ExternalSyntheticLambda9;-><init>(Landroidx/compose/runtime/MutableState;)V
-Lai/openonion/oochat/ui/agent/components/AgentFormContentKt$AdvancedSettingsSection$1$3;
-HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$AdvancedSettingsSection$1$3;-><init>(Ljava/lang/String;Lkotlin/jvm/functions/Function1;Landroidx/compose/runtime/MutableState;)V
 Lai/openonion/oochat/ui/agent/components/AgentFormContentKt$AgentAddressField$2$1$2;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$AgentAddressField$2$1$2;-><init>(Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/util/List;Landroidx/compose/runtime/MutableState;)V
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$AgentAddressField$2$1$2;->invoke(Landroidx/compose/material3/ExposedDropdownMenuBoxScope;Landroidx/compose/runtime/Composer;I)V
@@ -19168,11 +19161,10 @@ Lai/openonion/oochat/ui/agent/components/AgentFormContentKt$AgentAddressField$2$
 HSPLai/openonion/oochat/ui/agent/components/AgentFormContentKt$AgentAddressField$2$1$2$3;-><init>(Ljava/util/List;Ljava/util/List;Landroidx/compose/runtime/MutableState;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)V
 Lai/openonion/oochat/ui/agent/components/AgentFormState;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;-><clinit>()V
-HSPLai/openonion/oochat/ui/agent/components/AgentFormState;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V
-HSPLai/openonion/oochat/ui/agent/components/AgentFormState;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+HSPLai/openonion/oochat/ui/agent/components/AgentFormState;-><init>(Ljava/lang/String;Ljava/lang/String;Z)V
+HSPLai/openonion/oochat/ui/agent/components/AgentFormState;-><init>(Ljava/lang/String;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->equals(Ljava/lang/Object;)Z
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->getAgentAddress()Ljava/lang/String;
-HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->getApiKey()Ljava/lang/String;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->getServerUrl()Ljava/lang/String;
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->getUseDirectConnection()Z
 HSPLai/openonion/oochat/ui/agent/components/AgentFormState;->isValid()Z
@@ -19649,7 +19641,6 @@ HSPLai/openonion/oochat/ui/theme/TypeKt;-><clinit>()V
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getAppTypography()Landroidx/compose/material3/Typography;
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getSectionLabel(Landroidx/compose/material3/Typography;)Landroidx/compose/ui/text/TextStyle;
 HSPLai/openonion/oochat/ui/theme/TypeKt;->getSectionOverline(Landroidx/compose/material3/Typography;)Landroidx/compose/ui/text/TextStyle;
-HSPLai/openonion/oochat/ui/theme/TypeKt;->manrope(I)Landroidx/compose/ui/text/font/Font;
 Lai/openonion/oochat/util/FileLogger;
 HSPLai/openonion/oochat/util/FileLogger;->$r8$lambda$YqBTJzWoqgH4_VYxYmctN_LooX4()Lkotlin/Unit;
 HSPLai/openonion/oochat/util/FileLogger;->$r8$lambda$cVU0QTrmpg-dGPTJT5dprwt4n3k(Ljava/lang/String;Ljava/lang/String;)Lkotlin/Unit;

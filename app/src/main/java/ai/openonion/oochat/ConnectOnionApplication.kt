@@ -1,7 +1,9 @@
 package ai.openonion.oochat
 
+import ai.openonion.oochat.data.local.BackgroundWork
 import ai.openonion.oochat.di.AppContainer
 import ai.openonion.oochat.di.DefaultAppContainer
+import ai.openonion.oochat.notification.BackgroundWorkKeeper
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
@@ -13,8 +15,9 @@ import coil.memory.MemoryCache
  * Named `ConnectOnionApplication` (not `ConnectOnionApp`) to avoid colliding
  * with the top-level `@Composable fun ConnectOnionApp()` in ConnectOnionApp.kt.
  */
-class ConnectOnionApplication : Application(), ImageLoaderFactory {
-    val container: AppContainer by lazy { DefaultAppContainer(this) }
+open class ConnectOnionApplication : Application(), ImageLoaderFactory {
+    // Open for StartScreenTest's fake container.
+    open val container: AppContainer by lazy { DefaultAppContainer(this) }
 
     // Started-activity count, the standard dependency-free way to know
     // whether the app is visible (lifecycle-process/ProcessLifecycleOwner
@@ -25,14 +28,19 @@ class ConnectOnionApplication : Application(), ImageLoaderFactory {
     val isInForeground: Boolean
         get() = startedActivityCount > 0
 
+    /** Here rather than in [container], since it follows the activity's visibility like [isInForeground]. */
+    val backgroundWork: BackgroundWork by lazy { BackgroundWorkKeeper(this) }
+
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) { startedActivityCount++ }
             override fun onActivityStopped(activity: Activity) { startedActivityCount-- }
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-            override fun onActivityResumed(activity: Activity) {}
-            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityResumed(activity: Activity) { backgroundWork.onAppShown() }
+            override fun onActivityPaused(activity: Activity) {
+                if (!activity.isFinishing) backgroundWork.onAppHidden()
+            }
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })

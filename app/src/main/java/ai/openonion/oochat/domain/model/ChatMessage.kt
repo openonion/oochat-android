@@ -18,7 +18,18 @@ data class ChatMessage(
      * [ai.openonion.oochat.data.local.mapper.TranscriptItemPayload].
      */
     val itemType: String? = null,
-    val payload: String? = null
+    val payload: String? = null,
+    /**
+     * USER only: the message did not get through, or might not have, so it
+     * comes back as failed and offers a resend. See UserMessageState.FAILED.
+     */
+    val failedToSend: Boolean = false,
+    /**
+     * USER only: the message is in the connection's outbox, which survives a
+     * restart and sends it on the next connect, so it comes back "Waiting to
+     * send..." rather than sent (W16AAPPLE-106). See UserMessageState.QUEUED.
+     */
+    val inOutbox: Boolean = false
 )
 
 enum class Role {

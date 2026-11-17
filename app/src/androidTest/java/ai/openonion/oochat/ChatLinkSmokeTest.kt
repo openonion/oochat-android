@@ -172,7 +172,7 @@ class ChatLinkSmokeTest {
             }
 
             waitForText("Connected")
-            composeTestRule.onNode(hasText("No messages yet", substring = true)).assertExists()
+            composeTestRule.onNode(hasText("What would you like to get done?")).assertExists()
         }
     }
 

@@ -17,6 +17,16 @@ interface SessionStore {
     suspend fun getSession(conversationId: String): SessionState?
 
     /**
+     * Returns the session to name in the next CONNECT message.
+     *
+     * A saved session resumes the conversation. If there is no saved session,
+     * using the conversation ID keeps reconnect attempts for that conversation
+     * on the same server session.
+     */
+    suspend fun sessionForConnect(conversationId: String): SessionState? =
+        getSession(conversationId) ?: SessionState(sessionId = conversationId)
+
+    /**
      * Named `...ByConversation` (not `deleteSession`) to avoid colliding with
      * [SessionRepository.deleteSession], which deletes the conversation
      * itself. Call sites like `ChatViewModel` hold both repositories.

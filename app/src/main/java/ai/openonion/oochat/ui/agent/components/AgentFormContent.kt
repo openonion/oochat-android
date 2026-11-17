@@ -4,10 +4,11 @@ import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.ui.components.AgentInitialsAvatar
 import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.AppShapes
+import ai.openonion.oochat.ui.theme.Elevation
+import ai.openonion.oochat.ui.theme.hairline
 import ai.openonion.oochat.ui.theme.spacing
 import ai.openonion.oochat.util.truncateMiddle
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,21 +22,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -49,14 +45,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
@@ -66,11 +59,11 @@ import androidx.compose.ui.unit.dp
  * by AgentFormScreen's Name/Description fields (which aren't in the Figma
  * source, so they stay on the stock Material3 [OutlinedTextField]).
  */
-internal val FormFieldShape = RoundedCornerShape(12.dp)
+internal val FormFieldShape = AppShapes.large
 
 /**
  * Focus-tinted border/container colors for AgentFormScreen's Name/Description
- * [OutlinedTextField]s. Server URL/Agent Address/API Key use [PillTextField]
+ * [OutlinedTextField]s. Server URL and Agent Address use [PillTextField]
  * instead — see its doc comment for why.
  */
 /**
@@ -112,7 +105,6 @@ internal fun FieldLabel(text: String) {
 data class AgentFormState(
     val serverUrl: String = ConnectionConfig.DEFAULT_RELAY_URL,
     val agentAddress: String = "",
-    val apiKey: String = "",
     val useDirectConnection: Boolean = false
 ) {
     val isValid: Boolean
@@ -266,11 +258,6 @@ fun AgentFormContent(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.outline
         )
-
-        AdvancedSettingsSection(
-            apiKey = formState.apiKey,
-            onApiKeyChange = { onFormStateChange(formState.copy(apiKey = it)) }
-        )
     }
 }
 
@@ -348,7 +335,9 @@ internal fun AgentAddressField(
 
                     ExposedDropdownMenu(
                         expanded = dropdownExpanded,
-                        onDismissRequest = { dropdownExpanded = false }
+                        onDismissRequest = { dropdownExpanded = false },
+                        shadowElevation = Elevation.hairline,
+                        border = MaterialTheme.hairline
                     ) {
                         if (filteredAgents.isEmpty()) {
                             DropdownMenuItem(
@@ -459,93 +448,6 @@ private fun AgentAddressPill(
         onFocusChanged = onFocusChanged,
         modifier = modifier
     )
-}
-
-/**
- * Collapsible "Advanced Settings" card (API Key only, for now) — shared by
- * [AgentFormContent] (Edit Agent's classic form) and [EmbeddedDiscoveryPanel]
- * (Onboarding / Add Agent's discovery-first flow), so both surfaces render
- * an identical accordion instead of two copies of the same ~40 lines.
- */
-@Composable
-fun AdvancedSettingsSection(
-    apiKey: String,
-    onApiKeyChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var showAdvanced by remember { mutableStateOf(false) }
-    var showApiKey by remember { mutableStateOf(false) }
-
-    val advancedShape = if (showAdvanced) {
-        RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 12.dp, bottomEnd = 12.dp)
-    } else {
-        RoundedCornerShape(12.dp)
-    }
-    val chevronRotation by animateFloatAsState(if (showAdvanced) 180f else 0f, label = "advancedChevron")
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), MaterialTheme.shapes.medium)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(advancedShape)
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .clickable { showAdvanced = !showAdvanced }
-                .padding(horizontal = MaterialTheme.spacing.lg, vertical = MaterialTheme.spacing.md2),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Advanced Settings", style = MaterialTheme.typography.bodyLarge)
-            Icon(
-                imageVector = Icons.Default.ExpandMore,
-                contentDescription = if (showAdvanced) "Collapse" else "Expand",
-                modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
-            )
-        }
-
-        AnimatedVisibility(visible = showAdvanced) {
-            Column(
-                modifier = Modifier
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(MaterialTheme.spacing.lg),
-                verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.lg)
-            ) {
-                Column {
-                    FieldLabel("API Key")
-                    PillTextField(
-                        shape = FormFieldShape,
-                        value = apiKey,
-                        onValueChange = onApiKeyChange,
-                        placeholder = "Enter API key if required",
-                        label = "API Key",
-                        visualTransformation = if (showApiKey) VisualTransformation.None
-                            else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done
-                        ),
-                        trailingContent = {
-                            // No explicit size: default 48dp touch target
-                            // fits comfortably inside the pill's own
-                            // heightIn(min = 52.dp).
-                            IconButton(onClick = { showApiKey = !showApiKey }) {
-                                Icon(
-                                    imageVector = if (showApiKey) Icons.Default.VisibilityOff
-                                        else Icons.Default.Visibility,
-                                    contentDescription = if (showApiKey) "Hide API key" else "Show API key"
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-    }
 }
 
 /**
