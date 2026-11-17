@@ -4,6 +4,7 @@ import ai.openonion.oochat.di.appContainer
 import ai.openonion.oochat.notification.AGENT_REPLY_CHANNEL_ID
 import ai.openonion.oochat.ui.common.FontSizeOption
 import ai.openonion.oochat.ui.common.appViewModel
+import ai.openonion.oochat.ui.components.AppSnackbarHost
 import ai.openonion.oochat.ui.components.BackTopAppBar
 import ai.openonion.oochat.ui.settings.components.AccountSection
 import ai.openonion.oochat.ui.settings.components.BackupSeedSheet
@@ -43,7 +44,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -107,6 +107,7 @@ fun SettingsScreen(
     val memoryEnabled by viewModel.memoryEnabled.collectAsState(initial = true)
     val fontSizeIndex by viewModel.fontSizeIndex.collectAsState(initial = 1)
     val customInstructions by viewModel.customInstructions.collectAsState(initial = "")
+    val developerToolsEnabled by viewModel.developerToolsEnabled.collectAsState(initial = false)
 
     var showCustomInstructions by remember { mutableStateOf(false) }
     var showDeleteDataSheet by remember { mutableStateOf(false) }
@@ -234,7 +235,7 @@ fun SettingsScreen(
                 )
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { AppSnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         Column(
             modifier = modifier
@@ -264,7 +265,9 @@ fun SettingsScreen(
                     showBackupSheet = true
                 },
                 onImportKey = { showImportSheet = true },
-                onReset = { showResetSheet = true }
+                onReset = { showResetSheet = true },
+                accountProblem = uiState.accountProblem,
+                identityWarning = if (uiState.legacyDerivation) SettingsViewModel.LEGACY_DERIVATION_WARNING else null
             )
 
             SettingsSection("Appearance") {
@@ -307,6 +310,15 @@ fun SettingsScreen(
                     label = "Sound effects",
                     checked = soundEffects,
                     onChange = { viewModel.setSoundEffects(it) }
+                )
+            }
+
+            SettingsSection("Developer") {
+                SwitchRow(
+                    label = "Direct tool execution",
+                    subtitle = "Show the manual EXEC tool panel in chats",
+                    checked = developerToolsEnabled,
+                    onChange = { viewModel.setDeveloperToolsEnabled(it) }
                 )
             }
 
@@ -430,4 +442,3 @@ fun SettingsScreen(
         }
     }
 }
-
