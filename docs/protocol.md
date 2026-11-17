@@ -29,9 +29,15 @@ tests can inject a different implementation.
 
 After a transient socket failure or close, `AgentConnection` retries up to five
 times with exponential delays of 2, 4, 8, 16, and 32 seconds. It emits a
-`ConnectionEvent.Reconnecting` while retrying. A pending onboarding gate
+`ConnectionEvent.Reconnecting` while retrying. Each retry sends a new `CONNECT`
+carrying `session_id` and, once agent events have been handled on that session,
+`last_msg_id`, so the Host can replay what was missed; see
+[Reconnect and replay](#reconnect-and-replay).
+A pending onboarding gate
 suppresses automatic reconnects until the user acts, and a rejected onboarding
-submission opens a fresh connection so the server can send a new gate.
+submission opens a fresh connection so the server can send a new gate. A Host
+that refuses the client's OIP version ends the cycle with no reconnect at all;
+see [Incompatible protocol version](#incompatible-protocol-version).
 
 ## Client to server frames
 
@@ -47,12 +53,14 @@ They are `@Serializable` Kotlin data classes and are encoded with
 | Field | Meaning |
 | --- | --- |
 | `type` | Always `"CONNECT"`. |
+| `protocol` | The OIP protocol descriptor, `OipProtocol.DESCRIPTOR`. See below. |
 | `payload` | `ConnectPayload(timestamp, to)`; this is the signed payload. |
 | `from` | The local Ed25519 address. |
 | `signature` | Hex Ed25519 signature over the canonical payload JSON. |
 | `timestamp` | Unix time in seconds. The same value is used in `payload`. |
 | `to` | Target agent address for relay mode; absent for direct mode. |
 | `session_id` | Optional persisted server-session identifier. |
+| `last_msg_id` | Optional. The Host's id for the last agent-log frame this connection handled on `session_id`; sent on a `CONNECT` for that same session (a reconnect, a switch back, the re-`CONNECT` after an invite code) and ignored by the Host unless the session is still running. Unsigned, like `session_id`. See [Reconnect and replay](#reconnect-and-replay). |
 | `session` | Optional `SessionState` snapshot. |
 
 `AgentConnection.sendConnectMessage()` builds the payload and uses
@@ -60,10 +68,88 @@ They are `@Serializable` Kotlin data classes and are encoded with
 signature. Keeping one timestamp for the signed payload and envelope avoids a
 signature mismatch.
 
+#### Protocol descriptor
+
+Every `CONNECT`, including the one re-sent after an onboarding gate, declares
+the OIP version the client speaks:
+
+```json
+"protocol": {"name": "oip", "version": "0.1", "min_version": "0.1", "max_version": "0.1"}
+```
+
+The descriptor is defined once, in
+`app/src/main/java/ai/openonion/oochat/data/protocol/OipProtocol.kt`, and
+matches `OIP_PROTOCOL` in `connectonion-react`'s `src/connect/protocol.ts`.
+It sits at the top level of the envelope and is not signed. The Host reads
+`data.get("protocol")` from the envelope and verifies the signature over
+`payload` alone, so adding the descriptor does not change the signed bytes.
+
+The Host compares only `name` and `version`, in `supports_oip()` in
+`connectonion/network/host/protocol.py`. It accepts a `CONNECT` with no
+descriptor only during the rolling compatibility window. That window covers
+1.7.x and may close no earlier than 1.8.0a1 (2026-09-15). If the Host does not
+support the declared version, it answers with a non-retryable
+`{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,"protocol":{…}}`.
+The client treats that as final; see
+[Incompatible protocol version](#incompatible-protocol-version).
+
+Covered by `OutgoingMessagesTest`, which checks the serialised `CONNECT`
+frame, and by `AgentConnectionRobolectricTest`, which checks the frame sent
+when the socket opens, the frame re-sent after onboarding, and that the
+descriptor is not part of the signed payload.
+
+#### Incompatible protocol version
+
+When the Host refuses the descriptor, the client shows one error and does not
+reconnect on its own. Retrying would send the same descriptor and be refused
+the same way, so each attempt would cost battery and add another copy of the
+error.
+
+1. `ProtocolParser` turns an `ERROR` whose `code` is `-32010`
+   (`OipProtocol.UNSUPPORTED_VERSION_CODE`) into
+   `ConnectionEvent.ProtocolRejected`. The event carries the Host's version
+   from the frame's `protocol` descriptor, for example `oip/0.2`, or null if
+   the descriptor is missing or malformed. The name and version are
+   peer-controlled and end up in `app.log` and in the error text, so anything
+   other than a short token (letters, digits, `.`, `_`, `+`, `-`, at most 32
+   characters) also reads as null. Every other `ERROR`, including ones with a
+   string `code`, stays a `ConnectionError`.
+2. `AgentConnection` marks the cycle as rejected, cancels any scheduled
+   reconnect, and closes the socket itself. The Host leaves the socket open
+   after its `ERROR`, and a later drop would otherwise start the reconnect
+   ladder. While the cycle is rejected, `attemptReconnect()`, `retryNow()` and
+   the socket reopen behind a conversation switch do nothing. That covers
+   socket drops, the network coming back, the app returning to the
+   foreground, and a switch that raced the refusal. Only a new `connect()`,
+   meaning the user trying again, clears the flag.
+3. `ConnectionRepositoryImpl` publishes
+   `ConnectionState.Error(retryable = false)` with the message from
+   `ServerErrorText.incompatibleProtocol()`, for example: "This agent uses a
+   different version of the chat protocol (oip/0.2) than this app (oip/0.1).
+   Update the app or the agent, then reconnect." It does this even if the
+   attempt had already connected, because an auto-reconnect after a Host
+   upgrade can be the `CONNECT` that is refused.
+4. `ConnectToAgentUseCase` does not make its usual second attempt after a
+   non-retryable error.
+5. `ChatViewModel` adds the message to the chat once. Its stale-session
+   suppression applies only to retryable errors, so a Host version that
+   happens to read like a stale-session error cannot hide the message.
+   `ConnectionBanner` titles the error "Incompatible version" rather than
+   "Connection failed", and keeps its Reconnect action: nothing recovers on its
+   own, and once the app or the agent is updated, that is the user's way back.
+
+Covered by `ProtocolParserVersionRejectionTest`, by the W16AAPPLE-12 section of
+`AgentConnectionRobolectricTest`, and by `ConnectionRepositoryImplTest`,
+`ConnectToAgentUseCaseTest`, `ServerErrorTextTest`, `ChatViewModelTest`, and `ConnectionBannerTest`.
+
 When reconnecting, `ConnectionRepositoryImpl` restores the saved
 `SessionState` through `SessionStore`, calls `AgentConnection.setSession()`,
 and the next `CONNECT` includes its `session_id`. This is how a server session
 is resumed after an app restart or connection loss.
+A reconnect on the same
+`AgentConnection` also names the last event it handled; see
+[Reconnect and replay](#reconnect-and-replay).
+
 
 ### `INPUT` — `InputMsg`
 
@@ -135,23 +221,115 @@ types are returned as `ConnectionEvent.Unknown` and do not alter the chat.
 | `ONBOARD_SUCCESS` | `id`, `level`, `message` | Creates a success card; the connection re-authenticates on the live socket. |
 | `intent` | `id`, `status`, `ack`, `is_build` | Updates a `ChatItem.IntentItem`. Status is `UNDERSTOOD` only when `status` is exactly `"understood"`, otherwise `ANALYZING`. |
 | `eval` | `id`, `status`, `passed`, `summary`, `expected`, `eval_path` | Updates a `ChatItem.EvalItem` holding the agent's self-grading result. Status is `DONE` only when `status` is exactly `"done"`, otherwise `EVALUATING`. |
-| `compact` | `id`, `status`, `context_before`, `context_after`, `context_percent`, `message`, `error` | Updates a `ChatItem.CompactItem` tracking context-window compaction. Status is `DONE` for `"done"`, `ERROR` for `"error"`, otherwise `COMPACTING` — the one status event with three terminal states rather than two. |
+| `compact` | `id`, `status`, `context_before`, `context_after`, `context_percent`, `message`, `error` | Updates a `ChatItem.CompactItem` tracking context-window compaction. Status is `DONE` for `"done"`, `ERROR` for `"error"`, otherwise `COMPACTING` — the one status event with three terminal states rather than two. Rendered as a subtle divider in the chat timeline (see [Compaction in the timeline](#compaction-in-the-timeline)). |
 | `tool_blocked` | `id`, `tool`, `reason`, `message`, `command` | Creates a `ChatItem.ToolBlockedItem` for a tool call that policy vetoed before it ran. Missing `tool`, `reason`, and `message` default to the empty string. |
 | `plan_review` | `id`, `plan_content` | Creates a `ChatItem.PlanReviewItem` and enters a waiting state until the user answers with `PLAN_REVIEW_RESPONSE`. |
 | `files_received` | `id`, `files[].name`, `files[].path` | Creates a `ChatItem.FilesReceivedItem` listing files the agent returned; an absent `files` array yields an empty list. |
 | `ulw_turns_reached` | `id`, `turns_used`, `max_turns` | Creates a `ChatItem.UlwTurnsReachedItem` and enters a waiting state until the user answers with `ULW_RESPONSE`. Both counters default to `0`. |
+| `RUNTIME_INPUT_ACK` | `session_id`, `id` | Emits `ConnectionEvent.RuntimeInputAcknowledged`: the host queued an `INPUT` that arrived mid-turn for the running turn's next iteration. `id` is the host's own UUID for the queued item, **not** the `input_id` we sent, so it cannot name the message it answers — see [Runtime input](#runtime-input). Not an `OUTPUT`: it does not end the turn. |
 | `OUTPUT` | `input_id`, `result`, `session` | Emits the final output when it belongs to the current input, or for any direct connection; updates the session snapshot. |
-| `ERROR` | `message`, `error` | Emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
+| `ERROR` | `code`, `protocol`, `retryable`, `session_id`, `message`, `error` | With `code` `-32010`, emits `ProtocolRejected` (see [Incompatible protocol version](#incompatible-protocol-version)). With `code` `"RUNTIME_INPUT_REJECTED"`, emits `RuntimeInputRejected` instead of an error: the socket and the running turn are healthy, and `ConnectionError` could start the reconnect ladder (see [Runtime input](#runtime-input)). `retryable` is read as true only for a literal boolean `true`. Every other `ERROR` emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
 
 For `assistant`, `thinking` text, `agent_image`, and `session_sync`, the parser
 uses `stableAssistantId()` to make replayed messages idempotent. This prevents
 the same assistant response from appearing multiple times after reconnecting.
+That is the second line of defence: `AgentConnection` first drops a repeat of a
+frame it has already handled (see [Reconnect and replay](#reconnect-and-replay)).
 
 The status and checkpoint events reuse the server's `id` instead. When a frame
 omits it the parser generates a UUID, so that frame cannot be correlated with a
 later update for the same item. `llm_result` and `tool_result` are stricter:
 with no `id` (or `tool_id`) there is nothing to update, so they parse to
 `ConnectionEvent.Unknown` rather than inventing one.
+
+### Compaction in the timeline
+
+When the agent's context window fills, the server compacts it: earlier turns
+are replaced by a summary. The server announces this with two `compact`
+frames that share one `id`, for example:
+
+```json
+{"type":"compact","id":"c1","status":"compacting","context_percent":91.2}
+{"type":"compact","id":"c1","status":"done","context_before":90.0,"context_after":32.951}
+```
+
+The percentages are floats from 0 to 100, so the client parses them as
+`Double`. Both frames parse to `ConnectionEvent.ChatItemUpdated`, so the
+second replaces the first in place. `CompactDivider` (in
+`ui/chat/components/StatusItemCards.kt`) draws the item as a thin, centred,
+outline-coloured line rather than a card, because nothing about it needs an
+answer:
+
+| Status | Divider text |
+| --- | --- |
+| `COMPACTING` | "Compacting context…" |
+| `DONE` | "Context compacted: 90% → 33%" (rounded), else `message`, else "Context compacted"; followed by a hint that earlier messages were summarised and the agent may not recall their details. |
+| `ERROR` | `error`, else "Compaction failed", in the error colour. There is no memory-loss hint, because nothing was summarised. |
+
+`CompactItem` is persisted with the transcript (`TranscriptItemPayload.Compact`),
+so a restored chat still shows where the agent's memory was cut. If the stream
+ends while an item is still `COMPACTING`, `resolveRunningItems()` marks it `DONE`.
+
+## Runtime input
+
+An `INPUT` that reaches a host while that session's agent is running is treated
+as *runtime input* instead of starting a second turn. The host replies at once,
+on the same socket, with one of two frames:
+
+| Host reply | Meaning | Wire shape |
+| --- | --- | --- |
+| `RUNTIME_INPUT_ACK` | Queued for the running turn. | `{"type":"RUNTIME_INPUT_ACK","session_id":"…","id":"<host uuid>"}` |
+| `ERROR` + `RUNTIME_INPUT_REJECTED` | Not taken (the turn is sealed, or the agent lacks the `runtime_input` plugin). Nothing was queued. | `{"type":"ERROR","code":"RUNTIME_INPUT_REJECTED","message":"…","session_id":"…","retryable":true}` |
+
+Source of truth: `ws_router/session.py` in openonion/connectonion, which sends
+the ACK only after `push_runtime_input` accepted the text.
+
+**Linking a reply to its message.** Neither frame carries the `input_id` we
+sent: the ACK's `id` is minted by the host. A reply can therefore only be
+linked by there being exactly one candidate. `ChatViewModel` allows one message
+awaiting an answer at a time (`pendingRuntimeInput`) and holds its send lock
+until that answer arrives or `RUNTIME_INPUT_REPLY_TIMEOUT_MS` passes, so the next
+message cannot go out while one is owed. A reply can never be handed to the wrong
+message, even when the client was wrong about a turn running and the host never
+answers.
+
+The message is registered *before* the `INPUT` leaves: the host answers the
+moment it reads it, and a reply that beat the registration would find nobody
+waiting. Only mid-turn sends are registered; an `INPUT` to an idle agent starts a
+turn and gets no such reply.
+
+**Bubble state (`UserMessageState`).** A message sent into a running turn shows
+`AWAITING_ACK` ("Sending…") until the host answers:
+
+| Event | Result |
+| --- | --- |
+| `RUNTIME_INPUT_ACK` | `SENT` |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (first time) | `QUEUED`, then held until the turn's `OUTPUT` and sent again as an ordinary `INPUT`. The same bubble is reused and the same payload is sent, images and files included. |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (second time) | `FAILED` (tap to resend). A message is repeated once, never in a loop. |
+| `RUNTIME_INPUT_REJECTED`, not retryable | `FAILED` (tap to resend) |
+| `OUTPUT` with no reply | `SENT`. The host answers a runtime `INPUT` immediately, so silence until `OUTPUT` means the message reached an agent that had just gone idle and started its own turn. |
+| No reply within `RUNTIME_INPUT_REPLY_TIMEOUT_MS` | `SENT`, for the same reason. |
+| Any other `ERROR` frame | No change. It says nothing about whether the host took this message; the host's own refusal arrives as its own event. |
+| Disconnect / reconnect | `FAILED`. No reply can arrive on a dead socket and whether the host queued it is unknown. |
+
+**When this happens at all.** `ChatViewModel.sendWhenTheAgentIsIdle` still holds
+ordinary messages until the running turn ends (see `architecture.md`), so a
+message only goes out mid-turn when that hold times out
+(`ChatViewModel.TURN_WAIT_TIMEOUT_MS`) or the client's view of the turn was
+stale. The ACK handling is what makes that path honest rather than silent.
+A message with images or files is never sent into a running turn, because the
+host’s runtime-input queue keeps only the text. It is held until the turn ends.
+If the turn is still running after 2 minutes, the message is marked failed
+(tap to resend) rather than sent or held forever.
+
+**Known gaps.**
+
+- A reply that arrives with nothing awaiting it is logged and ignored. If a
+  refusal crossed the turn's `OUTPUT` on the wire, the `OUTPUT` has already
+  settled the message as `SENT` and the refusal cannot be attributed, so that
+  message is not resent.
+- Hosts older than the change that made the ACK truthful acknowledge input they
+  never drain. Nothing on the wire identifies such a host.
 
 ## Session state and recovery
 
@@ -177,8 +355,102 @@ The recovery path is therefore:
 saved SessionState -> SessionStore.getSession(agentAddress)
                    -> AgentConnection.setSession(...)
                    -> next CONNECT carries session_id
+                   -> (a reconnect on the same AgentConnection also carries last_msg_id)
                    -> CONNECTED / OUTPUT / session_sync refresh local state
 ```
+### Reconnect and replay
+
+A dropped socket does not stop the agent. The Host keeps the running turn and a
+log of everything the agent has sent on that session, so a client that comes
+back can ask for what it missed instead of losing it.
+
+**What the client sends.** Every `CONNECT` carries `session_id`. A `CONNECT` for
+the session the connection last handled agent frames on (a retry from the ladder
+or `retryNow()`, a switch back to that session, the re-`CONNECT` after an invite
+code) also carries `last_msg_id`: the Host's own id for the last agent-log frame
+handled there. The Host ignores it unless the session is still `running`. The id
+is unsigned and sits next to `session_id` on the envelope; the signed `payload`
+is still just `timestamp`, plus `to` in relay mode. A `CONNECT` for any other
+session (a different conversation, or a stale-session rejection, which drops the
+session) sends no `last_msg_id`.
+
+**What moves the cursor.** Any frame that carries an `id`, except the frames the
+Host writes straight to the socket instead of appending to its log: `CONNECTED`,
+`OUTPUT`, `ERROR`, `PING`, `AGENT_PROFILE`, `DASHBOARD_SNAPSHOT`,
+`SESSION_STATUS`, `RUNTIME_INPUT_ACK` (whose `id` is a UUID the Host mints for the
+queued input, not a log entry), `ONBOARD_REQUIRED` and `ONBOARD_SUCCESS`
+(`HOST_FRAME_TYPES` in `ProtocolParser`). The Host stamps an `id` on every entry in its log, so this
+follows new event types (`plan`, `turn_result`, `provider_message`, and so on)
+without a list to maintain, whether or not the client decodes them;
+`ProtocolParser` puts it in `ParseResult.msgId`. An id on one of the excluded
+frames would name nothing the Host could rewind to. `AgentConnection` stores the
+latest id together with its session and sends it only while that session is
+still the current one; `reset()` clears it.
+
+**What the Host does.**
+
+| Session on the Host | `CONNECTED` | Replay |
+| --- | --- | --- |
+| `running`, `last_msg_id` known | `status: "running"` | Every logged frame after that id |
+| `running`, no id or an unknown one | `status: "running"` | The whole current execution |
+| `connected`: the turn finished while the client was away | `status: "connected"` | None. If the Host's copy is newer, `CONNECTED` carries it and the app merges it (`ServerTranscriptReceived`). |
+| Not found | `status: "new"` | None |
+
+The Host finds the id by searching its log from the start and resumes after the
+*first* frame that carries it. An `llm_call` and its `llm_result` share one id, as
+do the statuses of a `compact` or an `eval`, so a replay can start earlier than
+the client expects and re-send frames it already has. The Host leaves
+de-duplication to the client.
+
+**De-duplication.** `ProtocolParser` gives each frame that becomes a chat item
+(or updates one) a `dedupeKey`: a SHA-256 of the frame as the client decodes it,
+without `session_id`. `AgentConnection.handleMessage` keeps the last
+`MAX_SEEN_FRAMES` (4096) keys and drops a frame whose key it has seen straight
+after parsing, before the session is updated and before `Waiting` or any chat
+event is emitted, so a repeat changes nothing. The key is not the raw text:
+through the relay every frame carries a `conn_id` that is new for each client
+socket, so the same logged event reads differently after a reconnect. Nor is it
+the `id` alone: the Host reuses one id for `llm_call` and `llm_result` and for
+every status of a `compact` or an `eval`, so comparing ids would drop real
+updates. (`tool_call` and `tool_result` share a `tool_id`, but each frame has its
+own `id`.) Three kinds of frame have no key and
+are never dropped: the snapshots the Host re-sends on every `CONNECT`
+(`AGENT_PROFILE`, `DASHBOARD_SNAPSHOT`); `session_sync`, whose replay carries the
+session as it is now and so never equals the original, and which is already safe
+to receive twice (a reply's id comes from its content); and frames the client
+does not decode. A dropped repeat also leaves the cursor where it was. The
+item-level idempotence described above (`stableAssistantId()`, `dedupeUI()`)
+stays as the second line of defence.
+
+**Order.** `AgentConnection` handles frames one at a time, in the order they
+arrive on the socket's reader thread; the Host replays in log order and finishes
+the replay before any live frame; and `socketGeneration` discards late frames
+from a socket the client has already replaced. Nothing sorts events, so items
+are added to the chat in log order. The one deliberate exception is that cards
+waiting for the user's answer (approval, `ask_user`, and similar) stay pinned to
+the bottom of the list.
+
+**Buffers.** Events reach the chat through two `SharedFlow`s:
+`AgentConnection.events` and the chat bus in `ConnectionRepositoryImpl`. Both
+hold `AgentConnection.EVENT_BUFFER_CAPACITY` (1024) events and drop the oldest
+when full, so a stuck collector can never stall the socket. That is a bound, not
+a guarantee: a replay of more than about a thousand events arriving while the
+chat is busy can still lose the oldest.
+
+**Known gaps.** The cursor and the keys of the frames already seen live in the `AgentConnection`
+instance, in memory. A new instance (the Reconnect button, an app restart)
+starts without them, sends no `last_msg_id`, and the Host replays the whole
+current execution; only the item-level de-duplication then protects against
+repeats. Persisting the cursor is not implemented.
+
+Covered by `OutgoingMessagesTest` (the `CONNECT` wire shape), `ProtocolParserTest`
+(`msgId` on every log frame and no host frame; a `dedupeKey` that ignores `conn_id`
+and `session_id` and separates frames that differ), `AgentConnectionRobolectricTest`
+(the cursor is sent, scoped to its session and kept out of the signed payload;
+repeats are dropped once and in order, also when the relay names the new socket
+differently; snapshots still arrive; `reset()` and a switch away and back; a
+200-frame burst arrives whole), and `ConnectionRepositoryImplTest` (the same
+burst through the chat bus).
 
 ## HTTP exception
 

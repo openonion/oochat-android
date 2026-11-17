@@ -1,10 +1,15 @@
 package ai.openonion.oochat.network
 
 import ai.openonion.oochat.crypto.KeyManager
+import ai.openonion.oochat.crypto.TestIdentity
+import ai.openonion.oochat.data.protocol.OipProtocol
+import ai.openonion.oochat.data.protocol.ProtocolDescriptor
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.knownIssue
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,6 +30,10 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
@@ -43,13 +52,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
+import java.io.PrintStream
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Unit tests for [AgentConnection] against a fake [WebSocketFactory] (the
  * seam it already exposes for testing) plus a real, Robolectric-backed
- * [KeyManager] pre-seeded via [KeyManager.keysFromHex] (pure byte-slicing,
- * no native call) so [AgentConnection.connect] can reach [KeyManager.loadOrGenerate]'s
+ * [KeyManager] pre-seeded with a saved identity ([TestIdentity], derived
+ * off-device) so [AgentConnection.connect] can reach [KeyManager.loadOrGenerate]'s
  * existing-key path.
  *
  * Deliberately never invokes [WebSocketListener.onOpen]: `AgentConnection`'s
@@ -100,7 +112,11 @@ class AgentConnectionRobolectricTest {
         @Volatile var lastListener: WebSocketListener? = null
         @Volatile var lastWebSocket: FakeWebSocket? = null
 
+        /** Every request a socket was opened for, in order — the URL the app actually dialled. */
+        val requests = CopyOnWriteArrayList<Request>()
+
         override fun create(request: Request, listener: WebSocketListener): WebSocket {
+            requests += request
             val ws = FakeWebSocket()
             lastWebSocket = ws
             lastListener = listener
@@ -121,10 +137,10 @@ class AgentConnectionRobolectricTest {
     @Before
     fun setUp() {
         keyManager = KeyManager(ApplicationProvider.getApplicationContext())
-        // keysFromHex is pure byte-slicing (no native libsodium call) — see
-        // class doc — so loadOrGenerate() below takes the existing-key
-        // path instead of falling through to the blocked generate() path.
-        keyManager.save(keyManager.keysFromHex("aa".repeat(32) + "bb".repeat(32)))
+        // A saved identity — see class doc — so loadOrGenerate() takes the
+        // existing-key path instead of falling through to the blocked
+        // generate() path.
+        keyManager.save(TestIdentity.keys())
         factory = FakeWebSocketFactory()
         // respondToOnboard() signs its payload via keyManager.sign(), which
         // (like sendConnectMessage's CONNECT signing — see class doc) needs
@@ -600,6 +616,74 @@ class AgentConnectionRobolectricTest {
             payloadTs,
             envelopeTs
         )
+    }
+
+    // ── W16AAPPLE-11: OIP protocol descriptor ─────────────────────────
+
+    private fun sentConnect(): JsonObject {
+        val frame = factory.lastWebSocket!!.sentMessages.lastOrNull { it.contains("\"type\":\"CONNECT\"") }
+            ?: error("no CONNECT was sent")
+        return Json.parseToJsonElement(frame).jsonObject
+    }
+
+    private fun assertDeclaresOip(connect: JsonObject) {
+        val protocol = connect["protocol"]?.jsonObject ?: error("CONNECT has no protocol descriptor: $connect")
+        assertEquals(
+            Json.decodeFromJsonElement(ProtocolDescriptor.serializer(), protocol),
+            OipProtocol.DESCRIPTOR
+        )
+        assertEquals("oip", protocol["name"]?.jsonPrimitive?.content)
+        assertEquals("0.1", protocol["version"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `the CONNECT sent when the socket opens declares the OIP protocol descriptor`() {
+        connection.connect("0xAGENT")
+        factory.lastListener?.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+        assertDeclaresOip(sentConnect())
+    }
+
+    @Test
+    fun `the CONNECT resent after onboarding still declares the OIP protocol descriptor`() {
+        connection.connect("0xAGENT")
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"ONBOARD_REQUIRED","id":"ob1","methods":["invite_code"]}"""
+        )
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"ONBOARD_SUCCESS","id":"ob1","level":"contact","message":"ok"}"""
+        )
+
+        assertDeclaresOip(sentConnect())
+    }
+
+    @Test
+    fun `the OIP descriptor is not part of the signed CONNECT payload`() {
+        // The Host verifies the signature over `payload` alone and reads
+        // `protocol` off the envelope, so the descriptor must not change the
+        // bytes the client signs.
+        val signed = CopyOnWriteArrayList<String>()
+        val conn = AgentConnection(
+            keyManager,
+            webSocketFactory = factory,
+            signer = { _, canonical -> signed += canonical; "fake-signature" }
+        )
+        try {
+            conn.connect("0xAGENT")
+            factory.lastListener?.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+            val canonical = signed.singleOrNull() ?: error("expected one signed CONNECT payload, saw $signed")
+            assertFalse("protocol must stay on the envelope: $canonical", canonical.contains("protocol"))
+            assertEquals(
+                "the envelope's payload must be exactly what was signed",
+                Json.parseToJsonElement(canonical),
+                sentConnect()["payload"]
+            )
+        } finally {
+            conn.teardown()
+        }
     }
 
     @Test
@@ -1528,6 +1612,293 @@ class AgentConnectionRobolectricTest {
     }
 
     @Test
+    fun `the CONNECT sent on reconnect carries the session id and the last message id seen`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        val first = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(first, fakeResponse())
+        simulateConnected("sess-1")
+        factory.lastListener!!.onMessage(first, """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}""")
+        factory.lastListener!!.onMessage(first, """{"type":"thinking","id":"ev-2","content":"working on it"}""")
+
+        // The socket drops; rung #1 (2 s) wakes on the virtual clock and opens a second socket.
+        factory.lastListener!!.onClosed(first, 1006, "abnormal closure")
+        advanceUntilIdle()
+        assertEquals("test setup: the ladder should have opened a replacement socket", 2, factory.socketCount)
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+        val connect = sentConnect()
+        assertEquals("sess-1", connect["session_id"]?.jsonPrimitive?.content)
+        assertEquals("ev-2", connect["last_msg_id"]?.jsonPrimitive?.content)
+        conn.teardown()
+    }
+
+        /**
+     * Opens [conn], delivers [before] on the first socket, drops it, and returns
+     * the socket the ladder opens next, already CONNECTED again.
+     */
+    private fun TestScope.reconnectAfter(conn: AgentConnection, before: List<String>): WebSocket {
+        conn.connect("0xAGENT")
+        val first = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(first, fakeResponse())
+        simulateConnected("sess-1")
+        before.forEach { factory.lastListener!!.onMessage(first, it) }
+
+        factory.lastListener!!.onClosed(first, 1006, "abnormal closure")
+        advanceUntilIdle()
+        val second = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(second, fakeResponse())
+        simulateConnected("sess-1")
+        return second
+    }
+
+    @Test
+    fun `frames replayed after a reconnect are delivered once and in order`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        val a = """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}"""
+        val b = """{"type":"tool_call","id":"ev-2","tool_id":"t2","name":"bash"}"""
+        val c = """{"type":"tool_call","id":"ev-3","tool_id":"t3","name":"bash"}"""
+        val second = reconnectAfter(conn, listOf(a, b))
+
+        // The Host replays the turn from the top: a and b again, then c, which is new.
+        listOf(a, b, c).forEach { factory.lastListener!!.onMessage(second, it) }
+
+        val ids = seen.filterIsInstance<ConnectionEvent.ChatItemReceived>().map { it.item.id }
+        assertEquals(listOf("t1", "t2", "t3"), ids)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a replayed approval_needed does not put the chat back into waiting`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        val approval = """{"type":"approval_needed","id":"ap-1","tool":"bash","arguments":{"command":"ls"}}"""
+        val second = reconnectAfter(conn, listOf(approval))
+
+        factory.lastListener!!.onMessage(second, approval)
+
+        assertEquals(1, seen.count { it is ConnectionEvent.Waiting })
+        conn.teardown()
+    }
+
+    @Test
+    fun `frames that share an id but not a type or status are not mistaken for repeats`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(ws, fakeResponse())
+        simulateConnected("sess-1")
+
+        // The Host reuses one id for a call and its result, and for every status of a compaction.
+        listOf(
+            """{"type":"llm_call","id":"L1","model":"m"}""",
+            """{"type":"llm_result","id":"L1","model":"m","status":"done"}""",
+            """{"type":"compact","id":"C1","status":"compacting"}""",
+            """{"type":"compact","id":"C1","status":"done"}"""
+        ).forEach { factory.lastListener!!.onMessage(ws, it) }
+
+        val delivered = seen.count { it is ConnectionEvent.ChatItemReceived || it is ConnectionEvent.ChatItemUpdated }
+        assertEquals("every one of the four frames must reach the chat", 4, delivered)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a burst of frames bigger than the event buffer is delivered whole`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(ws, fakeResponse())
+        simulateConnected("sess-1")
+
+        // A consumer stuck on its first event while the burst arrives, like a slow Room write.
+        val release = CompletableDeferred<Unit>()
+        val delivered = mutableListOf<String>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            conn.events.collect { event ->
+                release.await()
+                if (event is ConnectionEvent.ChatItemReceived) delivered += event.item.id
+            }
+        }
+
+        val burst = 200
+        repeat(burst) { i ->
+            factory.lastListener!!.onMessage(ws, """{"type":"tool_call","id":"ev-$i","tool_id":"t$i","name":"bash"}""")
+        }
+        release.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals((0 until burst).map { "t$it" }, delivered)
+        conn.teardown()
+    }
+    @Test
+    fun `a conversation switch does not carry the previous last message id`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        val first = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(first, fakeResponse())
+        simulateConnected("sess-A")
+        factory.lastListener!!.onMessage(first, """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}""")
+
+        conn.switchSession(SessionState(sessionId = "sess-B"))
+        runCurrent()
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+        val connect = sentConnect()
+        assertEquals("sess-B", connect["session_id"]?.jsonPrimitive?.content)
+        assertNull("ev-1 belongs to sess-A's log, not sess-B's", connect["last_msg_id"])
+        conn.teardown()
+    }
+
+    @Test
+    fun `an id on a frame written straight to the socket is never sent as last_msg_id`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val frames = listOf(
+            """{"type":"AGENT_PROFILE","id":"host-1","name":"agent","model":"m"}""",
+            """{"type":"DASHBOARD_SNAPSHOT","id":"host-2","html":"<p>hi</p>"}"""
+        )
+
+        reconnectAfter(conn, frames)
+
+        assertNull(sentConnect()["last_msg_id"])
+        conn.teardown()
+    }
+
+    @Test
+    fun `a snapshot re-sent on every CONNECT is not mistaken for a replay`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        val profile = """{"type":"AGENT_PROFILE","name":"agent","model":"m"}"""
+        val second = reconnectAfter(conn, listOf(profile))
+
+        factory.lastListener!!.onMessage(second, profile)
+
+        assertEquals(2, seen.count { it is ConnectionEvent.AgentProfileReceived })
+        conn.teardown()
+    }
+
+    @Test
+    fun `the last message id is not part of the signed CONNECT payload`() = runTest {
+        val signed = CopyOnWriteArrayList<String>()
+        val conn = AgentConnection(
+            keyManager,
+            webSocketFactory = factory,
+            signer = { _, canonical -> signed += canonical; "fake-signature" },
+            reconnectDispatcher = StandardTestDispatcher(testScheduler)
+        )
+        conn.connect("0xAGENT")
+        val first = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(first, fakeResponse())
+        simulateConnected("sess-1")
+        factory.lastListener!!.onMessage(first, """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}""")
+        factory.lastListener!!.onClosed(first, 1006, "abnormal closure")
+        advanceUntilIdle()
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+        val reconnect = sentConnect()
+        assertEquals("ev-1", reconnect["last_msg_id"]?.jsonPrimitive?.content)
+        val canonical = signed.last()
+        assertFalse("last_msg_id must stay on the envelope: $canonical", canonical.contains("last_msg_id"))
+        assertEquals(
+            "the envelope's payload must be exactly what was signed",
+            Json.parseToJsonElement(canonical),
+            reconnect["payload"]
+        )
+        conn.teardown()
+    }
+
+    @Test
+    fun `repeats are dropped when the relay stamps a different conn_id on the new socket`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        fun relayed(toolId: String, connId: String) =
+            """{"session_id":"sess-1","type":"tool_call","id":"ev-$toolId","tool_id":"$toolId","name":"bash","conn_id":"$connId"}"""
+        val second = reconnectAfter(conn, listOf(relayed("t1", "conn-a"), relayed("t2", "conn-a")))
+
+        // The same logged events on a new socket, which the relay names differently.
+        listOf(relayed("t1", "conn-b"), relayed("t2", "conn-b"), relayed("t3", "conn-b"))
+            .forEach { factory.lastListener!!.onMessage(second, it) }
+
+        val ids = seen.filterIsInstance<ConnectionEvent.ChatItemReceived>().map { it.item.id }
+        assertEquals(listOf("t1", "t2", "t3"), ids)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a replayed session_sync is processed, not dropped`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        val sync = """{"type":"session_sync","id":"ss-1","session":{"session_id":"sess-1","messages":[{"role":"assistant","content":"hello"}]}}"""
+        val second = reconnectAfter(conn, listOf(sync))
+
+        factory.lastListener!!.onMessage(second, sync)
+
+        // A replayed snapshot carries the session as it is now, so it is never a repeat. The reply's id comes
+        // from its content, so receiving it twice is safe.
+        assertEquals(2, seen.count { it is ConnectionEvent.ChatItemReceived && it.fromSessionSnapshot })
+        conn.teardown()
+    }
+
+    @Test
+    fun `reset forgets the last message id and the frames already seen`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(ws, fakeResponse())
+        simulateConnected("sess-1")
+        val call = """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}"""
+        factory.lastListener!!.onMessage(ws, call)
+
+        conn.reset()
+        conn.switchSession(SessionState(sessionId = "sess-1"))
+        runCurrent()
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+        factory.lastListener!!.onMessage(factory.lastWebSocket!!, call)
+
+        assertNull(sentConnect()["last_msg_id"])
+        assertEquals("after a reset the same frame is news again", 2, seen.count { it is ConnectionEvent.ChatItemReceived })
+        conn.teardown()
+    }
+
+    @Test
+    fun `returning to a session whose last message id is still held sends it again`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        val a = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(a, fakeResponse())
+        simulateConnected("sess-A")
+        factory.lastListener!!.onMessage(a, """{"type":"tool_call","id":"ev-a1","tool_id":"ta1","name":"bash"}""")
+
+        // Away to B, which says nothing, and back to A.
+        conn.switchSession(SessionState(sessionId = "sess-B"))
+        runCurrent()
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+        conn.switchSession(SessionState(sessionId = "sess-A"))
+        runCurrent()
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+
+        val connect = sentConnect()
+        assertEquals("sess-A", connect["session_id"]?.jsonPrimitive?.content)
+        assertEquals("ev-a1", connect["last_msg_id"]?.jsonPrimitive?.content)
+        conn.teardown()
+    }
+
+    @Test
+    fun `an acknowledgement of runtime input does not become the replay position`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val logged = """{"type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash"}"""
+        // The Host mints this id for the queued input and sends the frame directly; it is not in its log.
+        val ack = """{"type":"RUNTIME_INPUT_ACK","session_id":"sess-1","id":"host-made-up"}"""
+
+        reconnectAfter(conn, listOf(logged, ack))
+
+        assertEquals("ev-1", sentConnect()["last_msg_id"]?.jsonPrimitive?.content)
+        conn.teardown()
+    }
+
+    @Test
     fun `the socket a switch replaces cannot report its own close as a disconnect`() = runTest {
         // reopenSocket closes synchronously but opens from a launch, and the
         // generation the stale-callback guard compares against was only bumped
@@ -1675,6 +2046,422 @@ class AgentConnectionRobolectricTest {
             terminal is ConnectionEvent.ConnectionError &&
                 terminal.message.contains("Agent not connected")
         )
+    }
+
+    // ── direct (/ws) vs relay (/ws/input) ─────────────────────────────
+    //
+    // Two ways to reach an agent. Through the relay, the socket is the relay's
+    // shared /ws/input and every frame has to say which agent it is for; direct,
+    // the socket *is* the agent's /ws and naming it is meaningless. A frame
+    // routed the wrong way is not an error anyone sees — the relay just never
+    // delivers it — so the endpoint and the `to` field are pinned here.
+    //
+    // OkHttp stores ws/wss schemes as http/https on the Request, so a dialled
+    // `wss://host/ws` reads back as `https://host/ws`.
+
+    private val agent = "0x" + "c5".repeat(32)
+
+    /** A connection whose signer records the canonical payloads it was asked to sign. */
+    private fun recordingConnection(
+        relayUrl: String = AgentConnection.DEFAULT_RELAY,
+        signed: MutableList<String>
+    ) = AgentConnection(
+        keyManager,
+        relayUrl = relayUrl,
+        webSocketFactory = factory,
+        signer = { _, canonical -> signed += canonical; "fake-signature" }
+    )
+
+    private fun dialled(): String = factory.requests.last().url.toString()
+
+    /** Opens the socket, which is what sends CONNECT, and returns that frame. */
+    private fun openAndReadConnect(): JsonObject {
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+        val frame = factory.lastWebSocket!!.sentMessages.single { it.contains("\"type\":\"CONNECT\"") }
+        return Json.parseToJsonElement(frame).jsonObject
+    }
+
+    private fun sendAndReadInput(conn: AgentConnection, address: String): JsonObject {
+        simulateConnected()
+        factory.lastWebSocket!!.sentMessages.clear()
+        conn.sendMessage("hello", address)
+        return Json.parseToJsonElement(factory.lastWebSocket!!.sentMessages.single()).jsonObject
+    }
+
+    @Test
+    fun `a relay connection dials the default relay's shared input socket over TLS`() {
+        connection.connect(agent)
+
+        assertEquals("https://oo.openonion.ai/ws/input", dialled())
+    }
+
+    @Test
+    fun `a relay configured over plain http is dialled without TLS`() {
+        val conn = AgentConnection(keyManager, relayUrl = "http://relay.test:8080", webSocketFactory = factory, signer = { _, _ -> "s" })
+        conn.connect(agent)
+
+        assertEquals("http://relay.test:8080/ws/input", dialled())
+        conn.teardown()
+    }
+
+    @Test
+    fun `a direct https agent is dialled at its own ws endpoint over TLS`() {
+        connection.connect(agent, directUrl = "https://agent.example.com")
+
+        assertEquals("https://agent.example.com/ws", dialled())
+    }
+
+    @Test
+    fun `a direct http agent is dialled at its own ws endpoint without TLS`() {
+        connection.connect(agent, directUrl = "http://192.168.1.20:8000")
+
+        assertEquals("http://192.168.1.20:8000/ws", dialled())
+    }
+
+    @Test
+    fun `a relay CONNECT names its agent in the signed payload and on the envelope`() {
+        val signed = mutableListOf<String>()
+        val conn = recordingConnection(signed = signed)
+        conn.connect(agent)
+
+        val connect = openAndReadConnect()
+        val payload = connect["payload"]!!.jsonObject
+        val timestamp = payload["timestamp"]!!.jsonPrimitive.content
+
+        assertEquals(agent, payload["to"]?.jsonPrimitive?.content)
+        assertEquals(agent, connect["to"]?.jsonPrimitive?.content)
+        assertEquals(timestamp, connect["timestamp"]?.jsonPrimitive?.content)
+        assertEquals(keyManager.load()!!.address, connect["from"]?.jsonPrimitive?.content)
+        assertEquals(
+            "the relay verifies the signature over exactly these bytes",
+            """{"timestamp":$timestamp,"to":"$agent"}""",
+            signed.single()
+        )
+        conn.teardown()
+    }
+
+    @Test
+    fun `a direct CONNECT names no agent anywhere, signed or not`() {
+        val signed = mutableListOf<String>()
+        val conn = recordingConnection(signed = signed)
+        conn.connect(agent, directUrl = "https://agent.example.com")
+
+        val connect = openAndReadConnect()
+        val payload = connect["payload"]!!.jsonObject
+        val timestamp = payload["timestamp"]!!.jsonPrimitive.content
+
+        assertFalse("payload: $payload", payload.containsKey("to"))
+        assertFalse("envelope: $connect", connect.containsKey("to"))
+        assertEquals("""{"timestamp":$timestamp}""", signed.single())
+        conn.teardown()
+    }
+
+    @Test
+    fun `a relay INPUT is addressed to its agent`() {
+        connection.connect(agent)
+
+        val input = sendAndReadInput(connection, agent)
+
+        assertEquals("INPUT", input["type"]?.jsonPrimitive?.content)
+        assertEquals(agent, input["to"]?.jsonPrimitive?.content)
+        assertEquals("hello", input["prompt"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `a direct INPUT carries no address`() {
+        connection.connect(agent, directUrl = "https://agent.example.com")
+
+        val input = sendAndReadInput(connection, agent)
+
+        assertFalse("input: $input", input.containsKey("to"))
+    }
+
+    @Test
+    fun `switching between relay and direct on one connection re-decides the routing each time`() {
+        connection.connect(agent)
+        assertTrue(sendAndReadInput(connection, agent).containsKey("to"))
+
+        connection.connect(agent, directUrl = "https://agent.example.com")
+        assertEquals("https://agent.example.com/ws", dialled())
+        assertFalse("direct after relay kept the relay's routing", sendAndReadInput(connection, agent).containsKey("to"))
+
+        connection.connect(agent)
+        assertEquals("https://oo.openonion.ai/ws/input", dialled())
+        assertTrue("relay after direct kept the direct routing", sendAndReadInput(connection, agent).containsKey("to"))
+    }
+
+    // Known issues in direct-URL handling: openWebSocket strips only an
+    // http(s) scheme and picks TLS by startsWith("https"), and appends "/ws"
+    // to whatever is left. Both validators accept ws:// and wss:// server URLs.
+
+    @Test
+    fun `known issue - a direct wss URL is dialled at a host called wss`() {
+        connection.connect(agent, directUrl = "wss://agent.example.com")
+
+        knownIssue("a direct wss://host URL becomes ws://wss://host/ws, so the app dials the host \"wss\"") {
+            assertEquals("https://agent.example.com/ws", dialled())
+        }
+    }
+
+    @Test
+    fun `known issue - a direct URL typed with a trailing slash dials a double-slash path`() {
+        // Onboarding trims the slash; the Add/Edit Agent form does not.
+        connection.connect(agent, directUrl = "https://agent.example.com/")
+
+        knownIssue("a direct URL ending in / is dialled at //ws") {
+            assertEquals("https://agent.example.com/ws", dialled())
+        }
+    }
+
+    // ── the invite-code gate holds reconnects, on every way a socket ends ──
+    //
+    // While ONBOARD_REQUIRED is unanswered the next move is the user's; a
+    // reconnect behind their back would open a new session and bury the gate
+    // they are typing into. The ladder's first rung waits 2s, so these run on
+    // the virtual clock and advance past every rung — asserting "still one
+    // socket" immediately would pass whether or not anything was suppressed.
+
+    private val gateFrame = """{"type":"ONBOARD_REQUIRED","id":"ob1","methods":["invite_code"]}"""
+
+    @Test
+    fun `a socket that fails while the gate is open is never retried`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onMessage(factory.lastWebSocket!!, gateFrame)
+
+        factory.lastListener!!.onFailure(factory.lastWebSocket!!, java.io.IOException("connection reset"), null)
+        advanceTimeBy(10 * 60_000L)
+
+        assertEquals("a reconnect was opened while the gate waited on the user", 1, factory.socketCount)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a socket that closes abnormally while the gate is open is never retried`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onMessage(factory.lastWebSocket!!, gateFrame)
+
+        factory.lastListener!!.onClosed(factory.lastWebSocket!!, 1006, "abnormal closure")
+        advanceTimeBy(10 * 60_000L)
+
+        assertEquals(1, factory.socketCount)
+        conn.teardown()
+    }
+
+    @Test
+    fun `the same failure with no gate open is retried - the control for the two above`() = runTest {
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+
+        factory.lastListener!!.onFailure(factory.lastWebSocket!!, java.io.IOException("connection reset"), null)
+        advanceTimeBy(10 * 60_000L)
+
+        assertTrue("expected the ladder to reopen, saw ${factory.socketCount} socket(s)", factory.socketCount >= 2)
+        conn.teardown()
+    }
+
+    // ── W16AAPPLE-12: a refused OIP version fails once ────────────────
+    //
+    // The Host answers an unsupported descriptor with this ERROR and then
+    // keeps reading the socket (ws_router/session.py), so whatever ends that
+    // socket later must not start the ladder.
+
+    private val versionRejection =
+        """{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,""" +
+            """"protocol":{"name":"oip","version":"0.2","min_version":"0.2","max_version":"0.2"}}"""
+
+    @Test
+    fun `a refused OIP version closes the socket, reports once, and never reconnects`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        val listener = factory.lastListener!!
+        listener.onOpen(ws, fakeResponse())
+
+        listener.onMessage(ws, versionRejection)
+
+        assertEquals("the client must close the socket the Host left open", 1000, ws.closeCode)
+        assertEquals(listOf(ConnectionEvent.ProtocolRejected(hostProtocol = "oip/0.2")), seen.filterIsInstance<ConnectionEvent.ProtocolRejected>())
+
+        // Everything that would normally re-dial: the socket ending badly,
+        // the network coming back (ChatViewModel), the app resuming.
+        listener.onClosed(ws, 1006, "abnormal closure")
+        listener.onFailure(ws, java.io.IOException("connection reset"), null)
+        conn.retryNow()
+        advanceTimeBy(10 * 60_000L)
+
+        assertEquals("no automatic reconnect after the rejection", 1, factory.socketCount)
+        assertTrue(
+            "nothing may follow that reads as a retry or replaces the reason: $seen",
+            seen.none { it is ConnectionEvent.Reconnecting || it is ConnectionEvent.Disconnected || it is ConnectionEvent.ConnectionError }
+        )
+        assertFalse(conn.isConnected())
+        conn.teardown()
+    }
+
+    @Test
+    fun `a refusal on a reconnect rung ends the ladder there`() = runTest {
+        // A Host upgraded while the app was connected: the socket drops, and
+        // the ladder's own CONNECT is the one refused.
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+        simulateConnected("sess-1")
+        factory.lastListener!!.onClosed(factory.lastWebSocket!!, 1006, "abnormal closure")
+        advanceTimeBy(AgentConnection.reconnectBackoffMs(1) + 1)
+        assertEquals("test setup: rung #1 must have opened a socket", 2, factory.socketCount)
+
+        val rung = factory.lastWebSocket!!
+        factory.lastListener!!.onOpen(rung, fakeResponse())
+        factory.lastListener!!.onMessage(rung, versionRejection)
+        factory.lastListener!!.onFailure(rung, java.io.IOException("connection reset"), null)
+        advanceTimeBy(10 * 60_000L)
+
+        assertEquals(2, factory.socketCount)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a refusal of the CONNECT re-sent after onboarding is final too`() = runTest {
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        factory.lastListener!!.onMessage(ws, """{"type":"ONBOARD_REQUIRED","id":"ob1","methods":["invite_code"]}""")
+        factory.lastListener!!.onMessage(ws, """{"type":"ONBOARD_SUCCESS","id":"ob1","level":"contact","message":"ok"}""")
+
+        factory.lastListener!!.onMessage(ws, versionRejection)
+        advanceTimeBy(10 * 60_000L)
+
+        assertEquals(1000, ws.closeCode)
+        assertEquals(1, factory.socketCount)
+        assertTrue(
+            "the onboarding path must not dress the refusal up as a rejected invite code",
+            seen.none { it is ConnectionEvent.ChatItemReceived && it.item is ChatItem.OnboardingFailed }
+        )
+        conn.teardown()
+    }
+
+    /**
+     * Forwards to [inner], but first runs [onNextDispatch] once from inside
+     * `dispatch` — i.e. inside `launch`, before it has returned the Job its
+     * caller is about to store. A frame on OkHttp's thread can land there.
+     */
+    private class InterposingDispatcher(private val inner: CoroutineDispatcher) : CoroutineDispatcher() {
+        @Volatile var onNextDispatch: (() -> Unit)? = null
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            onNextDispatch?.also { onNextDispatch = null }?.invoke()
+            inner.dispatch(context, block)
+        }
+    }
+
+    @Test
+    fun `a refusal landing while retryNow is launching its reopen does not get a second CONNECT`() = runTest {
+        // The app resumes (retryNow, main thread) just as the rung's CONNECT
+        // is refused (OkHttp thread): retryNow has passed its guard, and the
+        // refusal's cancel of reconnectJob still sees the previous job.
+        val dispatcher = InterposingDispatcher(StandardTestDispatcher(testScheduler))
+        val conn = AgentConnection(
+            keyManager,
+            webSocketFactory = factory,
+            signer = { _, _ -> "fake-signature" },
+            reconnectDispatcher = dispatcher
+        )
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onOpen(factory.lastWebSocket!!, fakeResponse())
+        simulateConnected("sess-1")
+        factory.lastListener!!.onClosed(factory.lastWebSocket!!, 1006, "abnormal closure")
+        conn.retryNow()
+        runCurrent()
+        assertEquals("test setup: retryNow must have opened the rung", 2, factory.socketCount)
+        val rung = factory.lastWebSocket!!
+        val rungListener = factory.lastListener!!
+        rungListener.onOpen(rung, fakeResponse())
+
+        dispatcher.onNextDispatch = { rungListener.onMessage(rung, versionRejection) }
+        conn.retryNow()
+        runCurrent()
+
+        assertEquals(1000, rung.closeCode)
+        assertEquals("no CONNECT may follow the refusal", 2, factory.socketCount)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a refusal landing while a conversation switch reopens does not get a second CONNECT`() = runTest {
+        // switchSession runs on the repository's IO thread and checks for a
+        // live socket before reopening; the refusal can land on OkHttp's
+        // thread in between. Modelled by delivering it from switchSession's
+        // own log line, which Robolectric writes synchronously.
+        val conn = connectionOnVirtualClock()
+        val seen = recordEvents(conn)
+        conn.connect("0xAGENT")
+        val ws = factory.lastWebSocket!!
+        val listener = factory.lastListener!!
+        listener.onOpen(ws, fakeResponse())
+
+        var delivered = false
+        val logged = StringBuilder()
+        val previousStream = ShadowLog.stream
+        ShadowLog.stream = PrintStream(object : java.io.OutputStream() {
+            override fun write(b: Int) {
+                logged.append(b.toChar())
+                if (!delivered && logged.contains("Switching session")) {
+                    delivered = true
+                    listener.onMessage(ws, versionRejection)
+                }
+            }
+        })
+        try {
+            conn.switchSession(SessionState(sessionId = "sess-2"))
+        } finally {
+            ShadowLog.stream = previousStream
+        }
+        advanceTimeBy(10 * 60_000L)
+
+        assertTrue("test setup: the refusal must land inside switchSession", delivered)
+        assertEquals("no CONNECT may follow the refusal", 1, factory.socketCount)
+        assertTrue(
+            "nothing may replace the refusal as the last word: $seen",
+            seen.last() is ConnectionEvent.ProtocolRejected
+        )
+        conn.teardown()
+    }
+
+    @Test
+    fun `the user connecting again after a refusal gets a fresh attempt`() = runTest {
+        // "No automatic reconnect" — a deliberate retry is still the user's to make.
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onMessage(factory.lastWebSocket!!, versionRejection)
+
+        conn.connect("0xAGENT")
+        runCurrent()
+
+        assertEquals(2, factory.socketCount)
+        conn.teardown()
+    }
+
+    @Test
+    fun `a refusal does not outlive the cycle it ended - the next connect gets its ladder back`() = runTest {
+        // The stand-down is per cycle. connect() opens a socket whether or not
+        // it clears the flag, so the test above cannot tell; if it stayed set,
+        // the user's retry would connect once and never recover from a drop.
+        val conn = connectionOnVirtualClock()
+        conn.connect("0xAGENT")
+        factory.lastListener!!.onMessage(factory.lastWebSocket!!, versionRejection)
+        conn.connect("0xAGENT")
+        runCurrent()
+        assertEquals("test setup: the retry opened a socket", 2, factory.socketCount)
+
+        factory.lastListener!!.onFailure(factory.lastWebSocket!!, java.io.IOException("connection reset"), null)
+        advanceTimeBy(AgentConnection.reconnectBackoffMs(1) + 1)
+
+        assertEquals("the new cycle's ladder must run", 3, factory.socketCount)
+        conn.teardown()
     }
 
     private companion object {
