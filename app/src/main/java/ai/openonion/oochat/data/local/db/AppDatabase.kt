@@ -5,11 +5,14 @@ import ai.openonion.oochat.data.local.db.dao.MessageDao
 import ai.openonion.oochat.data.local.db.dao.PendingMessageDao
 import ai.openonion.oochat.data.local.db.dao.SessionDao
 import ai.openonion.oochat.data.local.db.dao.SessionStateDao
+import ai.openonion.oochat.data.local.db.dao.SessionSyncDao
 import ai.openonion.oochat.data.local.db.entity.AgentEntity
 import ai.openonion.oochat.data.local.db.entity.ChatMessageEntity
 import ai.openonion.oochat.data.local.db.entity.ChatSessionEntity
 import ai.openonion.oochat.data.local.db.entity.PendingMessageEntity
 import ai.openonion.oochat.data.local.db.entity.SessionStateEntity
+import ai.openonion.oochat.data.local.db.entity.SessionSyncDeletionEntity
+import ai.openonion.oochat.data.local.db.entity.SessionSyncStateEntity
 import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
@@ -23,10 +26,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * rather than a blanket fallback that silently wipes on every future bump.
  * From v5 on every change is a real [Migration]. Add one here for any new
  * schema change instead of growing the destructive list.
- *
- * Numbering matches the team repo (the previous project repository)
- * as of this commit, so the two stay mergeable; see the commit message for
- * what that realignment cost.
  */
 @Database(
     entities = [
@@ -34,9 +33,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChatSessionEntity::class,
         ChatMessageEntity::class,
         SessionStateEntity::class,
-        PendingMessageEntity::class
+        PendingMessageEntity::class,
+        SessionSyncStateEntity::class,
+        SessionSyncDeletionEntity::class
     ],
-    version = 12,
+    version = 16,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -49,12 +50,14 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun sessionStateDao(): SessionStateDao
 
+    abstract fun sessionSyncDao(): SessionSyncDao
+
     abstract fun pendingMessageDao(): PendingMessageDao
 
     companion object {
         private const val DATABASE_NAME = "connectonion_db"
 
-        // internal (not private): Migration8To9Test opens a hand-built v8
+        // internal: Migration8To9Test opens a hand-built v8
         // database and drives this migration directly, so it needs access
         // from outside this class body.
         internal val MIGRATION_5_6 = object : Migration(5, 6) {
@@ -211,13 +214,98 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
-         * The one migration chain, shared with the migration tests so a
-         * migration can never be written, tested, and then left out of the
-         * builder below — which would crash a real upgrade.
+         * The session's Todo List, so a conversation's plan survives a switch
+         * away and an app restart — see SessionStateEntity.planJson. Additive
+         * and nullable; a row written before this reads back as "no plan".
+         */
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE session_states ADD COLUMN plan_json TEXT")
+            }
+        }
+
+        /**
+         * Whether a user message got through, so one that failed still says so
+         * after a restart — see ChatMessageEntity.deliveryState. Additive and
+         * nullable; a row written before this reads back as sent, which is
+         * what every row read back as until now.
+         */
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN delivery_state TEXT")
+            }
+        }
+
+        /**
+         * Adds the information needed for Recent Chat sync:
+         *
+         * - `remote_revision` records which Host update a chat has received.
+         * - `session_sync_states` stores where each identity and agent last
+         *   finished syncing.
+         */
+        internal val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN remote_revision INTEGER")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `session_sync_states` (
+                        `identity_address` TEXT NOT NULL,
+                        `agent_id` TEXT NOT NULL,
+                        `cursor` TEXT NOT NULL,
+                        `updated_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`identity_address`, `agent_id`),
+                        FOREIGN KEY(`agent_id`) REFERENCES `agent_profiles`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_session_sync_states_agent_id` " +
+                        "ON `session_sync_states` (`agent_id`)"
+                )
+            }
+        }
+
+        /**
+         * Keeps Host index state separate from local conversation data.
+         * Removals and identity changes can now hide a row without deleting
+         * its transcript, and local renames/deletions survive later syncs.
+         */
+        internal val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN sync_identity_address TEXT")
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN remote_removed INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN identity_hidden INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE chat_sessions ADD COLUMN title_is_local INTEGER NOT NULL DEFAULT 1")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `session_sync_deletions` (
+                        `identity_address` TEXT NOT NULL,
+                        `agent_id` TEXT NOT NULL,
+                        `session_id` TEXT NOT NULL,
+                        `deleted_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`identity_address`, `agent_id`, `session_id`),
+                        FOREIGN KEY(`agent_id`) REFERENCES `agent_profiles`(`id`)
+                            ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_session_sync_deletions_agent_id` " +
+                        "ON `session_sync_deletions` (`agent_id`)"
+                )
+            }
+        }
+
+        /**
+         * The migration chain, shared with the migration tests so it
+         * can never be written, tested, and then left out of the
+         * builder below.
          */
         internal val ALL_MIGRATIONS = arrayOf(
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-            MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+            MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+            MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16
         )
 
         @Volatile
@@ -232,9 +320,6 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                     .addMigrations(*ALL_MIGRATIONS)
                     // dropAllTables = false: rebuild only what Room declares.
-                    // The two are equivalent here — nothing outside Room owns a
-                    // table in this database — so this takes the narrower of the
-                    // two, which stays correct if that ever stops being true.
                     .fallbackToDestructiveMigrationFrom(dropAllTables = false, 1, 2, 3, 4)
                     .build()
                 INSTANCE = instance

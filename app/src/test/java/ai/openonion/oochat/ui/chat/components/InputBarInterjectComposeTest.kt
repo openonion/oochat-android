@@ -60,7 +60,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = true,
                         onSend = { text, _, _ -> sent += text },
                         onStop = { stops++ }
@@ -76,7 +75,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         onSend = { text, _, _ -> sent += text },
                         onStop = { stops++ }
                     )
@@ -175,7 +173,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = working,
                         onSend = { text, _, _ -> sent += text }
                     )
@@ -208,7 +205,6 @@ class InputBarInterjectComposeTest {
                     Column {
                         InputBar(
                             isConnected = true,
-                            isSending = false,
                             onSend = { text, _, _ -> sent += text }
                         )
                     }
@@ -258,7 +254,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = true,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                         onSend = { _, _, _ -> },
