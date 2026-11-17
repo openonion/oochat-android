@@ -7,7 +7,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -37,10 +36,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.VpnKey
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -70,8 +67,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 /** How long the success checkmark is held before handing off to the chat route. */
 private const val SUCCESS_HOLD_MS = 250L
 
-/** Staggers the CTA behind the halo and body copy so the three land in order. */
-private const val CTA_DELAY_MS = 180
+/**
+ * How long the invite-code state is held before the chat's invite-code card
+ * takes over (W16AAPPLE-111). Longer than [SUCCESS_HOLD_MS]: the halo and its
+ * one line say why the next screen asks for a code, and need a beat to land.
+ */
+private const val ONBOARD_HOLD_MS = 900L
 
 /**
  * Loading screen shown during automatic reconnection attempts.
@@ -81,23 +82,20 @@ private const val CTA_DELAY_MS = 180
  * and reacts to [LoadingEvent]s for navigation.
  *
  * Displays app branding and connection progress: a determinate ring +
- * 5-dot step indicator while connecting, and a checkmark success state
- * with an explicit "Open Chat" confirmation (rather than auto-navigating)
- * once connected — matching the Figma design's completed-state beat.
+ * 5-dot step indicator while connecting, then a checkmark success state,
+ * held for [SUCCESS_HOLD_MS] before it moves on to the chat by itself.
  *
  * The ONBOARD_REQUIRED outcome gets a gentler treatment: the VpnKey
- * icon springs in with a soft tertiary halo that breathes, the explanation
- * line and "Continue to Onboarding" button fade + slide in over a few
- * hundred ms so the screen "settles" into the new state instead of
- * snapping. The in-progress and connected outcomes use the existing
- * instant render — animations here only affect the onboarding-required
- * state because that is the path users actually have to act on.
+ * icon springs in with a soft halo that breathes, and the explanation
+ * line fades + slides in, so the screen "settles" into the new state
+ * instead of snapping. It then moves on to the chat's invite-code card by
+ * itself after [ONBOARD_HOLD_MS], with no "Continue" tap (W16AAPPLE-111).
  *
- * @param onConnectionSuccess Called when the user taps "Open Chat"/"Continue to
- * Onboarding" after the connection attempt resolves. `onboardPending` is true
- * when the outcome was [LoadingOutcome.ONBOARD_REQUIRED] rather than a plain
- * connect — lets the destination screen skip re-announcing a "connecting"
- * state it already knows the answer to.
+ * @param onConnectionSuccess Called once the connection attempt resolves,
+ * after a short hold on its state. `onboardPending` is true when the outcome
+ * was [LoadingOutcome.ONBOARD_REQUIRED] rather than a plain connect. It lets the
+ * destination screen skip re-announcing a "connecting" state it already knows
+ * the answer to.
  * @param onConnectionFailed Called when connection fails (with error message)
  * @param onCancel Called when user cancels the connection attempt
  */
@@ -129,14 +127,17 @@ fun LoadingScreen(
                     kotlinx.coroutines.delay(SUCCESS_HOLD_MS)
                     onConnectionSuccess(false)
                 }
+                LoadingEvent.OnboardRequired -> {
+                    kotlinx.coroutines.delay(ONBOARD_HOLD_MS)
+                    onConnectionSuccess(true)
+                }
             }
         }
     }
 
     LoadingContent(
         uiState = uiState,
-        onCancel = viewModel::cancel,
-        onContinueToOnboarding = { onConnectionSuccess(true) }
+        onCancel = viewModel::cancel
     )
 }
 
@@ -149,7 +150,6 @@ fun LoadingScreen(
 internal fun LoadingContent(
     uiState: LoadingUiState,
     onCancel: () -> Unit,
-    onContinueToOnboarding: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -177,10 +177,7 @@ internal fun LoadingContent(
             Spacer(modifier = Modifier.height(MaterialTheme.spacing.xxl))
 
             val outcome = uiState.outcome
-            val accentColor = when (outcome) {
-                LoadingOutcome.ONBOARD_REQUIRED -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.primary
-            }
+            val accentColor = MaterialTheme.colorScheme.primary
 
             // The three outcome glyphs differ in size (48dp ring/checkmark vs
             // the 96dp halo), so a bare `when` snapped everything below them up
@@ -256,7 +253,7 @@ internal fun LoadingContent(
                 exit = fadeOut(tween(Motion.Short4, easing = Motion.EmphasizedAccelerate))
             ) {
                 Text(
-                    text = "This agent requires an invite code or payment before you can chat. You'll be redirected to complete onboarding.",
+                    text = "This agent needs an invite code or payment before you can chat. Taking you there now.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -292,49 +289,8 @@ internal fun LoadingContent(
                     // swap hands off to ChatScreen.
                 }
                 LoadingOutcome.ONBOARD_REQUIRED -> {
-                    // CTA fades + slides up a touch as the rest of the screen
-                    // settles — the whole sequence (halo, body, cta) reads as a
-                    // soft "ok, here's what's next" instead of a hard cut.
-                    // MutableTransitionState, not `visible = true`: the boolean
-                    // overload starts with current == target and so never
-                    // animates on first composition, which is the only time this
-                    // branch is ever entered. The enter spec was dead code.
-                    val ctaState = remember { MutableTransitionState(false).apply { targetState = true } }
-                    AnimatedVisibility(
-                        visibleState = ctaState,
-                        enter = fadeIn(
-                            tween(Motion.Medium2, delayMillis = CTA_DELAY_MS, easing = Motion.EmphasizedDecelerate)
-                        ) + slideInVertically(
-                            tween(Motion.Medium2, delayMillis = CTA_DELAY_MS, easing = Motion.EmphasizedDecelerate)
-                        ) { it / 8 } + scaleIn(
-                            animationSpec = tween(
-                                Motion.Medium2,
-                                delayMillis = CTA_DELAY_MS,
-                                easing = Motion.EmphasizedDecelerate
-                            ),
-                            initialScale = 0.96f
-                        )
-                    ) {
-                        Button(
-                            onClick = onContinueToOnboarding,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary,
-                                contentColor = MaterialTheme.colorScheme.onTertiary
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(ButtonToken.Compact),
-                            shape = MaterialTheme.shapes.medium
-                        ) {
-                            Text("Continue to Onboarding")
-                            Spacer(modifier = Modifier.width(MaterialTheme.spacing.sm))
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
+                    // Auto-navigated after ONBOARD_HOLD_MS, to the chat's
+                    // invite-code card, with no button (W16AAPPLE-111).
                 }
                 LoadingOutcome.IN_PROGRESS -> {
                     // Text, not outlined: an outline reads as an equal of the

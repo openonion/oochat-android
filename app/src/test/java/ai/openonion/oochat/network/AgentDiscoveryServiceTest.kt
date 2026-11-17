@@ -6,7 +6,6 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,70 +94,65 @@ class AgentDiscoveryServiceTest {
         assertTrue("hex is case-insensitive", log.contains("Input is valid address"))
     }
 
-    // ── the relay directory, which is where published skills actually live ──
-    //
-    // The slash palette waited for an AGENT_PROFILE frame. Nothing sends one:
-    // the string appears nowhere in the ConnectOnion SDK, and connects against
-    // a live agent produced CONNECTED/ONBOARD_*/PING and no profile. The SDK
-    // puts the profile in its ANNOUNCE and leaves subscribers to fetch it.
+    // -- A server's /info, from any form of its URL (W16AAPPLE-98) --
 
     @Test
-    fun `a published profile is read out of the directory entry`() {
-        val server = MockWebServer()
-        server.enqueue(
-            MockResponse().setBody(
-                """
-                {"endpoints":[],"relay":"wss://oo.openonion.ai","last_seen":"2026-08-09T00:00:00",
-                 "profile":{"alias":"palette-agent","model":"gemini-2.5-flash","tools":["echo"],
-                 "skills":[{"name":"explain","description":"Explain a snippet of code"},
-                           {"name":"translate","description":"Translate the message"}]}}
-                """.trimIndent()
-            )
-        )
-        server.start()
-
-        val profile = runBlocking {
-            service.fetchPublishedProfile(realAddress, server.url("/").toString())
-        }
-
-        assertEquals("palette-agent", profile?.alias)
-        assertEquals(listOf("explain", "translate"), profile?.skills?.map { it.name })
-        assertEquals("Explain a snippet of code", profile?.skills?.first()?.description)
-        // The path the relay serves — a wrong one silently returns someone
-        // else's row, or a 404, and the palette stays empty either way.
-        assertEquals("/api/agents/$realAddress", server.takeRequest().path)
-
-        server.shutdown()
+    fun `a server's info is read over HTTP whatever form its URL was saved in`() {
+        assertEquals("https://agent.example.com/info", AgentDiscoveryService.infoUrl("https://agent.example.com"))
+        assertEquals("https://agent.example.com/info", AgentDiscoveryService.infoUrl("https://agent.example.com/"))
+        assertEquals("http://agent.example.com/info", AgentDiscoveryService.infoUrl("http://agent.example.com"))
+        // The socket forms: wss is TLS, ws is plain.
+        assertEquals("https://agent.example.com/info", AgentDiscoveryService.infoUrl("wss://agent.example.com"))
+        assertEquals("http://10.5.27.133:8797/info", AgentDiscoveryService.infoUrl("ws://10.5.27.133:8797"))
     }
 
     @Test
-    fun `a wss relay URL is turned into an https directory URL`() {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("""{"profile":null}"""))
-        server.start()
-
-        // The repository holds the relay as wss://…; only the scheme differs.
-        val wsUrl = server.url("/").toString().replaceFirst("http", "ws")
-        val profile = runBlocking { service.fetchPublishedProfile(realAddress, wsUrl) }
-
-        assertNull("a null profile is not an error, just an agent that published none", profile)
-        assertEquals("/api/agents/$realAddress", server.takeRequest().path)
-
-        server.shutdown()
+    fun `the socket path the Host announces is dropped before info is added`() {
+        assertEquals("http://10.5.27.133:8797/info", AgentDiscoveryService.infoUrl("ws://10.5.27.133:8797/ws"))
+        assertEquals("http://10.5.27.133:8797/info", AgentDiscoveryService.infoUrl("ws://10.5.27.133:8797/ws/"))
+        assertEquals("https://example.com/agents/sam/info", AgentDiscoveryService.infoUrl("wss://example.com/agents/sam/ws"))
+        // Only a whole /ws segment: a path that merely ends in "ws" is kept.
+        assertEquals("https://example.com/news/info", AgentDiscoveryService.infoUrl("https://example.com/news"))
     }
 
     @Test
-    fun `a directory that is down costs the palette and nothing else`() {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(503))
-        server.start()
+    fun `the scheme is read in any case, and surrounding spaces are ignored`() {
+        assertEquals("https://agent.example.com/info", AgentDiscoveryService.infoUrl("  WSS://agent.example.com "))
+    }
 
-        val profile = runBlocking {
-            service.fetchPublishedProfile(realAddress, server.url("/").toString())
+    @Test
+    fun `a ws server URL is resolved through its info, like an https one`() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody("""{"address":"$realAddress"}"""))
+            start()
         }
+        try {
+            val url = "ws://${server.hostName}:${server.port}/ws"
 
-        assertNull(profile)
+            val resolved = runBlocking { service.resolveAgentAddress(url) }
 
-        server.shutdown()
+            assertEquals(realAddress, resolved.address)
+            assertEquals(url, resolved.directUrl)
+            assertEquals("/info", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `info naming something other than an address leaves the URL unresolved`() {
+        val server = MockWebServer().apply {
+            enqueue(MockResponse().setBody("""{"address":"0xabc"}"""))
+            start()
+        }
+        try {
+            val url = "http://${server.hostName}:${server.port}"
+
+            val resolved = runBlocking { service.resolveAgentAddress(url) }
+
+            assertEquals("not taken as the agent: the Host would refuse it", url, resolved.address)
+        } finally {
+            server.shutdown()
+        }
     }
 }

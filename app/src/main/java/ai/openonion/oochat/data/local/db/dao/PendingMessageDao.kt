@@ -47,25 +47,52 @@ abstract class PendingMessageDao {
     @Query("SELECT MAX(id) FROM pending_messages WHERE agent_address = :agentAddress")
     abstract fun newestIdForAgent(agentAddress: String): Long?
 
-    @Query("SELECT id FROM pending_messages WHERE agent_address = :agentAddress ORDER BY id ASC LIMIT 1")
-    abstract fun oldestIdForAgent(agentAddress: String): Long?
-
     @Query("DELETE FROM pending_messages WHERE id = :id")
     abstract fun deleteById(id: Long)
 
     /**
-     * The oldest row for [agentAddress] that belongs on [sessionId] and is no
-     * newer than [maxId] — its own, plus any queued before there was a session
-     * to name (`session_id = NULL` never matches, which is why the IS NULL arm
-     * is separate). One row, not the lot: see [claimNextForAgent].
+     * The rows queued on [sessionId] or [conversationId]: what Clear chat
+     * drops. Not the NULL arm [oldestClaimableForAgent] also hands out: such a
+     * row names no conversation, so it may be another's (W16AAPPLE-106).
+     */
+    @Query(
+        "SELECT id FROM pending_messages WHERE agent_address = :agentAddress " +
+            "AND (session_id = :sessionId OR session_id = :conversationId) " +
+            "ORDER BY id ASC"
+    )
+    abstract fun idsForConversation(agentAddress: String, sessionId: String?, conversationId: String?): List<Long>
+
+    /**
+     * How many rows [oldestClaimableForAgent] could hand out for [sessionId]
+     * and [conversationId], the NULL arm included: what is still to go out in
+     * that conversation (W16AAPPLE-106).
+     */
+    @Query(
+        "SELECT COUNT(*) FROM pending_messages WHERE agent_address = :agentAddress " +
+            "AND (session_id IS NULL OR session_id = :sessionId OR session_id = :conversationId)"
+    )
+    abstract fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int
+
+    @Query("DELETE FROM pending_messages WHERE id IN (:ids)")
+    abstract fun deleteByIds(ids: List<Long>)
+
+    /**
+     * The oldest row for [agentAddress] that belongs on [sessionId] or the
+     * active local [conversationId], and is no newer than [maxId]. The local
+     * id is needed when Memory is off: the Host mints a new random session id,
+     * while a message queued before CONNECTED is tagged with the conversation
+     * id. Rows queued before either id existed remain the NULL arm. One row,
+     * not the lot: see [claimNextForAgent].
      */
     @Query(
         "SELECT * FROM pending_messages WHERE agent_address = :agentAddress AND id <= :maxId " +
-            "AND (session_id IS NULL OR session_id = :sessionId) ORDER BY id ASC LIMIT 1"
+            "AND (session_id IS NULL OR session_id = :sessionId OR session_id = :conversationId) " +
+            "ORDER BY id ASC LIMIT 1"
     )
     abstract fun oldestClaimableForAgent(
         agentAddress: String,
         sessionId: String?,
+        conversationId: String?,
         maxId: Long
     ): PendingMessageEntity?
 
@@ -78,17 +105,14 @@ abstract class PendingMessageDao {
      * landing while the caller is already draining) must not both see it.
      */
     @Transaction
-    open fun claimNextForAgent(agentAddress: String, sessionId: String?, maxId: Long): PendingMessageEntity? {
-        val row = oldestClaimableForAgent(agentAddress, sessionId, maxId) ?: return null
+    open fun claimNextForAgent(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        maxId: Long
+    ): PendingMessageEntity? {
+        val row = oldestClaimableForAgent(agentAddress, sessionId, conversationId, maxId) ?: return null
         deleteById(row.id)
         return row
-    }
-
-    /** Drop the oldest row for [agentAddress], returning its id so its spilled attachments go too. */
-    @Transaction
-    open fun evictOldestForAgent(agentAddress: String): Long? {
-        val id = oldestIdForAgent(agentAddress) ?: return null
-        deleteById(id)
-        return id
     }
 }

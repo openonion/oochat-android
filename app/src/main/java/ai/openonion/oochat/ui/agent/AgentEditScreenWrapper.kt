@@ -1,5 +1,7 @@
 package ai.openonion.oochat.ui.agent
 
+import ai.openonion.oochat.domain.model.AgentLiveProfile
+import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.ui.common.appViewModel
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -21,7 +23,6 @@ fun AgentEditScreenWrapper(
     viewModel: AgentViewModel = appViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val connectedAgentAddress by viewModel.connectedAgentAddress.collectAsState()
     val liveAgentProfile by viewModel.liveAgentProfile.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -31,11 +32,7 @@ fun AgentEditScreenWrapper(
         null
     }
 
-    // Only surface the live AGENT_PROFILE when it's actually this agent's —
-    // liveAgentProfile is connection-scoped, not keyed by agent, so a match
-    // has to be confirmed by address before showing tools/skills that might
-    // belong to a different saved agent this app happens to be connected to.
-    val liveProfileForThisAgent = liveAgentProfile.takeIf { agent != null && agent.address == connectedAgentAddress }
+    val liveProfileForThisAgent = liveProfileFor(agent, liveAgentProfile)
 
     AgentFormScreen(
         existingAgent = agent,
@@ -54,7 +51,6 @@ fun AgentEditScreenWrapper(
                         address = savedAgent.address,
                         serverUrl = savedAgent.serverUrl,
                         description = savedAgent.description,
-                        apiKey = savedAgent.apiKey,
                         connectionMode = savedAgent.connectionMode
                     )
                 } else {
@@ -81,3 +77,17 @@ fun AgentEditScreenWrapper(
         }
     )
 }
+
+/**
+ * [profile] if it belongs to [agent], else null. The live profile is
+ * connection-scoped, not keyed by agent, so a match has to be confirmed
+ * before showing tools/skills that might belong to a different saved agent
+ * this app happens to be connected to.
+ *
+ * Matched on the profile's address, which the repository stamps with the
+ * address the connection dialled. ConnectionState's address is this device's
+ * own identity and never matched an agent (W16AAPPLE-71). Case-insensitive:
+ * hex addresses are saved and dialled in whatever case they were typed.
+ */
+internal fun liveProfileFor(agent: AgentProfile?, profile: AgentLiveProfile?): AgentLiveProfile? =
+    profile?.takeIf { agent != null && it.address.equals(agent.address, ignoreCase = true) }

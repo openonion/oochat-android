@@ -8,6 +8,9 @@
          ping timeout — see NetworkMonitor's own doc. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- BackgroundWorkService keeps the connection while work runs off screen (W16AAPPLE-45). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -74,18 +77,37 @@
                     android:host="agent" />
             </intent-filter>
 
-            <!-- Web link: https://oo-chat.com/0x... -->
-            <!-- No autoVerify: requires server-side assetlinks.json which -->
-            <!-- isn't deployed yet. Users will see "Open with" chooser. -->
+            <!-- Web link: https://chat.openonion.ai/0x... (the website's links -->
+            <!-- and Share QR), and the old https://oo-chat.com/0x... Only an -->
+            <!-- agent's page, so the site's own pages (/settings, /login) stay -->
+            <!-- with the browser. -->
+            <!-- No autoVerify: it needs /.well-known/assetlinks.json served from -->
+            <!-- each host, which isn't deployed. Until it is, Android 12 and later -->
+            <!-- open these in the browser without asking (the user can allow them -->
+            <!-- under Settings > Apps > Open by default); Android 11 and older -->
+            <!-- show the "Open with" chooser. -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="oo-chat.com" />
+                    android:host="chat.openonion.ai"
+                    android:pathPrefix="/0x" />
+                <data
+                    android:scheme="https"
+                    android:host="oo-chat.com"
+                    android:pathPrefix="/0x" />
             </intent-filter>
         </activity>
+
+        <!-- stopWithTask: swiping the app from Recents closes it as before, since only the
+             chat screen saves what arrives and a swipe destroys that screen. -->
+        <service
+            android:name=".notification.BackgroundWorkService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="true" />
 
         <!-- zxing-android-embedded's own manifest declares this activity as
              landscape by default; override to portrait so the scanner

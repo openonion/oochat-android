@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.dp
  * `heightIn(min = 52.dp)` box sidesteps both problems.
  *
  * Text renders at `bodyMedium` with no per-call-site size knob: the Server
- * URL / Agent Address / API Key fields are one input level, and the old
+ * URL / Agent Address fields are one input level, and the old
  * `fontSize` parameter had let the discovery surfaces drift to 13sp while
  * the Edit Agent form stayed at 14sp.
  */
@@ -78,7 +78,8 @@ fun PillTextField(
 ) {
     var focused by remember { mutableStateOf(false) }
     val borderColor = if (focused) MaterialTheme.colorScheme.primary else unfocusedBorderColor
-    val fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default
+    // Null when not monospace, so the field takes the theme's face (Inter) like all other text.
+    val fontFamily = if (monospace) FontFamily.Monospace else null
 
     Row(
         verticalAlignment = Alignment.CenterVertically,

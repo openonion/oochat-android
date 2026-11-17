@@ -16,11 +16,16 @@ import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ChatMessage
 import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
 import ai.openonion.oochat.domain.model.Role
 import ai.openonion.oochat.domain.model.ToolStatus
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.ConversationHistoryUseCase
+import ai.openonion.oochat.domain.usecase.RecentChatsSync
+import ai.openonion.oochat.domain.usecase.RecentChatsSyncResult
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.NetworkMonitor
 import ai.openonion.oochat.ui.perf.BodyExecutionProbe
@@ -146,6 +151,9 @@ class ChatScreenRecompositionTest {
                 agentRepo, sessionRepo, messageRepo,
                 FakePersistenceTransaction(messageRepo, sessionRepo)
             ),
+            // Session Sync has its own integration tests. This suite measures
+            // Compose invalidation and must not load production identity crypto.
+            recentChatsSync = RecentChatsSync { _, _, _, _ -> RecentChatsSyncResult.Unsupported },
             initialMyAddress = "0xTEST",
             networkMonitor = RecompFakeNetworkMonitor(),
         )
@@ -278,6 +286,12 @@ class ChatScreenRecompositionTest {
     @Test
     fun `opening the drawer does not add it to what an agent turn recomposes`() {
         setChatScreen()
+        // A full screen of history first, so both measured turns redraw the
+        // same number of rows. With a turn's tool calls folded into one block
+        // (W16AAPPLE-112) the replies are short, and from an empty list the
+        // first turn alone does not fill the viewport — the second would then
+        // pay for rows the first never had, and read as the drawer's cost.
+        driveAgentTurn(tag = "warm")
 
         recorder.reset()
         driveAgentTurn(tag = "closed")
@@ -291,7 +305,8 @@ class ChatScreenRecompositionTest {
         val open = recorder.scopeExecutions
 
         // Measured here: 1112 scopes with the drawer closed, 1152 with it
-        // open — the panel costs ~3 scopes a frame, not a rebuild. Reverting
+        // open — the panel costs ~3 scopes a frame, not a rebuild. (After the
+        // warm-up above, W16AAPPLE-112: 1746 closed, 1728 open.) Reverting
         // the narrowed drawerAgents model takes the open figure to 2370 on
         // the same fixture, so the bound sits between the two by a wide gap.
         assertTrue(
@@ -334,7 +349,10 @@ internal class RecompFakeConnectUseCase : ConnectToAgentUseCaseContract {
     override val agentProfile: StateFlow<AgentLiveProfile?> = MutableStateFlow(null)
     override val approvalMode: StateFlow<ApprovalMode> = MutableStateFlow(ApprovalMode.DEFAULT)
     override val modePending: StateFlow<Boolean> = MutableStateFlow(false)
-    override val dashboardHtml: StateFlow<String?> = MutableStateFlow(null)
+    val dashboard = MutableStateFlow<String?>(null)
+    override val dashboardHtml: StateFlow<String?> = dashboard
+    val controlCenter = MutableStateFlow<ControlCenterApp?>(null)
+    override val controlCenterApp: StateFlow<ControlCenterApp?> = controlCenter
 
     private val events = MutableSharedFlow<ChatEvent>(
         extraBufferCapacity = 64,
@@ -346,24 +364,25 @@ internal class RecompFakeConnectUseCase : ConnectToAgentUseCaseContract {
     private var liveSessionId: String? = null
 
     override fun isConnected(): Boolean = connected
-    override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?): Boolean {
+    override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?, relayUrl: String?): Boolean {
         liveSessionId = conversationId
         return true
     }
     override fun liveSessionIdFor(agentAddress: String): String? = liveSessionId
     override suspend fun switchConversation(conversationId: String?) { liveSessionId = conversationId }
     override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<OutgoingFileAttachment>?) = Unit
-    override suspend fun respond(answer: String) = Unit
+    override suspend fun executeTool(request: ExecRequest): ExecOutcome = ExecOutcome.NotSent("Not used in recomposition tests")
+    override suspend fun respond(answer: String, requestId: String?) = Unit
     override suspend fun interrupt() = Unit
-    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) = Unit
+    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) = Unit
     override suspend fun respondToOnboard(method: String, inviteCode: String?, payment: Double?) = Unit
     override suspend fun respondToPlanReview(message: String) = Unit
     override suspend fun respondToUlwTurnsReached(action: String, turns: Int?, mode: String?) = Unit
     override suspend fun setMode(mode: ApprovalMode, turns: Int?) = Unit
     override fun retryNow() = Unit
     override suspend fun querySessionStatus() = Unit
-    override suspend fun disconnect() { connected = false }
-    override suspend fun reset() = Unit
+    override suspend fun disconnect(keepOutbox: Boolean) { connected = false }
+    override suspend fun reset(conversationId: String?) = Unit
 
     fun emit(event: ChatEvent) { events.tryEmit(event) }
     fun markConnected(address: String) {
@@ -495,4 +514,8 @@ internal class RecompFakeAppSettings : AppSettings {
     override suspend fun setAnalyticsEnabled(value: Boolean) { analyticsEnabledFlow.value = value }
     override val safeModeEnabled: Flow<Boolean> = safeModeEnabledFlow
     override suspend fun setSafeModeEnabled(value: Boolean) { safeModeEnabledFlow.value = value }
+
+    private val developerToolsEnabledFlow = MutableStateFlow(false)
+    override val developerToolsEnabled: Flow<Boolean> = developerToolsEnabledFlow
+    override suspend fun setDeveloperToolsEnabled(value: Boolean) { developerToolsEnabledFlow.value = value }
 }

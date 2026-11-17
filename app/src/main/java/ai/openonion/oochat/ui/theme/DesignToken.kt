@@ -15,10 +15,13 @@ object MessageBubbleToken {
     // Absolute ceiling for tablets/unfolded screens, where 85% of the row would
     // run past a comfortable reading measure.
     val MaxWidth = 420.dp
-    // `large` on the M3 shape scale; the 4dp tail corner is `extraSmall`.
-    val BorderRadius = 16.dp
+    // `large` on the shape scale; the tail corner is `extraSmall`.
+    val BorderRadius = Radii.large
     val PaddingHorizontal = 14.dp
     val PaddingVertical = 10.dp
+    // The user's bubble is a faint wash of `primary` over the surface — the
+    // pale green-grey of the design in light, the same tint over dark.
+    const val UserFillAlpha = 0.08f
 }
 
 object VoiceBubbleToken {
@@ -39,11 +42,12 @@ object ImageGridToken {
     val MaxWidth = 320.dp
     val ItemSpacing = 3.dp
     val ItemSize = 72.dp
-    val BorderRadius = 8.dp
+    val BorderRadius = Radii.small
 }
 
 object InputBarToken {
-    val BorderRadius = 28.dp
+    // See Radii.composer. A taller, multi-line field keeps the same corners.
+    val BorderRadius = Radii.composer
     val BorderWidth = 1.5.dp
     val PaddingHorizontal = 14.dp
     val PaddingVertical = 6.dp

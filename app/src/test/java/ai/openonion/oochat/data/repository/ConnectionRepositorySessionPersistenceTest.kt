@@ -1,20 +1,29 @@
 package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
+import ai.openonion.oochat.crypto.TestIdentity
 import ai.openonion.oochat.data.protocol.FileAttachment
+import ai.openonion.oochat.data.protocol.PlanEntryWire
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ConnectionState
 import ai.openonion.oochat.network.AgentConnection
+import ai.openonion.oochat.network.ConnectionEvent
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.network.QueuedMessage
 import ai.openonion.oochat.network.WebSocketFactory
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
@@ -32,6 +41,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reproduces the "first conversation loses the whole reply on reconnect" bug.
@@ -69,6 +81,7 @@ class ConnectionRepositorySessionPersistenceTest {
         val createCount = MutableStateFlow(0)
         @Volatile var lastListener: WebSocketListener? = null
         @Volatile var lastWebSocket: FakeWebSocket? = null
+        @Volatile var frameOnNextCreate: String? = null
         override fun create(request: Request, listener: WebSocketListener): WebSocket {
             val socket = FakeWebSocket()
             lastWebSocket = socket
@@ -76,6 +89,13 @@ class ConnectionRepositorySessionPersistenceTest {
             // Published last, so a waiter that sees the new count is also
             // guaranteed to see the listener that belongs to it.
             createCount.update { it + 1 }
+            frameOnNextCreate?.let { frame ->
+                frameOnNextCreate = null
+                // Deliberately before create() returns: a real WebSocket
+                // normally calls back later, but this closes the exact
+                // ordering window a slow CI runner can expose.
+                listener.onMessage(socket, frame)
+            }
             return socket
         }
     }
@@ -91,6 +111,26 @@ class ConnectionRepositorySessionPersistenceTest {
         /** Writes attempted, not distinct values stored — see the debounce test. */
         val writeCount = java.util.concurrent.atomic.AtomicInteger(0)
 
+        @Volatile var pauseNextGet = false
+        @Volatile var failNextGet = false
+        lateinit var getEntered: CompletableDeferred<Unit>
+        lateinit var releaseGet: CompletableDeferred<Unit>
+        @Volatile var pauseNextSave = false
+        lateinit var saveEntered: CompletableDeferred<Unit>
+        lateinit var releaseSave: CompletableDeferred<Unit>
+
+        fun pauseNextSessionLookup() {
+            getEntered = CompletableDeferred()
+            releaseGet = CompletableDeferred()
+            pauseNextGet = true
+        }
+
+        fun pauseNextSessionSave() {
+            saveEntered = CompletableDeferred()
+            releaseSave = CompletableDeferred()
+            pauseNextSave = true
+        }
+
         /** Seed a session as if a previous run had stored it. */
         fun preload(conversationId: String, session: SessionState) {
             _saved.update { it + (conversationId to session) }
@@ -98,9 +138,25 @@ class ConnectionRepositorySessionPersistenceTest {
 
         override suspend fun saveSession(conversationId: String, session: SessionState) {
             writeCount.incrementAndGet()
+            if (pauseNextSave) {
+                pauseNextSave = false
+                saveEntered.complete(Unit)
+                releaseSave.await()
+            }
             _saved.update { it + (conversationId to session) }
         }
-        override suspend fun getSession(conversationId: String): SessionState? = _saved.value[conversationId]
+        override suspend fun getSession(conversationId: String): SessionState? {
+            if (failNextGet) {
+                failNextGet = false
+                error("test session lookup failure")
+            }
+            if (pauseNextGet) {
+                pauseNextGet = false
+                getEntered.complete(Unit)
+                releaseGet.await()
+            }
+            return _saved.value[conversationId]
+        }
         override suspend fun deleteSessionByConversation(conversationId: String) {
             _saved.update { it - conversationId }
         }
@@ -114,14 +170,59 @@ class ConnectionRepositorySessionPersistenceTest {
             prompt: String,
             images: List<String>?,
             files: List<FileAttachment>?
-        ) = Unit
-        override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) = Unit
+        ): Boolean = true
+        override fun drain(agentAddress: String, sessionId: String?, conversationId: String?, send: (QueuedMessage) -> Boolean) = Unit
         override fun clear(agentAddress: String) = Unit
+        override fun clearConversation(agentAddress: String, sessionId: String?, conversationId: String?) = Unit
+        override fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int = 0
+    }
+
+    private class BlockingDrainSink : PendingMessageSink {
+        @Volatile private var queued = false
+        val drainEntered = CountDownLatch(1)
+        val releaseDrain = CountDownLatch(1)
+        val hasQueued: Boolean get() = queued
+
+        override fun enqueue(
+            agentAddress: String,
+            sessionId: String?,
+            prompt: String,
+            images: List<String>?,
+            files: List<FileAttachment>?
+        ): Boolean {
+            queued = true
+            return true
+        }
+
+        override fun drain(
+            agentAddress: String,
+            sessionId: String?,
+            conversationId: String?,
+            send: (QueuedMessage) -> Boolean
+        ) {
+            if (!queued) return
+            queued = false
+            drainEntered.countDown()
+            releaseDrain.await(AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            if (!send(QueuedMessage("queued", null))) queued = true
+        }
+
+        override fun clear(agentAddress: String) {
+            queued = false
+        }
+
+        override fun clearConversation(agentAddress: String, sessionId: String?, conversationId: String?) {
+            queued = false
+        }
+
+        override fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int =
+            if (queued) 1 else 0
     }
 
     private lateinit var factory: FakeWebSocketFactory
     private lateinit var store: RecordingSessionStore
     private lateinit var repository: ConnectionRepositoryImpl
+    private lateinit var agentConnection: AgentConnection
 
     private val agentA = "0xAAA"
     private val agentB = "0xBBB"
@@ -133,7 +234,7 @@ class ConnectionRepositorySessionPersistenceTest {
     @Before
     fun setUp() {
         val keyManager = KeyManager(ApplicationProvider.getApplicationContext<android.content.Context>())
-        keyManager.save(keyManager.keysFromHex("aa".repeat(32) + "bb".repeat(32)))
+        keyManager.save(TestIdentity.keys())
         factory = FakeWebSocketFactory()
         store = RecordingSessionStore()
         val sink = NoopSink()
@@ -143,7 +244,10 @@ class ConnectionRepositorySessionPersistenceTest {
             relayUrl = "ws://test.invalid",
             sessionStore = store,
             pendingMessageSink = sink,
-            agentConnectionFactory = { km, url -> AgentConnection(km, url, factory, pendingMessageSink = sink) }
+            agentConnectionFactory = { km, url ->
+                AgentConnection(km, url, factory, signer = { _, _ -> "fake-signature" }, pendingMessageSink = sink)
+                    .also { agentConnection = it }
+            }
         )
     }
 
@@ -194,6 +298,9 @@ class ConnectionRepositorySessionPersistenceTest {
 
     private fun connectedWithBody(sessionId: String, turn: Int) =
         """{"type":"CONNECTED","session_id":"$sessionId","session":{"session_id":"$sessionId","turn":$turn,"messages":[]}}"""
+
+    private fun outputWithBody(sessionId: String, turn: Int) =
+        """{"type":"OUTPUT","result":"done","session_id":"$sessionId","session":{"session_id":"$sessionId","turn":$turn,"messages":[]}}"""
 
     private fun sessionSync(sessionId: String, turn: Int, reply: String) =
         """{"type":"session_sync","session":{"session_id":"$sessionId","turn":$turn,""" +
@@ -265,17 +372,220 @@ class ConnectionRepositorySessionPersistenceTest {
         send(connectedWithBody("server-allocated", turn = 1))
         awaitConnected()
 
+        factory.frameOnNextCreate = connectedWithBody("server-allocated", turn = 9)
         repository.switchConversation(convB)
         awaitSockets(2)
-
-        // The host answers the switch with the session it allocated earlier.
-        send(connectedWithBody("server-allocated", turn = 9))
         awaitFramesDrained()
 
         assertFalse(
             "conversation B was filed under a session the server never gave it",
             store.saved.containsKey(convB)
         )
+    }
+
+    @Test
+    fun `a reconnect is held off while the target session is loading`() = runBlocking {
+        // A reconnect rung can already be scheduled when the user switches
+        // conversations. The Room lookup for B is suspendable, so make the
+        // ordering explicit: the rung must not open a socket until
+        // switchSession(B) has registered the target.
+        repository.connect(agentA, conversationId = null)
+        send(connectedWithBody("server-allocated", turn = 1))
+        awaitConnected()
+
+        store.pauseNextSessionLookup()
+        val oldListener = factory.lastListener!!
+        val oldSocket = factory.lastWebSocket!!
+        oldListener.onClosed(oldSocket, 1006, "network drop")
+
+        val switchJob = launch { repository.switchConversation(convB) }
+        store.getEntered.await()
+
+        // The switch barrier disarms the pending rung, so a foreground retry
+        // cannot create a replacement while B's session is still loading.
+        repository.retryNow()
+        val replacementOpenedDuringLookup = withTimeoutOrNull(1_000L) {
+            factory.createCount.first { it >= 2 }
+            true
+        } ?: false
+        assertFalse("no replacement socket may open during the lookup", replacementOpenedDuringLookup)
+
+        factory.frameOnNextCreate = connectedWithBody("server-allocated", turn = 9)
+        store.releaseGet.complete(Unit)
+        switchJob.join()
+        awaitSockets(2)
+        awaitFramesDrained()
+
+        assertFalse(
+            "conversation B was filed under the session from the old socket",
+            store.saved.containsKey(convB)
+        )
+    }
+
+    @Test
+    fun `a frame already in flight on A is dropped after switching to B`() = runBlocking {
+        repository.connect(agentA, convA)
+        send(connectedWithBody(convA, turn = 1))
+        awaitConnected()
+        awaitUntil("conversation A's initial session to be stored", store.savedFlow) { it[convA]?.turn == 1 }
+
+        val framePassedGenerationCheck = CountDownLatch(1)
+        val releaseFrame = CountDownLatch(1)
+        val pauseOnce = AtomicBoolean(true)
+        agentConnection.beforeHandleMessageForTest = {
+            if (pauseOnce.compareAndSet(true, false)) {
+                framePassedGenerationCheck.countDown()
+                releaseFrame.await(AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
+        }
+
+        val oldListener = factory.lastListener!!
+        val oldSocket = factory.lastWebSocket!!
+        val frameJob = launch(Dispatchers.Default) {
+            oldListener.onMessage(oldSocket, sessionSync("sess-A", turn = 9, reply = "late A"))
+        }
+
+        assertTrue(
+            "the old frame did not reach the window between the callback check and the lock",
+            framePassedGenerationCheck.await(AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        )
+
+        val switchJob = launch { repository.switchConversation(convB) }
+        switchJob.join()
+        awaitSockets(2)
+        releaseFrame.countDown()
+        frameJob.join()
+        awaitFramesDrained()
+
+        val misattributed = withTimeoutOrNull(2_500L) {
+            store.savedFlow.first { it[convB]?.turn == 9 }
+            true
+        } ?: false
+        assertFalse("the in-flight frame from A must not persist under B", misattributed)
+        assertEquals(1, store.saved[convA]?.turn)
+    }
+
+    @Test
+    fun `a session update keeps A attribution when the user switches to B`() = runBlocking {
+        // Hold the repository on an earlier save. The frame is handled on A,
+        // then the switch makes B current before its save is scheduled.
+        repository.connect(agentA, conversationId = null)
+        agentConnection.setSession(SessionState(sessionId = convA, turn = 0), convA)
+        store.pauseNextSessionSave()
+        send(connectedWithBody(convA, turn = 1))
+        store.saveEntered.await()
+
+        val updateJob = async(start = CoroutineStart.UNDISPATCHED) {
+            agentConnection.events.filterIsInstance<ConnectionEvent.SessionUpdated>().first()
+        }
+        send(sessionSync(convA, turn = 2, reply = "reply from A"))
+        assertEquals(convA, updateJob.await().conversationId)
+
+        repository.switchConversation(convB)
+        store.releaseSave.complete(Unit)
+
+        val saved = withTimeoutOrNull(AWAIT_TIMEOUT_MS) {
+            store.savedFlow.first { it[convA]?.turn == 2 || it[convB]?.turn == 2 }
+        }
+        assertEquals("the update must eventually be persisted", 2, saved?.get(convA)?.turn)
+        assertFalse("the update from A must not be persisted under B", saved?.containsKey(convB) == true)
+    }
+
+    @Test
+    fun `an OUTPUT keeps A attribution when B is already current`() = runBlocking {
+        repository.connect(agentA, conversationId = null)
+        agentConnection.setSession(SessionState(sessionId = convA, turn = 0), convA)
+        store.pauseNextSessionSave()
+        send(connectedWithBody(convA, turn = 1))
+        store.saveEntered.await()
+
+        send(outputWithBody(convA, turn = 2))
+        repository.switchConversation(convB)
+        store.releaseSave.complete(Unit)
+
+        val saved = withTimeoutOrNull(AWAIT_TIMEOUT_MS) {
+            store.savedFlow.first { it[convA]?.turn == 2 || it[convB]?.turn == 2 }
+        }
+        assertEquals("OUTPUT must be saved for A", 2, saved?.get(convA)?.turn)
+        assertFalse("OUTPUT from A must not be saved under B", saved?.containsKey(convB) == true)
+    }
+
+    @Test
+    fun `a CONNECTED keeps A attribution when B is already current`() = runBlocking {
+        repository.connect(agentA, conversationId = null)
+        agentConnection.setSession(SessionState(sessionId = convA, turn = 0), convA)
+        store.pauseNextSessionSave()
+        send(connectedWithBody(convA, turn = 1))
+        store.saveEntered.await()
+
+        send(connectedWithBody(convA, turn = 2))
+        repository.switchConversation(convB)
+        store.releaseSave.complete(Unit)
+
+        val saved = withTimeoutOrNull(AWAIT_TIMEOUT_MS) {
+            store.savedFlow.first { it[convA]?.turn == 2 || it[convB]?.turn == 2 }
+        }
+        assertEquals("CONNECTED must be saved for A", 2, saved?.get(convA)?.turn)
+        assertFalse("CONNECTED from A must not be saved under B", saved?.containsKey(convB) == true)
+    }
+
+    @Test
+    fun `a failed switch does not make B current before the socket switches`() = runBlocking {
+        repository.connect(agentA, convA)
+        send(connectedWithBody(convA, turn = 1))
+        awaitConnected()
+        awaitUntil("conversation A's session to be stored", store.savedFlow) { it[convA]?.turn == 1 }
+
+        store.failNextGet = true
+        assertNotNull(runCatching { repository.switchConversation(convB) }.exceptionOrNull())
+        awaitSockets(2)
+
+        send(sessionSync(convA, turn = 2, reply = "still A"))
+        val saved = withTimeoutOrNull(AWAIT_TIMEOUT_MS) {
+            store.savedFlow.first { it[convA]?.turn == 2 || it[convB]?.turn == 2 }
+        }
+        assertEquals("A must remain current after a failed switch", 2, saved?.get(convA)?.turn)
+        assertFalse("a failed switch must not file A under B", saved?.containsKey(convB) == true)
+    }
+
+    @Test
+    fun `teardown does not wait for an outbox drain`() = runBlocking {
+        val keyManager = KeyManager(ApplicationProvider.getApplicationContext<android.content.Context>())
+        keyManager.save(TestIdentity.keys())
+        val blockingSink = BlockingDrainSink()
+        val connection = AgentConnection(
+            keyManager = keyManager,
+            relayUrl = "ws://test.invalid",
+            webSocketFactory = factory,
+            signer = { _, _ -> "fake-signature" },
+            pendingMessageSink = blockingSink
+        )
+
+        connection.connect(agentA)
+        connection.sendMessage("queued", agentA)
+
+        val listener = factory.lastListener!!
+        val socket = factory.lastWebSocket!!
+        val frameJob = launch(Dispatchers.Default) {
+            listener.onMessage(socket, connectedIdOnly("sess-A"))
+        }
+        assertTrue(
+            "the CONNECTED handler did not reach the blocking outbox drain",
+            blockingSink.drainEntered.await(AWAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        )
+
+        val teardownJob = launch(Dispatchers.Default) { connection.teardown() }
+        val teardownReturned = withTimeoutOrNull(1_000L) {
+            teardownJob.join()
+            true
+        } ?: false
+
+        blockingSink.releaseDrain.countDown()
+        frameJob.join()
+        teardownJob.join()
+
+        assertTrue("teardown must not wait for Room/outbox work", teardownReturned)
+        assertTrue("a message rejected by the retired socket must remain queued", blockingSink.hasQueued)
     }
 
     @Test
@@ -334,6 +644,84 @@ class ConnectionRepositorySessionPersistenceTest {
             false,
             repository.modePending.value
         )
+    }
+
+    // ── plan survives a switch and a restart (W16AAPPLE-17) ─────────
+    //
+    // Nothing on the wire brings an idle conversation's plan back: the Host
+    // puts a session on CONNECTED only when its copy is newer, and replays
+    // frames only into a running turn. So the plan has to be kept with the
+    // stored session — and, since the Host adopts the session a CONNECT
+    // echoes, it has to be on the session the next CONNECT sends.
+
+    private val storedPlan = listOf(PlanEntryWire(content = "Run tests", priority = "high", status = "in_progress"))
+
+    private fun planFrame(content: String) =
+        """{"type":"plan","id":"tr-plan","entries":[{"content":"$content","priority":"high","status":"pending"}]}"""
+
+    @Test
+    fun `a plan frame is saved with the session and carried on the next CONNECT`() = runBlocking {
+        repository.connect(agentA, convA)
+        send(connectedIdOnly(convA))
+        awaitConnected()
+
+        send(planFrame("Run tests"))
+
+        awaitUntil("the plan to be saved with convA's session", store.savedFlow) {
+            it[convA]?.plan?.map(PlanEntryWire::content) == listOf("Run tests")
+        }
+        assertEquals(listOf("Run tests"), repository.getCurrentSession()?.plan?.map { it.content })
+    }
+
+    @Test
+    fun `a session snapshot without a plan keeps the session's plan`() = runBlocking {
+        repository.connect(agentA, convA)
+        send(connectedIdOnly(convA))
+        awaitConnected()
+        send(planFrame("Run tests"))
+
+        send(sessionSync(convA, turn = 1, reply = "the reply"))
+        awaitUntil("session_sync to persist turn 1", store.savedFlow) { it[convA]?.turn == 1 }
+
+        assertEquals(listOf("Run tests"), store.saved[convA]?.plan?.map { it.content })
+        assertEquals(listOf("Run tests"), repository.plan.value.map { it.content })
+    }
+
+    @Test
+    fun `the stored plan shows on connect, before the Host says anything`() = runBlocking {
+        store.preload(convA, SessionState(sessionId = convA, turn = 3, plan = storedPlan))
+
+        repository.connect(agentA, convA)
+
+        assertEquals(listOf("Run tests"), repository.plan.value.map { it.content })
+        assertEquals("echoed on CONNECT", storedPlan, repository.getCurrentSession()?.plan)
+    }
+
+    @Test
+    fun `an idle CONNECTED does not clear the stored plan`() = runBlocking {
+        store.preload(convA, SessionState(sessionId = convA, turn = 3, plan = storedPlan))
+        repository.connect(agentA, convA)
+
+        send(connectedIdOnly(convA))
+        awaitConnected()
+        awaitFramesDrained()
+
+        assertEquals(listOf("Run tests"), repository.plan.value.map { it.content })
+    }
+
+    @Test
+    fun `switching away and back shows each conversation's own plan`() = runBlocking {
+        store.preload(convA, SessionState(sessionId = convA, plan = storedPlan))
+        repository.connect(agentA, convA)
+        send(connectedIdOnly(convA))
+        awaitConnected()
+
+        repository.switchConversation(convB)
+        assertTrue("convB has no plan of its own", repository.plan.value.isEmpty())
+
+        repository.switchConversation(convA)
+        assertEquals(listOf("Run tests"), repository.plan.value.map { it.content })
+        assertEquals(storedPlan, repository.getCurrentSession()?.plan)
     }
 
     @Test

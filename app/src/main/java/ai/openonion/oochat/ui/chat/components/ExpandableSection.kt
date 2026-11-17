@@ -15,6 +15,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 
 /**
  * A preview row that expands to reveal more content on tap, via a
@@ -41,7 +44,13 @@ internal fun ExpandableSection(
 
     Column(modifier = modifier) {
         Column(
-            modifier = if (showToggle) Modifier.clickable { expanded = !expanded } else Modifier
+            modifier = if (showToggle) {
+                Modifier
+                    .clickable(role = Role.Button) { expanded = !expanded }
+                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+            } else {
+                Modifier
+            }
         ) {
             previewContent(expanded && showToggle)
         }
