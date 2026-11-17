@@ -27,7 +27,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @Composable
 fun DashboardScreenWrapper(
     chatViewModelStoreOwner: ViewModelStoreOwner?,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    besideChat: Boolean = false
 ) {
     val application = LocalContext.current.applicationContext as Application
     val viewModel: ChatViewModel = viewModel(
@@ -45,11 +46,13 @@ fun DashboardScreenWrapper(
         allowedSkills = profile?.skills?.map { it.name },
         onRunSkill = { message ->
             viewModel.sendMessage(message)
-            // Back to the conversation, where the turn this just started is.
-            onNavigateBack()
+            // Back to the conversation, where the turn this just started is. Beside the chat it
+            // already is in view.
+            if (!besideChat) onNavigateBack()
         },
         onNavigateBack = onNavigateBack,
         agentName = profile?.name,
-        chatAwaitsUser = awaitsUser
+        chatAwaitsUser = awaitsUser,
+        besideChat = besideChat
     )
 }
