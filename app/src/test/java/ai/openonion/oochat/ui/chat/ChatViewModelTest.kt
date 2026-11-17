@@ -30,6 +30,9 @@ import ai.openonion.oochat.domain.model.isInProgress
 import ai.openonion.oochat.domain.model.stableAssistantId
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.ConversationHistoryUseCase
+import ai.openonion.oochat.domain.usecase.ServerErrorText
+import ai.openonion.oochat.domain.usecase.StaleSessionDetector
+import ai.openonion.oochat.knownIssue
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.OFFLINE_GRACE_MS
 import ai.openonion.oochat.network.RecognizerReadiness
@@ -48,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -368,10 +372,12 @@ class ChatViewModelTest {
             durationSeconds = 3f,
             file = File.createTempFile("fake-voice", ".m4a")
         )
+        /** Set by a test to make the recorder fail to open, as a busy or denied mic does. */
+        var startSucceeds = true
         override suspend fun startRecording(): Boolean {
             startCalls++
             onStartRecording()
-            return true
+            return startSucceeds
         }
         override suspend fun stopRecording(): RecordedVoice? {
             stopCalls++
@@ -1574,6 +1580,73 @@ class ChatViewModelTest {
             assertTrue(connectUseCase.sentMessages.isEmpty())
         }
 
+    // What the fallback path does when it cannot finish. Each ends with an
+    // idle composer and nothing sent - dictation never sends on its own, and a
+    // failed one must not either.
+
+    /** One whole dictation on the recorder + server-transcription path. */
+    private fun TestScope.dictateOnFallbackPath() {
+        speechRecognition.reportedReadiness = RecognizerReadiness.UNAVAILABLE
+        vm.startVoiceRecording()
+        testScheduler.runCurrent()
+        vm.finishVoiceInput()
+        testScheduler.runCurrent()
+    }
+
+    @Test
+    fun `a recorder that cannot open says so and sends nothing`() =
+        runTest(testDispatcher) {
+            speechRecognition.reportedReadiness = RecognizerReadiness.UNAVAILABLE
+            voiceRecorderStore.startSucceeds = false
+
+            vm.startVoiceRecording()
+            testScheduler.runCurrent()
+
+            assertEquals("Couldn't start recording.", vm.voiceInput.value.error)
+            assertEquals(VoiceInputPhase.IDLE, vm.voiceInput.value.phase)
+            assertEquals(0, voiceTranscriptionService.transcribeCalls)
+            assertTrue(connectUseCase.sentMessages.isEmpty())
+        }
+
+    @Test
+    fun `a failed server transcription says so, leaves the composer alone, and sends nothing`() =
+        runTest(testDispatcher) {
+            voiceTranscriptionService.nextTranscript = null
+
+            dictateOnFallbackPath()
+
+            assertEquals("Couldn't transcribe that. Try again.", vm.voiceInput.value.error)
+            assertEquals("", vm.voiceInput.value.transcript)
+            assertEquals(VoiceInputPhase.IDLE, vm.voiceInput.value.phase)
+            assertTrue(connectUseCase.sentMessages.isEmpty())
+        }
+
+    @Test
+    fun `a blank server transcription is reported as a failure, not as an empty success`() =
+        runTest(testDispatcher) {
+            voiceTranscriptionService.nextTranscript = "   "
+
+            dictateOnFallbackPath()
+
+            assertEquals("Couldn't transcribe that. Try again.", vm.voiceInput.value.error)
+            assertTrue(connectUseCase.sentMessages.isEmpty())
+        }
+
+    @Test
+    fun `a recording too short to keep is not uploaded and sends nothing`() =
+        runTest(testDispatcher) {
+            voiceRecorderStore.nextRecording = null
+
+            dictateOnFallbackPath()
+
+            // Whether the user should also be told is an open question; what is
+            // settled is that nothing is transcribed, sent, or left running.
+            assertEquals(VoiceInputPhase.IDLE, vm.voiceInput.value.phase)
+            assertEquals("", vm.voiceInput.value.transcript)
+            assertEquals(0, voiceTranscriptionService.transcribeCalls)
+            assertTrue(connectUseCase.sentMessages.isEmpty())
+        }
+
     @Test
     fun `cancelVoiceRecording releases the recorder on the fallback path`() =
         runTest(testDispatcher) {
@@ -2371,6 +2444,21 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `a refused protocol version reaches the chat once even when the Host's words look like a stale session`() = runTest(testDispatcher) {
+        // W16AAPPLE-12: the message embeds the Host's own version text. A Host
+        // that words it "session-already" must not trip the stale-session
+        // suppression above and leave the user with no error at all.
+        val message = ServerErrorText.incompatibleProtocol(hostProtocol = "oip/session-already", clientProtocol = "oip/0.1")
+        assertTrue("test setup: the detector must be fooled by this text", StaleSessionDetector.isStaleSessionError(message))
+
+        connectUseCase.forceState(ConnectionState.Error(message = message, retryable = false))
+        testScheduler.runCurrent()
+
+        val shown = vm.uiState.value.chatItems.filterIsInstance<ChatItem.Thinking>().filter { it.status == ThinkingStatus.ERROR }
+        assertEquals(listOf(message), shown.map { it.content })
+    }
+
+    @Test
     fun `ChatEvent ConnectionErrorOccurred (eg Insufficient Credits) attaches to a RUNNING Turn without touching uiState error`() = runTest(testDispatcher) {
         // The actual path a server "ERROR" frame takes today (see
         // ConnectionRepositoryImpl) — deliberately NOT a ConnectionState
@@ -2840,7 +2928,8 @@ class ChatViewModelTest {
                 address = address,
                 name = "Custom Server Agent",
                 serverUrl = "https://custom.example.com",
-                createdAt = 0L
+                createdAt = 0L,
+                connectionMode = "direct"
             )
         )
 
@@ -2850,6 +2939,34 @@ class ChatViewModelTest {
         assertEquals(address, connectUseCase.lastConnectAddress)
         assertEquals("https://custom.example.com", connectUseCase.lastConnectDirectUrl)
     }
+
+    @Test
+    fun `known issue - an agent saved as relay-mode on a self-hosted relay is dialled as a direct agent`() =
+        runTest(testDispatcher) {
+            // What discovery saves for every agent found on a relay the user
+            // typed in: connectionMode "relay", serverUrl = that relay.
+            val address = validHexAddress()
+            agentRepo.createAgent(
+                AgentProfile(
+                    id = "agent-1",
+                    address = address,
+                    name = "Found On My Relay",
+                    serverUrl = "https://relay.example.com",
+                    createdAt = 0L,
+                    connectionMode = "relay"
+                )
+            )
+
+            vm.connectToAgent(address)
+            testScheduler.runCurrent()
+
+            knownIssue(
+                "the saved connectionMode is never read; any non-default server URL is dialled direct, " +
+                    "so a relay-mode agent is reached at <relay>/ws instead of through the relay"
+            ) {
+                assertNull(connectUseCase.lastConnectDirectUrl)
+            }
+        }
 
     @Test
     fun `connectToAgent does not forward a default-relay serverUrl as directUrl`() = runTest(testDispatcher) {
