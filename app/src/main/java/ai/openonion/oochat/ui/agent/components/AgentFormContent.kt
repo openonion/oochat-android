@@ -4,6 +4,9 @@ import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.domain.model.AgentProfile
 import ai.openonion.oochat.ui.components.AgentInitialsAvatar
 import ai.openonion.oochat.ui.components.PillTextField
+import ai.openonion.oochat.ui.theme.AppShapes
+import ai.openonion.oochat.ui.theme.Elevation
+import ai.openonion.oochat.ui.theme.hairline
 import ai.openonion.oochat.ui.theme.spacing
 import ai.openonion.oochat.util.truncateMiddle
 import androidx.compose.animation.AnimatedVisibility
@@ -21,7 +24,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.ZeroCornerSize
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -66,7 +69,7 @@ import androidx.compose.ui.unit.dp
  * by AgentFormScreen's Name/Description fields (which aren't in the Figma
  * source, so they stay on the stock Material3 [OutlinedTextField]).
  */
-internal val FormFieldShape = RoundedCornerShape(12.dp)
+internal val FormFieldShape = AppShapes.large
 
 /**
  * Focus-tinted border/container colors for AgentFormScreen's Name/Description
@@ -348,7 +351,9 @@ internal fun AgentAddressField(
 
                     ExposedDropdownMenu(
                         expanded = dropdownExpanded,
-                        onDismissRequest = { dropdownExpanded = false }
+                        onDismissRequest = { dropdownExpanded = false },
+                        shadowElevation = Elevation.hairline,
+                        border = MaterialTheme.hairline
                     ) {
                         if (filteredAgents.isEmpty()) {
                             DropdownMenuItem(
@@ -477,9 +482,9 @@ fun AdvancedSettingsSection(
     var showApiKey by remember { mutableStateOf(false) }
 
     val advancedShape = if (showAdvanced) {
-        RoundedCornerShape(topStart = 0.dp, topEnd = 0.dp, bottomStart = 12.dp, bottomEnd = 12.dp)
+        MaterialTheme.shapes.large.copy(topStart = ZeroCornerSize, topEnd = ZeroCornerSize)
     } else {
-        RoundedCornerShape(12.dp)
+        MaterialTheme.shapes.large
     }
     val chevronRotation by animateFloatAsState(if (showAdvanced) 180f else 0f, label = "advancedChevron")
 

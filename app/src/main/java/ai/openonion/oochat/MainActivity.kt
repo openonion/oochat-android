@@ -1,11 +1,14 @@
 package ai.openonion.oochat
 
 import ai.openonion.oochat.data.local.ThemePreferences
+import ai.openonion.oochat.domain.model.NotificationTarget
 import ai.openonion.oochat.domain.model.ThemeMode
+import ai.openonion.oochat.notification.NotificationIntents
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import ai.openonion.oochat.ui.theme.LocalThemeController
 import ai.openonion.oochat.ui.theme.ThemeController
 import ai.openonion.oochat.util.FileLogger
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,9 +19,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    /**
+     * Where a tapped notification asked to go (W16AAPPLE-44), until the app has
+     * taken the user there. From the intent that started the activity, or from
+     * [onNewIntent] when it was already running.
+     */
+    private val notificationTarget = MutableStateFlow<NotificationTarget?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Install splash screen BEFORE super.onCreate() so the system
         // can show the windowSplashScreen* attributes defined on
@@ -35,11 +46,15 @@ class MainActivity : ComponentActivity() {
         // resizes for the IME once decorFitsSystemWindows is false, so every
         // screen takes its own insets — see ChatScreen's windowInsetsPadding.
         enableEdgeToEdge()
+        // Not on a recreation: the activity restores its own back stack, and the
+        // tap that started it was already acted on.
+        if (savedInstanceState == null) notificationTarget.value = NotificationIntents.targetOf(intent)
         setContent {
             // Persisted theme mode drives the palette; SYSTEM until DataStore emits.
             val themePrefs = remember { ThemePreferences(applicationContext) }
             val scope = rememberCoroutineScope()
             val themeMode by themePrefs.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
+            val tappedNotification by notificationTarget.collectAsState()
 
             CompositionLocalProvider(
                 LocalThemeController provides ThemeController(
@@ -48,9 +63,18 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 ConnectOnionTheme(themeMode = themeMode) {
-                    ConnectOnionApp()
+                    ConnectOnionApp(
+                        notificationTarget = tappedNotification,
+                        onNotificationTargetHandled = { notificationTarget.value = null }
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        NotificationIntents.targetOf(intent)?.let { notificationTarget.value = it }
     }
 }

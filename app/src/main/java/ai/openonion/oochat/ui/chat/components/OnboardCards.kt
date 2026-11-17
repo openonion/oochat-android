@@ -152,6 +152,8 @@ internal fun OnboardGateCard(
     // the tertiaryContainer role, with alpha bumped above Figma's literal
     // 8-16% since that reads as washed-out gray once actually rendered.
     val tertiary = MaterialTheme.colorScheme.tertiary
+    // The card is tinted a warm grey, but its one action is the brand green like every other.
+    val accent = MaterialTheme.colorScheme.primary
     // surfaceContainerHigh, like the other decision gates — this card blocks
     // the conversation until it's answered.
     val cardBackground = lerp(MaterialTheme.colorScheme.surfaceContainerHigh, tertiary, 0.16f)
@@ -272,18 +274,19 @@ internal fun OnboardGateCard(
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = tertiary,
+                            focusedBorderColor = accent,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            cursorColor = tertiary
+                            cursorColor = accent
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
                     Button(
                         onClick = submit,
+                        shape = MaterialTheme.shapes.large,
                         enabled = inviteCode.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = tertiary,
-                            contentColor = MaterialTheme.colorScheme.onTertiary,
+                            containerColor = accent,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContentColor = MaterialTheme.colorScheme.outline
                         ),

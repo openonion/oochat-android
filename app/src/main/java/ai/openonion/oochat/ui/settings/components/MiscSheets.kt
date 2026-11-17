@@ -55,6 +55,7 @@ internal fun CustomInstructionsSheet(
         actions = {
             Button(
                 onClick = { onSave(text); onDismiss() },
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Save")
@@ -109,6 +110,7 @@ internal fun TermsAndPrivacySheet(onDismiss: () -> Unit) {
         actions = {
             Button(
                 onClick = onDismiss,
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Close")

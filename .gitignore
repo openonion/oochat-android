@@ -17,6 +17,10 @@ Thumbs.db
 .claude-flow/
 CLAUDE.md
 
+# ConnectOnion Host trust files. `co trust admin add` writes these into the directory it is run in,
+# and they name who may administer a Host, so they are never committed.
+.co/
+
 # Environment
 .env
 .env.*
@@ -77,6 +81,7 @@ out/
 release/
 .gradle/
 .gradle-cache/
+.kotlin/
 .android-home/
 local.properties
 proguard/
