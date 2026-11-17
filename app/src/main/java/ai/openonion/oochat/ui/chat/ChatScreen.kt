@@ -2,18 +2,31 @@ package ai.openonion.oochat.ui.chat
 
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
+import ai.openonion.oochat.ui.chat.components.ApprovalNotificationOffer
+import ai.openonion.oochat.ui.chat.components.ChatComposerDraft
 import ai.openonion.oochat.ui.chat.components.ChatTopBar
+import ai.openonion.oochat.ui.chat.components.FailedMessagesBar
 import ai.openonion.oochat.ui.chat.components.InputBar
 import ai.openonion.oochat.ui.chat.components.LowBalanceBar
+import ai.openonion.oochat.ui.chat.components.PlanPanel
 import ai.openonion.oochat.ui.chat.components.VoiceInputState
+import ai.openonion.oochat.ui.chat.components.composerEnabled
+import ai.openonion.oochat.ui.chat.components.failedUserMessages
 import ai.openonion.oochat.ui.common.appViewModel
+import ai.openonion.oochat.ui.components.AppSnackbarHost
 import ai.openonion.oochat.ui.components.ConnectionBanner
+import ai.openonion.oochat.ui.controlcenter.controlCenterSupported
+import ai.openonion.oochat.ui.home.AgentHome
 import ai.openonion.oochat.ui.navigation.DrawerAgentSection
 import ai.openonion.oochat.ui.navigation.NavDrawer
 import ai.openonion.oochat.ui.navigation.NavDrawerWidth
 import ai.openonion.oochat.ui.theme.LocalThemeController
 import ai.openonion.oochat.util.SoundEffectPlayer
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -36,7 +49,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -53,6 +65,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
@@ -86,8 +99,13 @@ fun ChatScreen(
     startNewSessionOnConnect: Boolean = false,
     onNavigateToSettings: () -> Unit = {},
     onNavigateToLogs: () -> Unit = {},
+    onNavigateToRem: () -> Unit = {},
     onNavigateToAgentList: () -> Unit = {},
-    onNavigateToDashboard: () -> Unit = {},
+    onNavigateToControlCenter: () -> Unit = {},
+    onNavigateToWorkRoom: (invocationId: String) -> Unit = {},
+    // Home is already part of this layout, beside the chat or as a tab, so the top bar's button to
+    // open it would only open what is there.
+    homeInLayout: Boolean = false,
     // Drawer row tapped for an agent other than the one this ChatViewModel
     // is connected to — the caller (NavigationGraph) re-navigates to that
     // agent's own chat/{address} destination, tearing down this ChatViewModel
@@ -100,7 +118,6 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val hasLiveConnection by viewModel.hasLiveConnection.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
     val isAgentWorking by viewModel.isAgentWorking.collectAsState()
     val voiceInput by viewModel.voiceInput.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
@@ -109,13 +126,31 @@ fun ChatScreen(
     val agentProfile by viewModel.agentProfile.collectAsState()
     val approvalMode by viewModel.approvalMode.collectAsState()
     val modePending by viewModel.modePending.collectAsState()
+    val sessionModes by viewModel.sessionModes.collectAsState()
+    val sessionActivity by viewModel.sessionActivity.collectAsState()
+    val chatComposerDrafts by viewModel.chatComposerDrafts.collectAsState()
+    val availableTools = agentProfile?.tools.orEmpty()
 
     val dashboardHtml by viewModel.dashboardHtml.collectAsState()
+    val controlCenterApp by viewModel.controlCenterApp.collectAsState()
+    // Lazy: asking loads the WebView, which only an agent with both kinds of Home page needs.
+    val webViewHostsApps = remember { lazy { controlCenterSupported() } }
+    val agentHome = AgentHome(dashboardHtml != null, controlCenterApp != null) { webViewHostsApps.value }
+    val plan by viewModel.plan.collectAsState()
     val activeSessionId by viewModel.activeSessionId.collectAsState()
     val itemTimestamps by viewModel.itemTimestamps.collectAsState()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsState()
     val targetAgentAddress by viewModel.targetAgentAddress.collectAsState()
     val drawerAgents by viewModel.drawerAgents.collectAsState()
+    // W16AAPPLE-44: the offer to notify about approvals, and the OS dialog it
+    // goes through where Android requires one. A refusal ends the offer too:
+    // asking again would only reach a dialog Android has stopped showing.
+    val approvalNotificationOffer by viewModel.approvalNotificationOffer.collectAsState()
+    val notificationPermissionRequest = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) viewModel.acceptApprovalNotificationOffer() else viewModel.dismissApprovalNotificationOffer()
+    }
     // Title, cleared-state, usage totals and the snackbar's error are derived
     // in ChatViewModel, not here: computing any of them in this body reads
     // uiState at function scope, which is what made a single tool_call frame
@@ -124,7 +159,7 @@ fun ChatScreen(
     val wasCleared by viewModel.wasCleared.collectAsState()
     val sessionUsage by viewModel.sessionUsage.collectAsState()
     val error by viewModel.error.collectAsState()
-
+    val execItems by viewModel.execItems.collectAsState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
     // ModalNavigationDrawer composes its drawerContent whether or not the
@@ -146,6 +181,7 @@ fun ChatScreen(
     val renderMarkdown by viewModel.renderMarkdown.collectAsState()
     val hapticFeedbackEnabled by viewModel.hapticFeedbackEnabled.collectAsState()
     val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsState()
+    val developerToolsEnabled by viewModel.developerToolsEnabled.collectAsState()
     val haptics = LocalHapticFeedback.current
 
     // The user's font-size preference is applied app-wide by ConnectOnionTheme
@@ -242,6 +278,7 @@ fun ChatScreen(
     // not on back, so a hide gesture or the IME's own dismiss key counts too.
     val imeVisible = WindowInsets.isImeVisible
     val focusManager = LocalFocusManager.current
+    val composerFocus = remember { FocusRequester() }
     LaunchedEffect(imeVisible) { if (!imeVisible) focusManager.clearFocus() }
 
     val contentBlur by animateDpAsState(
@@ -300,6 +337,51 @@ fun ChatScreen(
                     .fillMaxSize()
                     .blur(contentBlur)
             ) {
+            // W16AAPPLE-113: until the first message the composer is a card in
+            // the middle of the screen; after it, the usual bar along the bottom.
+            val emptyChat = uiState.chatItems.isEmpty()
+            val composer: @Composable (centred: Boolean) -> Unit = { centred ->
+                ChatInput(
+                    awaitingOnboardCode = awaitingOnboardCode,
+                    isConnected = isConnected,
+                    hasAgent = targetAgentAddress != null,
+                    approvalMode = approvalMode,
+                    modePending = modePending,
+                    sessionModes = sessionModes,
+                    usage = sessionUsage,
+                    skills = agentProfile?.skills.orEmpty(),
+                    onCycleApprovalMode = viewModel::cycleApprovalMode,
+                    onSelectApprovalMode = viewModel::setApprovalMode,
+                    isAgentWorking = isAgentWorking,
+                    draft = chatComposerDrafts[activeSessionId] ?: ChatComposerDraft(),
+                    draftKey = activeSessionId,
+                    onDraftChange = { viewModel.updateChatComposerDraft(activeSessionId, it) },
+                    onSend = { text, images, files ->
+                        if (hapticFeedbackEnabled) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (soundEffectsEnabled) SoundEffectPlayer.playSent()
+                        viewModel.sendMessage(text, images, files)
+                    },
+                    voiceInput = voiceInput,
+                    onStartVoiceRecording = viewModel::startVoiceRecording,
+                    onCancelVoiceRecording = viewModel::cancelVoiceRecording,
+                    onFinishVoiceInput = viewModel::finishVoiceInput,
+                    onVoiceTranscriptConsumed = viewModel::consumeVoiceTranscript,
+                    onQueryVoiceAmplitude = viewModel::currentVoiceAmplitude,
+                    onStop = viewModel::interrupt,
+                    centred = centred,
+                    focusRequester = composerFocus,
+                    // Dimmed only when it cannot be used. Offline it can, so it is
+                    // drawn at full strength; the banner already says offline.
+                    modifier = Modifier.graphicsLayer {
+                        alpha = if (composerEnabled(targetAgentAddress != null, awaitingOnboardCode, isConnected)) 1f else 0.45f
+                    }
+                )
+            }
+            // The first send swaps one composer for the other. Focus goes with
+            // it, so the keyboard the user was typing on stays up for the reply.
+            LaunchedEffect(emptyChat) {
+                if (!emptyChat && imeVisible) composerFocus.requestFocus()
+            }
             ChatTopBar(
                 title = conversationTitle,
                 connectionState = connectionState,
@@ -312,8 +394,12 @@ fun ChatScreen(
                 },
                 awaitingOnboardCode = awaitingOnboardCode,
                 modelName = agentProfile?.model,
-                hasDashboard = dashboardHtml != null,
-                onOpenDashboard = onNavigateToDashboard
+                sessionActivity = sessionActivity,
+                // Only a Control Center the device cannot host has a screen of its own; any other
+                // Home is in the layout.
+                hasDashboard = !homeInLayout && agentHome.opensControlCenter,
+                onOpenDashboard = onNavigateToControlCenter,
+                onOpenRem = onNavigateToRem
             )
 
             ConnectionBanner(
@@ -324,26 +410,69 @@ fun ChatScreen(
                 isOffline = isOffline
             )
 
-            MessageList(
-                items = uiState.chatItems,
-                timestamps = itemTimestamps,
-                wasCleared = wasCleared,
-                onRespond = viewModel::respond,
-                onApprove = viewModel::respondToApproval,
-                onOnboard = viewModel::respondToOnboard,
-                onPlanReviewResponse = viewModel::respondToPlanReview,
-                onUlwResponse = viewModel::respondToUlwTurnsReached,
-                onGateResolved = viewModel::markGateResolved,
-                onRetry = viewModel::retryFailedTurn,
-                onResendMessage = viewModel::resendMessage,
-                renderMarkdown = renderMarkdown,
-                hasLiveConnection = hasLiveConnection,
-                conversationKey = activeSessionId,
-                hasOlderMessages = hasOlderMessages,
-                onLoadOlderMessages = viewModel::loadOlderMessages,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+            PlanPanel(entries = plan)
+
+            if (emptyChat) {
+                EmptyChat(
+                    agentName = agentProfile?.name,
+                    keyboardOpen = imeVisible,
+                    onStarter = { starter ->
+                        val draft = chatComposerDrafts[activeSessionId] ?: ChatComposerDraft()
+                        viewModel.updateChatComposerDraft(activeSessionId, draft.copy(text = starter.prefill))
+                        composerFocus.requestFocus()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) { composer(true) }
+            } else {
+                MessageList(
+                    items = uiState.chatItems,
+                    timestamps = itemTimestamps,
+                    wasCleared = wasCleared,
+                    onRespond = viewModel::respondWithOption,
+                    onApprove = viewModel::respondToApproval,
+                    onOnboard = viewModel::respondToOnboard,
+                    onPlanReviewResponse = viewModel::respondToPlanReview,
+                    onUlwResponse = viewModel::respondToUlwTurnsReached,
+                    onGateResolved = viewModel::markGateResolved,
+                    onRetry = viewModel::retryFailedTurn,
+                    onResendMessage = viewModel::resendMessage,
+                    renderMarkdown = renderMarkdown,
+                    hasLiveConnection = hasLiveConnection,
+                    conversationKey = activeSessionId,
+                    scrollPosition = viewModel.messageListScrollPosition(activeSessionId),
+                    onScrollPositionChanged = { position ->
+                        viewModel.updateMessageListScrollPosition(activeSessionId, position)
+                    },
+                    hasOlderMessages = hasOlderMessages,
+                    onLoadOlderMessages = viewModel::loadOlderMessages,
+                    onOpenWorkRoom = onNavigateToWorkRoom,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                )
+            }
+
+            ExecResultList(
+                items = execItems,
+                onDismiss = viewModel::dismissExec
+            )
+
+            if (developerToolsEnabled && availableTools.isNotEmpty()) {
+                ExecToolPanel(
+                    tools = availableTools,
+                    onExecute = viewModel::executeTool
+                )
+            }
+
+            // Beside the composer for the same reason as LowBalanceBar below: a
+            // failed bubble far up the transcript is one the user has to go and
+            // find. The bubble keeps its own retry.
+            val failedMessages = remember(uiState.chatItems) { uiState.chatItems.failedUserMessages() }
+            FailedMessagesBar(
+                failed = failedMessages,
+                onRetry = viewModel::resendMessage
             )
 
             // With the composer, not in the transcript: the transcript scrolls
@@ -354,41 +483,32 @@ fun ChatScreen(
                 agentAddress = targetAgentAddress
             )
 
-            ChatInput(
-                awaitingOnboardCode = awaitingOnboardCode,
-                isConnected = isConnected,
-                approvalMode = approvalMode,
-                modePending = modePending,
-                usage = sessionUsage,
-                skills = agentProfile?.skills.orEmpty(),
-                onCycleApprovalMode = viewModel::cycleApprovalMode,
-                onSelectApprovalMode = viewModel::setApprovalMode,
-                isLoading = isLoading,
-                isAgentWorking = isAgentWorking,
-                onSend = { text, images, files ->
-                    if (hapticFeedbackEnabled) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    if (soundEffectsEnabled) SoundEffectPlayer.playSent()
-                    viewModel.sendMessage(text, images, files)
-                },
-                voiceInput = voiceInput,
-                onStartVoiceRecording = viewModel::startVoiceRecording,
-                onCancelVoiceRecording = viewModel::cancelVoiceRecording,
-                onFinishVoiceInput = viewModel::finishVoiceInput,
-                onVoiceTranscriptConsumed = viewModel::consumeVoiceTranscript,
-                onQueryVoiceAmplitude = viewModel::currentVoiceAmplitude,
-                onStop = viewModel::interrupt,
-                modifier = Modifier.graphicsLayer { alpha = if (isConnected) 1f else 0.45f }
-            )
+            if (approvalNotificationOffer) {
+                ApprovalNotificationOffer(
+                    agentName = agentProfile?.name,
+                    onTurnOn = {
+                        if (viewModel.needsNotificationPermission) {
+                            notificationPermissionRequest.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            viewModel.acceptApprovalNotificationOffer()
+                        }
+                    },
+                    onNotNow = viewModel::dismissApprovalNotificationOffer
+                )
             }
-            SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
+
+            if (!emptyChat) composer(false)
+            }
+            AppSnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
         }
     }
 }
 
 // ── Navigation drawer ───────────────────────────────────────────
 
+// Internal for SessionDrawerComposeTest.
 @Composable
-private fun ChatNavDrawerContent(
+internal fun ChatNavDrawerContent(
     agentSections: List<DrawerAgentSection>,
     activeSessionId: String?,
     targetAgentAddress: String?,
@@ -446,15 +566,19 @@ private fun ChatNavDrawerContent(
 private fun ChatInput(
     isConnected: Boolean,
     awaitingOnboardCode: Boolean,
-    isLoading: Boolean,
+    hasAgent: Boolean,
     isAgentWorking: Boolean,
     approvalMode: ApprovalMode,
     modePending: Boolean,
+    sessionModes: SessionModes,
     usage: SessionUsageTotals,
     skills: List<AgentSkill>,
     onCycleApprovalMode: () -> Unit,
     onSelectApprovalMode: (ApprovalMode, Int?) -> Unit,
     onSend: (String, List<String>, List<String>) -> Unit,
+    draft: ChatComposerDraft,
+    draftKey: String?,
+    onDraftChange: (ChatComposerDraft) -> Unit,
     voiceInput: VoiceInputState,
     onStartVoiceRecording: () -> Unit,
     onCancelVoiceRecording: () -> Unit,
@@ -462,6 +586,8 @@ private fun ChatInput(
     onVoiceTranscriptConsumed: () -> Unit,
     onQueryVoiceAmplitude: () -> Float = { 0f },
     onStop: () -> Unit,
+    centred: Boolean,
+    focusRequester: FocusRequester,
     modifier: Modifier = Modifier
 ) {
     // Matched to the transcript's own cap: a narrow column of messages above a
@@ -471,14 +597,18 @@ private fun ChatInput(
         InputBar(
             isConnected = isConnected,
             awaitingOnboardCode = awaitingOnboardCode,
+            hasAgent = hasAgent,
             approvalMode = approvalMode,
             modePending = modePending,
+            sessionModes = sessionModes,
             usage = usage,
             skills = skills,
             onCycleApprovalMode = onCycleApprovalMode,
             onSelectApprovalMode = onSelectApprovalMode,
-            isSending = isLoading,
             isAgentWorking = isAgentWorking,
+            draft = draft,
+            draftKey = draftKey,
+            onDraftChange = onDraftChange,
             onSend = onSend,
             voiceInput = voiceInput,
             onStartVoiceRecording = onStartVoiceRecording,
@@ -487,7 +617,10 @@ private fun ChatInput(
             onVoiceTranscriptConsumed = onVoiceTranscriptConsumed,
             onQueryVoiceAmplitude = onQueryVoiceAmplitude,
             onStop = onStop,
-            modifier = Modifier.widthIn(max = ChatContentMaxWidth)
+            centred = centred,
+            focusRequester = focusRequester,
+            // Centred, EmptyChat already sets the card's width.
+            modifier = if (centred) Modifier else Modifier.widthIn(max = ChatContentMaxWidth)
         )
     }
 }

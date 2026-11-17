@@ -10,6 +10,8 @@ import ai.openonion.oochat.domain.model.ChatMessage
 import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.Role
 import ai.openonion.oochat.domain.model.ServerTranscriptEntry
+import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.domain.model.WorkRooms
 import ai.openonion.oochat.domain.model.resolveFalseFailures
 import ai.openonion.oochat.domain.model.stableAssistantId
 import ai.openonion.oochat.util.FileLogger
@@ -84,7 +86,7 @@ internal const val CONVERSATION_PAGE_SIZE = 200
  * rule has exactly one definition.
  */
 internal fun ChatSession.isEmptyPlaceholder(): Boolean =
-    messageCount == 0 && title == "New conversation"
+    remoteRevision == null && messageCount == 0 && title == "New conversation"
 
 /**
  * Local (Room-backed) conversation history — session + message read/write
@@ -248,8 +250,8 @@ class ConversationHistoryUseCase(
 
         // Sweep up empty "New conversation" rows left behind by the old
         // eager-creation behavior (or any other now-closed path) — the exact
-        // title + zero-message match means this can never touch a real,
-        // user-named, or non-empty session.
+        // title + zero-message match is limited to rows never seen in the
+        // Host index, so a synced chat with that default title is still real.
         val (empty, real) = existing.partition { it.isEmptyPlaceholder() }
         empty.forEach { stale ->
             runCatchingCancellable { sessionRepository.deleteSession(stale.id) }
@@ -273,7 +275,11 @@ class ConversationHistoryUseCase(
             return SessionResume.Unchanged
         }
 
-        val session = if (forceNew) null else real.firstOrNull()
+        // A Host-only index row has no local transcript to reopen. It remains
+        // selectable in the drawer, but launch resumes only local content.
+        val session = if (forceNew) null else real.firstOrNull {
+            it.messageCount > 0 || it.remoteRevision == null
+        }
         return if (session != null) {
             // Load the rows here, not just the id: the caller has to be able
             // to render this conversation before (or without) the server ever
@@ -424,6 +430,9 @@ class ConversationHistoryUseCase(
      * so both decode a row exactly the same way.
      */
     private fun List<ChatMessage>.toChatItems(): List<ChatItem> =
+        decodeRows().let(WorkRooms::withoutParentToolCards)
+
+    private fun List<ChatMessage>.decodeRows(): List<ChatItem> =
         mapNotNull { msg ->
             // Transcript rows carry their shape in `payload` with empty
             // `content`, so they decode before the role branch sees them. One
@@ -437,11 +446,22 @@ class ConversationHistoryUseCase(
                 }
             }
             when (msg.role) {
+                // Failed stays failed, so the bubble and the retry bar still
+                // offer the resend. One still in the outbox is still waiting:
+                // the outbox survives the process and sends it on the next
+                // connect (W16AAPPLE-106). Everything else comes back sent: in
+                // flight is not a state that survives the process (see
+                // saveFailedToSend).
                 Role.USER -> ChatItem.User(
                     id = msg.id,
                     content = msg.content,
                     images = msg.images,
-                    files = msg.files
+                    files = msg.files,
+                    state = when {
+                        msg.failedToSend -> UserMessageState.FAILED
+                        msg.inOutbox -> UserMessageState.QUEUED
+                        else -> UserMessageState.SENT
+                    }
                 )
                 // Turn, not Agent: the live flow renders every assistant
                 // reply as a Turn, and minting the same shape here is what
@@ -482,8 +502,18 @@ class ConversationHistoryUseCase(
         // reply was minted with a content-derived id (OUTPUT-, image- and
         // pre-stableAssistantId rows weren't), and those would otherwise
         // look like transcript this conversation is missing.
+        // Reasoning rows count as well: re_act/reflect write their text into
+        // the session's messages as an assistant entry, so the server's copy
+        // lists as a reply what this conversation already shows as reasoning.
+        // Its text lives in the row's payload, not in `content`.
         val localIds = messageRepository.getMessagesListBySession(sessionId)
-            .flatMapTo(mutableSetOf()) { listOf(it.id, stableAssistantId(it.content)) }
+            .flatMapTo(mutableSetOf()) { row ->
+                val reasoning = row.payload
+                    ?.let { TranscriptItemCodec.decode(it) as? ChatItem.Thinking }
+                    ?.takeIf { it.isReasoning }
+                    ?.content
+                listOfNotNull(row.id, stableAssistantId(row.content), reasoning?.let(::stableAssistantId))
+            }
         val missing = SessionFreshness.missingEntries(serverEntries.map { it.content }, localIds)
             // A reply already filed under a *different* conversation stays
             // there — persistMessage inserts with REPLACE, so re-persisting
@@ -571,6 +601,42 @@ class ConversationHistoryUseCase(
     }
 
     /**
+     * Records whether a user message got through, for when the conversation is
+     * next loaded — a restart included, which is what in-memory state alone
+     * cannot survive.
+     *
+     * The caller decides what counts as failed *after a restart*, which is
+     * not always the state on screen: a message held in memory or awaiting
+     * the host's answer is lost if the process dies, so it is saved as failed
+     * until it is known to have gone. One [inOutbox] is not lost, and comes
+     * back waiting to send.
+     */
+    suspend fun saveFailedToSend(messageId: String, failedToSend: Boolean, inOutbox: Boolean = false) {
+        runCatchingCancellable { messageRepository.updateFailedToSend(messageId, failedToSend, inOutbox) }
+            .onFailure { e -> FileLogger.e(LogTags.CONV_HISTORY, "saveFailedToSend failed: ${e.message}") }
+    }
+
+    /**
+     * Moves a resent message to the end of its conversation.
+     *
+     * [persistMessage] keeps a row's first timestamp, which is right for a
+     * replay and wrong here: the resend went out now, so its reply lands at
+     * the bottom, and on reload the question has to be above it rather than
+     * back where the failed attempt was. Saves it instead if it never was.
+     */
+    suspend fun moveMessageToEnd(item: ChatItem.User, targetSessionId: String? = _activeSessionId.value) {
+        val saved = runCatchingCancellable { messageRepository.existsById(item.id) }.getOrDefault(false)
+        if (!saved) {
+            persistMessage(item, targetSessionId)
+            return
+        }
+        val now = System.currentTimeMillis()
+        addTimestamps(mapOf(item.id to now))
+        runCatchingCancellable { messageRepository.updateTimestamp(item.id, now) }
+            .onFailure { e -> FileLogger.e(LogTags.CONV_HISTORY, "moveMessageToEnd failed: ${e.message}") }
+    }
+
+    /**
      * Creates the deferred Room row for a [SessionResolution.Pending]
      * resolution, the moment there's actually something to persist into it.
      * Returns null (and does nothing) if there's no pending session — the
@@ -594,16 +660,24 @@ class ConversationHistoryUseCase(
         return session.id
     }
 
-    /** Wipes the active session's persisted log (used by `clearChat`). */
-    suspend fun clearActiveSession() {
-        val sessionId = _activeSessionId.value ?: return
+    /** Wipes the active session's persisted log. */
+    suspend fun clearActiveSession() = clearSession(_activeSessionId.value)
+
+    /**
+     * Wipes [sessionId]'s persisted log (used by `clearChat`). Named by the
+     * caller rather than read here: Clear chat waits on storage before this
+     * runs, and a conversation opened meanwhile must not be the one wiped
+     * (W16AAPPLE-106).
+     */
+    suspend fun clearSession(sessionId: String?) {
+        if (sessionId == null) return
         runCatchingCancellable {
             messageRepository.deleteMessagesBySession(sessionId)
             sessionRepository.updateMessageInfo(sessionId, 0, null)
         }.onFailure { e -> FileLogger.e(LogTags.CONV_HISTORY, "session clear failed: ${e.message}") }
         // The rows the window pointed into are gone, so there is nothing older
-        // to page back in — leaving the offset would offer a "load earlier"
-        // that returns an empty page forever.
-        resetWindow()
+        // to page back in, and leaving the offset would offer a "load earlier"
+        // that returns an empty page forever. Only if it is still the one shown.
+        if (_activeSessionId.value == sessionId) resetWindow()
     }
 }

@@ -36,6 +36,7 @@ fun RowScope.SessionUsageSummary(usage: SessionUsageTotals) {
     ) {
         Text(
             text = buildString {
+                append("Session · ")
                 append(formatTokenCount(usage.totalTokens))
                 append(" tokens")
                 if (usage.totalCostUsd >= MIN_DISPLAY_COST_USD) append(" · ${formatCostUsd(usage.totalCostUsd)}")

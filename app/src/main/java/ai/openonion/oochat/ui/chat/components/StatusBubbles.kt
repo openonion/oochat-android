@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
@@ -172,4 +173,22 @@ internal fun ToolCallBubble(item: ChatItem.ToolCall) {
             )
         }
     }
+}
+
+/**
+ * The agent's own reasoning — a `thinking` frame with text (re_act's intent,
+ * reflect's reflection) — shown on its own, outside a turn's steps. Drawn as
+ * the same thought row a [TurnStepsBlock] uses: a sparkle, the thought in
+ * italics on one line, and a tap for the rest.
+ */
+@Composable
+internal fun ReasoningBubble(item: ChatItem.Thinking) {
+    StepList(listOf(item))
+}
+
+/** The label above a [ReasoningBubble] — named after the plugin step that produced it. */
+internal fun reasoningLabel(kind: String?): String = when (kind) {
+    "intent" -> "Understanding"
+    "reflect" -> "Reflection"
+    else -> "Thought"
 }

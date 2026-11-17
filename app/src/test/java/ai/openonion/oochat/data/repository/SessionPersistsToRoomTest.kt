@@ -1,6 +1,7 @@
 package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
+import ai.openonion.oochat.crypto.TestIdentity
 import ai.openonion.oochat.data.local.db.AppDatabase
 import ai.openonion.oochat.data.protocol.FileAttachment
 import ai.openonion.oochat.network.AgentConnection
@@ -57,9 +58,11 @@ class SessionPersistsToRoomTest {
     }
 
     private class NoopSink : PendingMessageSink {
-        override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?) = Unit
-        override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) = Unit
+        override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?): Boolean = true
+        override fun drain(agentAddress: String, sessionId: String?, conversationId: String?, send: (QueuedMessage) -> Boolean) = Unit
         override fun clear(agentAddress: String) = Unit
+        override fun clearConversation(agentAddress: String, sessionId: String?, conversationId: String?) = Unit
+        override fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int = 0
     }
 
     private lateinit var db: AppDatabase
@@ -73,7 +76,7 @@ class SessionPersistsToRoomTest {
             .allowMainThreadQueries()
             .build()
         val keyManager = KeyManager(context)
-        keyManager.save(keyManager.keysFromHex("aa".repeat(32) + "bb".repeat(32)))
+        keyManager.save(TestIdentity.keys())
         factory = FakeWebSocketFactory()
         val sink = NoopSink()
         repository = ConnectionRepositoryImpl(
@@ -81,7 +84,7 @@ class SessionPersistsToRoomTest {
             relayUrl = "ws://test.invalid",
             sessionStore = SessionStoreImpl(db.sessionStateDao()),
             pendingMessageSink = sink,
-            agentConnectionFactory = { km, url -> AgentConnection(km, url, factory, pendingMessageSink = sink) }
+            agentConnectionFactory = { km, url -> AgentConnection(km, url, factory, signer = { _, _ -> "fake-signature" }, pendingMessageSink = sink) }
         )
     }
 
