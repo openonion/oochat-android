@@ -26,14 +26,19 @@ class InputBarPlaceholderComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun bar(isConnected: Boolean, isAgentWorking: Boolean, awaitingOnboardCode: Boolean = false) {
+    private fun bar(
+        isConnected: Boolean,
+        isAgentWorking: Boolean,
+        awaitingOnboardCode: Boolean = false,
+        hasAgent: Boolean = true
+    ) {
         composeRule.setContent {
             ConnectOnionTheme {
                 Column {
                     InputBar(
                         isConnected = isConnected,
                         awaitingOnboardCode = awaitingOnboardCode,
-                        isSending = false,
+                        hasAgent = hasAgent,
                         isAgentWorking = isAgentWorking,
                         onSend = { _, _, _ -> }
                     )
@@ -51,10 +56,19 @@ class InputBarPlaceholderComposeTest {
     }
 
     @Test
-    fun `a genuinely disconnected composer keeps its existing wording`() {
-        bar(isConnected = false, isAgentWorking = false)
+    fun `with no agent to send to the composer asks for one`() {
+        bar(isConnected = false, isAgentWorking = false, hasAgent = false)
 
         composeRule.onNodeWithText("Connect to an agent first").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a disconnected composer says the message will wait, not that it cannot be written`() {
+        // W16AAPPLE-102: offline the message goes to the outbox.
+        bar(isConnected = false, isAgentWorking = false)
+
+        composeRule.onNodeWithText("Connect to an agent first").assertDoesNotExist()
+        composeRule.onNodeWithText("Message (sends once reconnected)").assertIsDisplayed()
     }
 
     @Test
