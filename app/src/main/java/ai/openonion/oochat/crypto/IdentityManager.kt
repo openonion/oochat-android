@@ -26,4 +26,7 @@ interface IdentityManager {
 
     /** See [KeyManager.exportBackup]. */
     fun exportBackup(): KeyManager.BackupExport
+
+    /** See [KeyManager.hasLegacyDerivation]. */
+    fun hasLegacyDerivation(): Boolean
 }

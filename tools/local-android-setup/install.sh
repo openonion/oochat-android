@@ -110,6 +110,23 @@ if [ "$USE_SYSTEM_SDK" = "1" ]; then
   fi
 fi
 
+# --- Java: sdkmanager needs 17+, checked before anything is asked or written -----
+# sdkmanager runs $JAVA_HOME/bin/java when JAVA_HOME is set, so check that one.
+JAVA_BIN="java"
+[ -n "${JAVA_HOME:-}" ] && JAVA_BIN="$JAVA_HOME/bin/java"
+JAVA_RAW=""
+if command -v "$JAVA_BIN" >/dev/null 2>&1; then
+  # The first `version "` line: JAVA_TOOL_OPTIONS adds a line before it. `|| true`: macOS's java stub exits non-zero.
+  JAVA_RAW="$("$JAVA_BIN" -version 2>&1 | grep -m1 'version "' || true)"
+fi
+JAVA_MAJOR="$(printf '%s' "$JAVA_RAW" | sed -n 's/.*version "\([0-9]*\).*/\1/p')"
+if [ "${JAVA_MAJOR:-0}" -lt 17 ]; then
+  fail "Java 17 or newer is needed: the Android SDK manager runs on it." \
+       "Checked: $JAVA_BIN${JAVA_RAW:+ ($JAVA_RAW)}" \
+       "Install JDK 17 (what the build is verified on), then re-run:" \
+       "  https://adoptium.net/temurin/releases/?version=17"
+fi
+
 # --- Tell them what is about to happen, then wait ----------------------------
 clear 2>/dev/null || true
 bold "ConnectOnion Android — environment setup"
@@ -159,6 +176,8 @@ info "  ~1.5 GB of Gradle cache under .local/, also removed by ./uninstall.sh."
 info "Time     : 10–25 minutes, mostly the system image download."
 echo
 echo "Host detected: $HOST_LABEL / $(uname -m)  →  emulator ABI $ABI"
+echo "Java: $JAVA_RAW"
+[ "$JAVA_MAJOR" = "17" ] || echo "  (fine for installing; JDK 17 is what the build is verified on)"
 echo
 
 if [ "$ASSUME_YES" != "1" ]; then
@@ -171,33 +190,6 @@ if [ "$ASSUME_YES" != "1" ]; then
 fi
 
 mkdir -p "$LOCAL_DIR" "$AVD_DIR"
-
-# --- Java (only needed to build from source, not to install the APK) ---------
-step "Checking for a Java runtime"
-JAVA_OK=0
-if command -v java >/dev/null 2>&1; then
-  # `|| true` is load-bearing. macOS ships a /usr/bin/java stub that exists on
-  # PATH but exits non-zero when no JDK is installed, and under `set -e` a bare
-  # assignment from a failing command substitution kills the script outright —
-  # silently, right after we have told the user this check is not fatal.
-  JAVA_RAW="$(java -version 2>&1 | head -1 || true)"
-  JAVA_MAJOR="$(printf '%s' "$JAVA_RAW" | sed -n 's/.*version "\([0-9]*\).*/\1/p' || true)"
-  if [ "${JAVA_MAJOR:-0}" = "17" ]; then
-    info "Found: $JAVA_RAW"
-    JAVA_OK=1
-  else
-    info "Found $JAVA_RAW — the Gradle build needs exactly JDK 17."
-  fi
-else
-  info "No java on PATH."
-fi
-if [ "$JAVA_OK" = "0" ]; then
-  info ""
-  info "This is not fatal. JDK 17 is needed only to build from source or to run"
-  info "the test suite. Installing and running the pre-built APK does not need it."
-  info "If you do want to build:  https://adoptium.net/temurin/releases/?version=17"
-  info ""
-fi
 
 # --- Command-line tools -------------------------------------------------------
 SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"

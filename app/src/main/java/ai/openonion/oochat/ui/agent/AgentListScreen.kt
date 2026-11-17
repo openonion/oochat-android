@@ -7,6 +7,8 @@ import ai.openonion.oochat.ui.components.ConfirmationSheet
 import ai.openonion.oochat.ui.components.DangerConfirmActions
 import ai.openonion.oochat.ui.components.EmptyStateMessage
 import ai.openonion.oochat.ui.components.agentStatusColor
+import ai.openonion.oochat.ui.theme.Elevation
+import ai.openonion.oochat.ui.theme.hairline
 import ai.openonion.oochat.ui.theme.sectionOverline
 import ai.openonion.oochat.ui.theme.spacing
 import ai.openonion.oochat.util.truncateMiddle
@@ -145,7 +147,7 @@ fun AgentListScreen(
             body = "Add your first agent to start using AI features.",
             actionSpacingBefore = 0.dp,
             action = {
-                Button(onClick = onCreateAgent) {
+                Button(onClick = onCreateAgent, shape = MaterialTheme.shapes.large) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(MaterialTheme.spacing.xs))
                     Text("Add first agent")
@@ -493,9 +495,10 @@ private fun AgentOverflowMenu(
         DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
-            // See ChatTopBar's menu: 1.4 dropped the tonal-elevation tint.
+            // See ChatTopBar's menu: flat, set apart by a hairline.
             containerColor = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp
+            shadowElevation = Elevation.hairline,
+            border = MaterialTheme.hairline
         ) {
             if (!isDefault) {
                 DropdownMenuItem(
