@@ -1,8 +1,11 @@
 package ai.openonion.oochat.ui.logs
 
+import ai.openonion.oochat.ui.components.AppSnackbarHost
+import ai.openonion.oochat.ui.theme.LogColors
 import ai.openonion.oochat.ui.theme.spacing
 import ai.openonion.oochat.ui.theme.statusColors
 import ai.openonion.oochat.util.FileLogger
+import ai.openonion.oochat.util.SensitiveText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -35,7 +38,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -52,7 +54,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -88,7 +89,7 @@ fun LogsScreen(
             // readLogs reads the whole file (capped at 5MB) before keeping the
             // last 500 lines, so this has to leave the main thread — a
             // LaunchedEffect body runs on the composition's dispatcher.
-            logs = withContext(Dispatchers.IO) { FileLogger.readLogs(500) }
+            logs = readShownLogs()
             kotlinx.coroutines.delay(2000)
         }
     }
@@ -121,7 +122,7 @@ fun LogsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { scope.launch { logs = FileLogger.readLogs(500) } }) {
+                    IconButton(onClick = { scope.launch { logs = readShownLogs() } }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                     IconButton(onClick = {
@@ -154,7 +155,7 @@ fun LogsScreen(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { AppSnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         Column(
             modifier = modifier
@@ -224,6 +225,18 @@ fun LogsScreen(
 }
 
 /**
+ * The log as this screen shows and copies it. The log is meant to hold no
+ * content (see LogSanitizer), but an exception's message can still name a
+ * file on the owner's computer or echo a key, and these lines get pasted into
+ * bug reports, so no path is kept (W16AAPPLE-50). Redacted off the main
+ * thread: it is 500 lines.
+ */
+private suspend fun readShownLogs(): String {
+    val logs = FileLogger.readLogs(500)
+    return withContext(Dispatchers.Default) { SensitiveText.redactWithoutPaths(logs) }
+}
+
+/**
  * Bottom sheet confirming the destructive "clear logs" action. Mirrors
  * ChatTopBar's ClearChatSheet (drag handle, title, warning copy, outlined
  * Cancel + filled danger Clear) so the two destructive-action sheets in the
@@ -259,6 +272,7 @@ private fun LogsClearSheet(onConfirm: () -> Unit, onDismiss: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.sm)) {
                 OutlinedButton(
                     onClick = onDismiss,
+                    shape = MaterialTheme.shapes.large,
                     modifier = Modifier
                         .weight(1f)
                         .padding(vertical = MaterialTheme.spacing.xs)
@@ -267,6 +281,7 @@ private fun LogsClearSheet(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                 }
                 Button(
                     onClick = onConfirm,
+                    shape = MaterialTheme.shapes.large,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
                         contentColor = MaterialTheme.colorScheme.error
@@ -379,7 +394,7 @@ private fun LogEntryRow(entry: LogEntry) {
             Text(
                 text = entry.tag.padEnd(TAG_COLUMN_WIDTH),
                 style = LOG_MONO,
-                color = TAG_COLOR,
+                color = LogColors.tag,
                 maxLines = 1
             )
             Text(
@@ -390,12 +405,12 @@ private fun LogEntryRow(entry: LogEntry) {
                 maxLines = 1
             )
             Spacer(modifier = Modifier.weight(1f))
-            Text(text = entry.time, style = LOG_MONO, color = TIMESTAMP_COLOR, maxLines = 1)
+            Text(text = entry.time, style = LOG_MONO, color = LogColors.timestamp, maxLines = 1)
         }
         Text(
             text = entry.message,
             style = LOG_MONO,
-            color = if (entry.level == 'E') levelColor else LOG_BODY_COLOR,
+            color = if (entry.level == 'E') levelColor else LogColors.body,
             modifier = Modifier.padding(bottom = MaterialTheme.spacing.xs)
         )
     }
@@ -407,7 +422,7 @@ private fun LogDateDivider(date: String) {
     Text(
         text = date,
         style = LOG_MONO,
-        color = TIMESTAMP_COLOR,
+        color = LogColors.timestamp,
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
@@ -431,18 +446,4 @@ private fun levelLabel(level: Char) = when (level) {
     else -> "VERB"
 }.padEnd(LEVEL_LABEL_WIDTH)
 
-private fun levelColor(level: Char) = when (level) {
-    'E' -> Color(0xFFF44747)
-    'W' -> Color(0xFFFFA500)
-    'I' -> Color(0xFF4EC9B0)
-    'D' -> Color(0xFF9CDCFE)
-    else -> Color(0xFF878787)
-}
-
-/** Tag gets its own fixed colour, independent of level — scannable across lines of any level. */
-private val TAG_COLOR = Color(0xFFC586C0)
-
-private val LOG_BODY_COLOR = Color(0xFFD4D4D4)
-
-/** Dimmer than the body: once you know roughly when, the exact time is the least useful part of a line. */
-private val TIMESTAMP_COLOR = Color(0xFF6B9166)
+private fun levelColor(level: Char) = LogColors.forLevel(level)

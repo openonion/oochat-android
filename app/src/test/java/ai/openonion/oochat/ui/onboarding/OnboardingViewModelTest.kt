@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.onboarding
 
+import ai.openonion.oochat.Constants
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.ui.agent.components.AgentFormState
@@ -77,11 +78,12 @@ class OnboardingViewModelTest {
         configRepository = configRepository
     )
 
+    private val address = "0x" + "ab".repeat(32)
+
     private fun validForm(
         serverUrl: String = "https://relay.example.com",
-        agentAddress: String = "0xabc123",
-        apiKey: String = ""
-    ) = AgentFormState(serverUrl = serverUrl, agentAddress = agentAddress, apiKey = apiKey)
+        agentAddress: String = address
+    ) = AgentFormState(serverUrl = serverUrl, agentAddress = agentAddress)
 
     // ── Prefill from a previously-saved config ─────────────────────────
 
@@ -135,8 +137,7 @@ class OnboardingViewModelTest {
         var savedCalled = false
         val form = AgentFormState(
             serverUrl = "  https://relay.example.com/  ",
-            agentAddress = "  0xabc123  ",
-            apiKey = "  my-key  "
+            agentAddress = "  ${address.uppercase().replace("0X", "0x")}  "
         )
 
         vm.connect(form, onSaved = { savedCalled = true })
@@ -147,16 +148,52 @@ class OnboardingViewModelTest {
         val saved = configRepository.savedConfig
         assertNotNull(saved)
         assertEquals("https://relay.example.com", saved!!.serverUrl)
-        assertEquals("0xabc123", saved.agentAddress)
-        assertEquals("my-key", saved.apiKey)
+        // Trimmed and lower-cased, as Add Agent saves it (W16AAPPLE-57).
+        assertEquals(address, saved.agentAddress)
+        assertNull("the removed per-agent API key is not saved", saved.apiKey)
         assertNull(vm.errorMessage.value)
     }
 
     @Test
-    fun `connect with a blank optional apiKey saves it as null`() = runTest(testDispatcher) {
+    fun `Setup saves the mode the user picked`() = runTest(testDispatcher) {
+        // W16AAPPLE-56: a custom relay picked as Relay Server is gone through, not dialled direct.
         val vm = createVm()
 
-        vm.connect(validForm(apiKey = "   "), onSaved = {})
+        vm.connect(AgentFormState(serverUrl = "https://relay.example.com", agentAddress = address), onSaved = {})
+        testScheduler.runCurrent()
+        assertEquals("relay", configRepository.savedConfig?.connectionMode)
+
+        vm.connect(
+            AgentFormState(serverUrl = "https://agent.example.com", agentAddress = address, useDirectConnection = true),
+            onSaved = {}
+        )
+        testScheduler.runCurrent()
+        assertEquals("direct", configRepository.savedConfig?.connectionMode)
+    }
+
+    @Test
+    fun `Setup rejects an agent address the Add Agent form rejects`() = runTest(testDispatcher) {
+        val vm = createVm()
+        var saved = false
+
+        vm.connect(AgentFormState(serverUrl = "https://oo.openonion.ai", agentAddress = "0xabc123"), onSaved = { saved = true })
+        testScheduler.runCurrent()
+
+        // AgentViewModel's doc says the two "agree on what's a valid agent".
+        // Setup used to save any 0x… string, which can never be dialled
+        // (W16AAPPLE-61).
+        assertFalse("a 0x address that is not 64 hex must not be saved", saved)
+        assertEquals(
+            "Please enter a valid agent address (0x followed by 64 hex characters)",
+            vm.errorMessage.value
+        )
+    }
+
+    @Test
+    fun `connect does not restore a legacy per-agent apiKey`() = runTest(testDispatcher) {
+        val vm = createVm()
+
+        vm.connect(validForm(), onSaved = {})
         testScheduler.runCurrent()
 
         assertNull(configRepository.savedConfig?.apiKey)
@@ -262,5 +299,112 @@ class OnboardingViewModelTest {
         testScheduler.runCurrent()
 
         assertNull(vm.errorMessage.value)
+    }
+
+    // ── The QR scanner's result ────────────────────────────────────────
+
+    @Test
+    fun `a scan that names an agent is handed to the form, with no error`() = runTest(testDispatcher) {
+        val vm = createVm()
+
+        val scanned = vm.onScanned("https://chat.openonion.ai/$address")
+
+        assertEquals(ScannedAgent(serverUrl = Constants.DEFAULT_SERVER_URL, agentAddress = address), scanned)
+        assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `a scan that names no agent is refused, and says so`() = runTest(testDispatcher) {
+        val vm = createVm()
+
+        val scanned = vm.onScanned("WIFI:S:home;T:WPA;P:secret;;")
+
+        assertNull("there is nothing to put in the form", scanned)
+        assertEquals(
+            "That QR code isn't a ConnectOnion agent. Scan the code behind an agent's Share button, or paste its address.",
+            vm.errorMessage.value
+        )
+    }
+
+    @Test
+    fun `a scanned agent connects straight away, with no Connect to tap`() = runTest(testDispatcher) {
+        val vm = createVm()
+        testScheduler.runCurrent()
+        var saved = false
+
+        val form = vm.connectScanned(
+            ScannedAgent(serverUrl = Constants.DEFAULT_SERVER_URL, agentAddress = address),
+            AgentFormState(),
+            onSaved = { saved = true }
+        )
+        testScheduler.runCurrent()
+
+        assertTrue("the scan must go on to connecting by itself (W16AAPPLE-111)", saved)
+        val config = configRepository.savedConfig ?: error("nothing was saved")
+        assertEquals(Constants.DEFAULT_SERVER_URL, config.serverUrl)
+        assertEquals(address, config.agentAddress)
+        assertEquals("relay", config.connectionMode)
+        assertEquals(address, form.agentAddress)
+    }
+
+    @Test
+    fun `a scanned agent on a server of its own is connected to direct`() = runTest(testDispatcher) {
+        val vm = createVm()
+        testScheduler.runCurrent()
+
+        val form = vm.connectScanned(
+            ScannedAgent(serverUrl = "https://agent.example.com", agentAddress = address),
+            AgentFormState(),
+            onSaved = {}
+        )
+        testScheduler.runCurrent()
+
+        assertTrue(form.useDirectConnection)
+        assertEquals("direct", configRepository.savedConfig?.connectionMode)
+        assertEquals("https://agent.example.com", configRepository.savedConfig?.serverUrl)
+    }
+
+    @Test
+    fun `a scanned agent Setup cannot use stays in the form with the reason`() = runTest(testDispatcher) {
+        val vm = createVm()
+        testScheduler.runCurrent()
+        var saved = false
+
+        val form = vm.connectScanned(
+            ScannedAgent(serverUrl = "https://" + "a".repeat(500) + ".example.com", agentAddress = address),
+            AgentFormState(),
+            onSaved = { saved = true }
+        )
+        testScheduler.runCurrent()
+
+        assertFalse("nothing to connect to, so no Loading screen", saved)
+        assertNull(configRepository.savedConfig)
+        assertEquals("the code is left in the form to correct and Connect by hand", address, form.agentAddress)
+        assertEquals("URL is too long (maximum 500 characters)", vm.errorMessage.value)
+    }
+
+    @Test
+    fun `a good scan after a bad one clears the message`() = runTest(testDispatcher) {
+        val vm = createVm()
+        vm.onScanned("hello")
+        assertNotNull("test setup: the bad scan must have said so", vm.errorMessage.value)
+
+        vm.onScanned("connectonion://agent/$address")
+
+        assertNull(vm.errorMessage.value)
+    }
+
+    @Test
+    fun `backing out of the scanner changes nothing`() = runTest(testDispatcher) {
+        val vm = createVm()
+        vm.connect(validForm(serverUrl = "relay.example.com"), onSaved = {})
+        testScheduler.runCurrent()
+        val before = vm.errorMessage.value
+        assertNotNull("test setup: an earlier error", before)
+
+        val scanned = vm.onScanned(null)
+
+        assertNull(scanned)
+        assertEquals(before, vm.errorMessage.value)
     }
 }

@@ -15,30 +15,62 @@ data class QueuedMessage(val prompt: String, val images: List<String>?, val file
 interface PendingMessageSink {
     /**
      * Enqueues a message for [agentAddress], tagged with [sessionId] — the
-     * conversation's session it was written in. Implementations bound their
-     * own size by both row count and total attachment bytes; see
+     * server session, or local conversation fallback, it was written in.
+     * Implementations bound their own size by both row count and total
+     * attachment bytes; see
      * [AgentConnection.MAX_PENDING_MESSAGES] and
      * [AgentConnection.MAX_PENDING_ATTACHMENT_BYTES].
+     *
+     * @return false when there is no room: nothing is queued, and nothing
+     *   already queued is dropped to make room. A queued message's bubble says
+     *   it is waiting, so dropping one silently would make that untrue; the
+     *   caller fails the new one instead, which offers Retry (W16AAPPLE-106).
      */
-    fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>? = null)
+    fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>? = null): Boolean
 
     /**
-     * Removes the messages for [agentAddress] that belong on [sessionId],
-     * oldest first — its own, plus any queued before there was a session to
-     * name — handing each to [send] as it is read. A message queued for a
-     * different conversation stays put: flushing it here would send it as
-     * this conversation.
+     * Removes the messages for [agentAddress] that belong on [sessionId] or
+     * [conversationId], oldest first — its own, plus any queued before there
+     * was a session to name — handing each to [send] as it is read. A message
+     * queued for a different conversation stays put: flushing it here would
+     * send it as this conversation.
      *
-     * A callback rather than a returned list, and that is the point: an
-     * attachment is base64, so materializing the whole queue at once meant
-     * every queued attachment resident simultaneously. One message is decoded
-     * at a time and is free again as soon as it has been sent.
+     * The callback returns false when the message was not accepted. The sink
+     * keeps that message queued and stops, so a socket replacement cannot
+     * lose it.
      */
-    fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit)
+    fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Boolean
+    )
 
     /** Discards every message queued for [agentAddress] without sending them. */
     fun clear(agentAddress: String)
+
+    /**
+     * Discards, without sending them, the messages queued for [agentAddress]
+     * on [sessionId] or [conversationId]. Clear chat uses it, so what another
+     * conversation with the agent queued stays queued for that conversation.
+     * One queued before there was a session to name is kept: nothing says
+     * which conversation it was written in (W16AAPPLE-106).
+     */
+    fun clearConversation(agentAddress: String, sessionId: String?, conversationId: String?)
+
+    /**
+     * How many queued messages [drain] would send for the same arguments:
+     * those on [sessionId] or [conversationId], plus any with no session
+     * named, which go out in whichever conversation connects next. The chat
+     * settles "Waiting to send..." bubbles by it: the outbox sends oldest
+     * first and never drops one, so any beyond this count have gone. Counting
+     * the unnamed ones errs towards waiting, never towards "sent" (W16AAPPLE-106).
+     */
+    fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int
 }
+
+/** A message the outbox had no room for. The send fails, so its bubble offers Retry (W16AAPPLE-106). */
+class OutboxFullException : IllegalStateException("Too many messages are waiting to send")
 
 /**
  * Default sink when no persisted one is injected (plain unit tests
@@ -50,36 +82,56 @@ class InMemoryPendingMessageSink : PendingMessageSink {
 
     private val lock = Any()
     private val entries = mutableListOf<Entry>()
+    private val clearGenerations = mutableMapOf<String, Long>()
 
-    override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?) {
+    // Bumped by clearConversation, per agent and session tag, so a drain only
+    // gives up putting back a message whose own conversation was cleared
+    // meanwhile, not one Clear chat in another conversation never touched.
+    private val conversationClears = mutableMapOf<Pair<String, String>, Long>()
+
+    /** Caller holds [lock]. What a failed send's put-back is checked against. */
+    private fun generationOf(agentAddress: String, rowSessionId: String?): Pair<Long, Long> =
+        (clearGenerations[agentAddress] ?: 0L) to (rowSessionId?.let { conversationClears[agentAddress to it] } ?: 0L)
+
+    override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?): Boolean {
         val incoming = attachmentBytes(images, files)
         synchronized(lock) {
             // Bytes as well as rows: 50 rows says nothing about size when each
-            // one can carry a base64 attachment. Drops oldest-first until both
-            // fit; a single message larger than the whole budget empties the
-            // queue and is still kept, since losing the newest send outright
-            // is worse than losing the ones already superseded.
-            while (
+            // one can carry a base64 attachment. Refused rather than making
+            // room, since what is already queued says it is waiting.
+            if (
                 entries.count { it.agentAddress == agentAddress } >= AgentConnection.MAX_PENDING_MESSAGES ||
                 (incoming > 0 && queuedBytes(agentAddress) + incoming > AgentConnection.MAX_PENDING_ATTACHMENT_BYTES)
             ) {
-                val oldest = entries.firstOrNull { it.agentAddress == agentAddress } ?: break
-                entries.remove(oldest)
+                return false
             }
             entries.add(Entry(agentAddress, sessionId, QueuedMessage(prompt, images, files)))
+            return true
         }
     }
 
-    override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) {
+    override fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Boolean
+    ) {
         while (true) {
-            val next = synchronized(lock) {
+            val (next, drainGeneration) = synchronized(lock) {
                 val entry = entries.firstOrNull {
-                    it.agentAddress == agentAddress && (it.sessionId == null || it.sessionId == sessionId)
+                    it.agentAddress == agentAddress && (it.sessionId == null ||
+                        it.sessionId == sessionId || it.sessionId == conversationId)
                 } ?: return
                 entries.remove(entry)
-                entry.message
+                entry to generationOf(agentAddress, entry.sessionId)
             }
-            send(next)
+            val accepted = runCatching { send(next.message) }.getOrDefault(false)
+            if (!accepted) {
+                synchronized(lock) {
+                    if (generationOf(agentAddress, next.sessionId) == drainGeneration) entries.add(0, next)
+                }
+                return
+            }
         }
     }
 
@@ -92,6 +144,31 @@ class InMemoryPendingMessageSink : PendingMessageSink {
             files.orEmpty().sumOf { it.name.length.toLong() + it.data.length.toLong() }
 
     override fun clear(agentAddress: String) {
-        synchronized(lock) { entries.removeAll { it.agentAddress == agentAddress } }
+        synchronized(lock) {
+            clearGenerations[agentAddress] = (clearGenerations[agentAddress] ?: 0L) + 1
+            entries.removeAll { it.agentAddress == agentAddress }
+        }
     }
+
+    override fun clearConversation(agentAddress: String, sessionId: String?, conversationId: String?) {
+        synchronized(lock) {
+            // So a drain of this conversation racing the clear cannot put back
+            // a message it had claimed. Only this conversation's: Clear chat
+            // may run on one the connection is not on, and the drain in flight
+            // is then another's, whose failed send must still go back.
+            listOfNotNull(sessionId, conversationId).distinct().forEach { tag ->
+                conversationClears[agentAddress to tag] = (conversationClears[agentAddress to tag] ?: 0L) + 1
+            }
+            entries.removeAll { it.agentAddress == agentAddress && it.belongsTo(sessionId, conversationId) }
+        }
+    }
+
+    override fun countForConversation(agentAddress: String, sessionId: String?, conversationId: String?): Int =
+        synchronized(lock) {
+            entries.count { it.agentAddress == agentAddress && (it.sessionId == null || it.belongsTo(sessionId, conversationId)) }
+        }
+
+    /** Named on [sessionId] or [conversationId]; one with no session named belongs to neither. */
+    private fun Entry.belongsTo(sessionId: String?, conversationId: String?): Boolean =
+        this.sessionId != null && (this.sessionId == sessionId || this.sessionId == conversationId)
 }
