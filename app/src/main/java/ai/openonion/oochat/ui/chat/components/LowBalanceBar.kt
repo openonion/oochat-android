@@ -101,10 +101,12 @@ internal fun LowBalanceBar(
                 // At zero the number is the least useful thing on the row —
                 // "$0.00" reads as a balance like any other and leaves the
                 // reader to work out what it implies. Say the implication.
-                text = if (balanceUsd <= 0.0) {
+                // So too for a balance too small to print as anything but
+                // zeros; above that, the same figure the costs use.
+                text = if (balanceUsd < MIN_DISPLAY_COST_USD) {
                     "Out of credits — this agent will stop responding"
                 } else {
-                    "Running low — $" + "%.2f".format(balanceUsd) + " left"
+                    "Running low — ${formatCostUsd(balanceUsd)} left"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = error,

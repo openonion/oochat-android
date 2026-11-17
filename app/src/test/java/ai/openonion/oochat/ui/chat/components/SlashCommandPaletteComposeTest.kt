@@ -6,13 +6,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -42,16 +46,21 @@ class SlashCommandPaletteComposeTest {
         AgentSkill("pdf")
     )
 
-    private fun bar(skills: List<AgentSkill> = this.skills, isAgentWorking: Boolean = false) {
+    /** [isConnected] is read inside composition, so a test can drop the connection mid-way. */
+    private fun bar(
+        skills: List<AgentSkill> = this.skills,
+        isAgentWorking: Boolean = false,
+        isConnected: () -> Boolean = { true },
+        onSend: (String) -> Unit = {}
+    ) {
         composeRule.setContent {
             ConnectOnionTheme {
                 Column {
                     InputBar(
-                        isConnected = true,
-                        isSending = false,
+                        isConnected = isConnected(),
                         isAgentWorking = isAgentWorking,
                         skills = skills,
-                        onSend = { _, _, _ -> }
+                        onSend = { text, _, _ -> onSend(text) }
                     )
                 }
             }
@@ -200,7 +209,6 @@ class SlashCommandPaletteComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = working,
                         skills = skills,
                         onSend = { _, _, _ -> }
@@ -217,5 +225,59 @@ class SlashCommandPaletteComposeTest {
         working = true
 
         composeRule.onNodeWithText("/pdf").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a completed command goes out as the plain text in the field`() {
+        // The palette is a typing aid, not a separate channel: what the agent
+        // receives is an ordinary INPUT whose prompt starts with the command.
+        var sent: String? = null
+        bar(onSend = { sent = it })
+        type("/web")
+        composeRule.onNodeWithText("/web-scraping").performClick()
+        type("https://example.com")
+
+        composeRule.onNodeWithContentDescription("Send").performClick()
+
+        assertEquals("/web-scraping https://example.com", sent)
+    }
+
+    @Test
+    fun `the palette is offered only while the field it completes takes input`() {
+        var connected by mutableStateOf(true)
+        bar(isConnected = { connected })
+        type("/")
+        composeRule.onNodeWithText("/pdf").assertIsDisplayed()
+
+        connected = false
+
+        // Whether the composer should stay usable offline is an open question
+        // (the user guide describes queuing offline messages). Either way, a
+        // command picked into a field that takes no input is a dead end, so
+        // the palette must follow the field rather than the connection.
+        // Found by its editable text: a disabled field stops offering SetText.
+        val field = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText))
+        val fieldTakesInput = SemanticsProperties.Disabled !in field.fetchSemanticsNode().config
+        if (fieldTakesInput) {
+            composeRule.onNodeWithText("/pdf").assertIsDisplayed()
+        } else {
+            composeRule.onNodeWithText("/pdf").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun `two skills with the same name show as one row instead of crashing the composer`() {
+        // W16AAPPLE-66. Reachable in production: the directory path passes
+        // duplicate names through (W16AAPPLE-65), and the palette's LazyColumn
+        // keys its rows on the name, so a repeat threw on opening.
+        bar(skills = listOf(AgentSkill("explain", "First"), AgentSkill("explain", "Second")))
+
+        type("/")
+
+        // onNodeWithText fails on two matches, so this also proves one row.
+        composeRule.onNodeWithText("/explain").assertIsDisplayed()
+        // The first wins, as in ProtocolParser.toAgentSkills.
+        composeRule.onNodeWithText("First").assertIsDisplayed()
+        composeRule.onNodeWithText("Second").assertDoesNotExist()
     }
 }

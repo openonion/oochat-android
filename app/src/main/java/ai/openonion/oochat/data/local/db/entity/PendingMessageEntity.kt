@@ -23,10 +23,10 @@ data class PendingMessageEntity(
     /** JSON-encoded List<FileAttachment> (wire shape: name+base64 data). Added in MIGRATION_8_9. */
     @ColumnInfo(name = "files_json") val filesJson: String? = null,
     /**
-     * The server session this was written in, so it is not flushed into
-     * whichever conversation the socket happens to be on when it reconnects.
-     * Null for a message queued before any session existed. Added in
-     * MIGRATION_11_12.
+     * The server session, or local conversation fallback, this was written
+     * in, so it is not flushed into whichever conversation the socket happens
+     * to be on when it reconnects. Null for a message queued before either
+     * existed. Added in MIGRATION_11_12.
      */
     @ColumnInfo(name = "session_id") val sessionId: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long
