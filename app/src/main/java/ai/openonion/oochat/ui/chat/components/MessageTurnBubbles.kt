@@ -3,6 +3,7 @@ package ai.openonion.oochat.ui.chat.components
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.ui.common.rememberClipboard
 import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +19,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -32,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -54,6 +57,9 @@ internal fun UserBubble(
             // been delivered has no send time yet, so the line is free.
             timestamp = when (item.state) {
                 UserMessageState.QUEUED -> "Waiting to send…"
+                // BubbleTimestamp is plain Text, so TalkBack reads this too: a
+                // screen-reader user hears that delivery is unconfirmed.
+                UserMessageState.AWAITING_ACK -> "Sending…"
                 UserMessageState.FAILED -> null
                 UserMessageState.SENT -> timestamp
             },
@@ -70,7 +76,7 @@ internal fun UserBubble(
                 horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs),
                 modifier = Modifier
                     .padding(top = MaterialTheme.spacing.xs)
-                    .then(if (onResend != null) Modifier.clickable(onClick = onResend) else Modifier)
+                    .then(if (onResend != null) Modifier.clickable(role = Role.Button, onClick = onResend) else Modifier)
                     .semantics { contentDescription = "Not sent. Tap to try again." }
             ) {
                 Icon(
@@ -115,7 +121,12 @@ internal fun AgentBubble(item: ChatItem.Agent, timestamp: String?, renderMarkdow
 internal fun TurnBubble(
     item: ChatItem.Turn,
     onRetry: (() -> Unit)? = null,
-    renderMarkdown: Boolean = true
+    renderMarkdown: Boolean = true,
+    timestamp: String? = null,
+    // Shown in place of the turn's own footer — see groupTurnSteps.
+    footer: ChatItem.Thinking? = null,
+    // When the turn started, for the "Working…" clock while no reply is in.
+    workingSinceMs: Long? = null
 ) {
     val agent = item.agent
     val thinking = item.thinking
@@ -199,9 +210,16 @@ internal fun TurnBubble(
         // transcript is role and content only, so duration, tokens and cost
         // never existed for it. Still footer it with the bare tick, or a
         // restored turn looks unlike every other finished one.
+        val copy = rememberClipboard()
+        val reply = agent?.content?.takeIf { it.isNotBlank() }
+        val onCopy = reply?.let { text -> { copy("Reply", text) } }
         when {
-            thinking != null -> TurnThinkingFooter(thinking)
-            agent != null -> TurnThinkingFooter(ChatItem.Thinking(id = item.id, status = ThinkingStatus.DONE))
+            // Waiting on the model: the same "Working…" line a turn's steps
+            // sit under, rather than a footer for a reply that isn't here yet.
+            agent == null && thinking?.status == ThinkingStatus.RUNNING -> WorkingHeader(workingSinceMs)
+            footer != null -> TurnThinkingFooter(footer, timestamp, onCopy)
+            thinking != null -> TurnThinkingFooter(thinking, timestamp, onCopy)
+            agent != null -> TurnThinkingFooter(ChatItem.Thinking(id = item.id, status = ThinkingStatus.DONE), timestamp, onCopy)
         }
     }
 }
@@ -214,8 +232,9 @@ internal fun TurnBubble(
  * still lead with a word, and failed keeps the model. A cost that would print
  * as $0.0000 is dropped.
  */
-internal fun turnFooterLabel(thinking: ChatItem.Thinking): String {
+internal fun turnFooterLabel(thinking: ChatItem.Thinking, timestamp: String? = null): String {
     val parts = mutableListOf<String>()
+    timestamp?.let { parts += it }
     when (thinking.status) {
         ThinkingStatus.RUNNING -> parts += "Generating…"
         ThinkingStatus.ERROR -> parts += "Failed"
@@ -228,35 +247,59 @@ internal fun turnFooterLabel(thinking: ChatItem.Thinking): String {
     return parts.joinToString(" · ")
 }
 
+/**
+ * The line under a reply. A finished reply leads with a copy button rather
+ * than a tick: the reply being there already says it is done, and copying it
+ * is the thing a reader wants to do next.
+ */
 @Composable
-internal fun TurnThinkingFooter(thinking: ChatItem.Thinking) {
+internal fun TurnThinkingFooter(
+    thinking: ChatItem.Thinking,
+    timestamp: String? = null,
+    onCopy: (() -> Unit)? = null
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs),
-        modifier = Modifier.padding(start = MaterialTheme.spacing.md, top = MaterialTheme.spacing.xxs)
+        // Flush with the reply above it, which is plain text with no inset.
+        modifier = Modifier.padding(top = MaterialTheme.spacing.xs)
     ) {
-        StatusIcon(
-            status = when (thinking.status) {
-                ThinkingStatus.RUNNING -> IndicatorStatus.RUNNING
-                ThinkingStatus.ERROR -> IndicatorStatus.ERROR
-                ThinkingStatus.DONE -> IndicatorStatus.DONE
-            },
-            size = 10.dp,
-            runningSize = 10.dp,
-            strokeWidth = 1.5.dp,
-            // A bare stroked tick in the outline colour, per the design: this
-            // line is ambient, and a filled CheckCircle in `primary` announced
-            // every finished turn as a green blob.
-            doneIcon = Icons.Default.Check,
-            doneTint = MaterialTheme.colorScheme.outline,
-            // On a turn restored from the server the tick is the whole
-            // footer, so without this a screen reader reaches an empty row.
-            doneContentDescription = "Done",
-            // Cancel (X), not a tick — a checkmark reads as success regardless of tint.
-            errorIcon = Icons.Default.Cancel,
-            errorTint = MaterialTheme.colorScheme.error
-        )
-        val label = turnFooterLabel(thinking)
+        if (thinking.status == ThinkingStatus.DONE && onCopy != null) {
+            Icon(
+                imageVector = Icons.Outlined.ContentCopy,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(role = Role.Button, onClick = onCopy)
+                    .semantics { contentDescription = "Copy reply" }
+                    .padding(MaterialTheme.spacing.xxs)
+                    .size(14.dp)
+            )
+        } else {
+    StatusIcon(
+                status = when (thinking.status) {
+                    ThinkingStatus.RUNNING -> IndicatorStatus.RUNNING
+                    ThinkingStatus.ERROR -> IndicatorStatus.ERROR
+                    ThinkingStatus.DONE -> IndicatorStatus.DONE
+                },
+                size = 10.dp,
+                runningSize = 10.dp,
+                strokeWidth = 1.5.dp,
+                // A bare stroked tick in the outline colour, per the design: this
+                // line is ambient, and a filled CheckCircle in `primary` announced
+                // every finished turn as a green blob.
+                doneIcon = Icons.Default.Check,
+                doneTint = MaterialTheme.colorScheme.outline,
+                // On a turn restored from the server the tick is the whole
+                // footer, so without this a screen reader reaches an empty row.
+                doneContentDescription = "Done",
+                // Cancel (X), not a tick — a checkmark reads as success regardless of tint.
+                errorIcon = Icons.Default.Cancel,
+                errorTint = MaterialTheme.colorScheme.error
+            )
+        }
+        val label = turnFooterLabel(thinking, timestamp)
         if (label.isNotEmpty()) {
             Text(
                 text = label,

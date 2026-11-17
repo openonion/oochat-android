@@ -5,10 +5,15 @@ import ai.openonion.oochat.domain.model.ApprovalDecision
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.SessionActivity
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.ToolStatus
 import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.ui.adaptive.HomeTab
+import ai.openonion.oochat.ui.adaptive.HomeTabs
+import ai.openonion.oochat.ui.chat.EmptyChat
 import ai.openonion.oochat.ui.chat.MessageList
 import ai.openonion.oochat.ui.chat.components.ApprovalCard
 import ai.openonion.oochat.ui.chat.components.ApprovalModeChip
@@ -19,10 +24,12 @@ import ai.openonion.oochat.ui.chat.components.DiffPreviewCard
 import ai.openonion.oochat.ui.chat.components.InputBar
 import ai.openonion.oochat.ui.chat.components.ModeChangedDivider
 import ai.openonion.oochat.ui.chat.components.SessionUsageBar
+import ai.openonion.oochat.ui.chat.components.TURN_SUMMARY_TAG
 import ai.openonion.oochat.ui.chat.components.TurnThinkingFooter
 import ai.openonion.oochat.ui.chat.components.VoiceInputPhase
 import ai.openonion.oochat.ui.chat.components.VoiceInputState
 import ai.openonion.oochat.ui.theme.spacing
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,6 +42,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
@@ -209,10 +217,10 @@ class ChatScreenshotTest {
                 items = CONVERSATION,
                 timestamps = TIMESTAMPS,
                 wasCleared = false,
-                onRespond = {},
+                onRespond = { _, _ -> },
                 onApprove = { _, _, _, _, _ -> },
                 onOnboard = { _, _, _ -> },
-                onPlanReviewResponse = {},
+                onPlanReviewResponse = { _, _ -> },
                 onUlwResponse = { _, _, _ -> },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -232,10 +240,10 @@ class ChatScreenshotTest {
                 items = SEND_STATES,
                 timestamps = SEND_STATE_TIMESTAMPS,
                 wasCleared = false,
-                onRespond = {},
+                onRespond = { _, _ -> },
                 onApprove = { _, _, _, _, _ -> },
                 onOnboard = { _, _, _ -> },
-                onPlanReviewResponse = {},
+                onPlanReviewResponse = { _, _ -> },
                 onUlwResponse = { _, _, _ -> },
                 onResendMessage = {},
                 modifier = Modifier.fillMaxSize(),
@@ -248,6 +256,158 @@ class ChatScreenshotTest {
     @Test
     fun `send states - dark`() = captureSendStates(Palette.Dark)
 
+    /**
+     * A turn's steps in the three states the design draws (W16AAPPLE-112):
+     * running, finished and collapsed, and finished with the steps opened.
+     */
+    private fun captureTurnSteps(name: String, palette: Palette, items: List<ChatItem>, open: Boolean = false) =
+        composeRule.captureThemed(
+            name,
+            palette,
+            interact = if (open) {
+                { onNodeWithTag(TURN_SUMMARY_TAG).performClick() }
+            } else null,
+        ) {
+            MessageList(
+                items = items,
+                // The running turn's user message is left undated so its clock
+                // counts from composition, not from a fixed instant years ago.
+                timestamps = TURN_TIMESTAMPS.filterKeys { items.last().id == "r1" || it != "w-u1" },
+                wasCleared = false,
+                onRespond = { _, _ -> },
+                onApprove = { _, _, _, _, _ -> },
+                onOnboard = { _, _, _ -> },
+                onPlanReviewResponse = { _, _ -> },
+                onUlwResponse = { _, _, _ -> },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+    /**
+     * The whole chat screen as the design draws it — tabs, header, transcript
+     * and composer together — running and finished. ChatScreen itself needs a
+     * ViewModel and a live relay, so it is assembled from the same parts here.
+     */
+    private fun captureChatScreen(name: String, palette: Palette, items: List<ChatItem>, running: Boolean) =
+        composeRule.captureThemed(name, palette) {
+            Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+                HomeTabs(tab = HomeTab.CHAT, homeLabel = "Dashboard", onTabChange = {})
+                ChatTopBar(
+                    title = "open up a work room",
+                    connectionState = ConnectionState.Connected(address = AGENT_ADDRESS),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    modelName = "gemini-3.8-flash",
+                    sessionActivity = if (running) SessionActivity.RUNNING else SessionActivity.IDLE,
+                )
+                MessageList(
+                    items = items,
+                    timestamps = TURN_TIMESTAMPS.filterKeys { !running || it != "w-u1" },
+                    wasCleared = false,
+                    onRespond = { _, _ -> },
+                    onApprove = { _, _, _, _, _ -> },
+                    onOnboard = { _, _, _ -> },
+                    onPlanReviewResponse = { _, _ -> },
+                    onUlwResponse = { _, _, _ -> },
+                    modifier = Modifier.weight(1f),
+                )
+                InputBar(
+                    isConnected = true,
+                    isAgentWorking = running,
+                    approvalMode = ApprovalMode.AUTO,
+                    sessionModes = SessionModes(available = ApprovalMode.entries.toList(), hostManaged = true),
+                    usage = SessionUsageTotals(if (running) 337_300 else 342_300, if (running) 0.09 else 0.10, null),
+                    onSend = { _, _, _ -> },
+                )
+            }
+        }
+
+    @Test
+    fun `chat screen running - light`() = captureChatScreen("chat_screen_running", Palette.Light, RUNNING_TURN, running = true)
+
+    @Test
+    fun `chat screen running - dark`() = captureChatScreen("chat_screen_running", Palette.Dark, RUNNING_TURN, running = true)
+
+    @Test
+    fun `chat screen finished - light`() = captureChatScreen("chat_screen_finished", Palette.Light, FINISHED_TURN, running = false)
+
+    @Test
+    fun `chat screen finished - dark`() = captureChatScreen("chat_screen_finished", Palette.Dark, FINISHED_TURN, running = false)
+
+    /**
+     * A chat with no messages yet (W16AAPPLE-113): the composer as a card in
+     * the middle, with the starters below it, or without them and on one line
+     * while the keyboard is up.
+     */
+    private fun captureEmptyChat(name: String, palette: Palette, keyboardOpen: Boolean = false) =
+        composeRule.captureThemed(
+            name,
+            palette,
+            interact = if (keyboardOpen) ({ onNode(hasSetTextAction()).performClick() }) else null
+        ) {
+            Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                HomeTabs(tab = HomeTab.CHAT, homeLabel = "Dashboard", onTabChange = {})
+                ChatTopBar(
+                    title = "New chat",
+                    connectionState = ConnectionState.Connected(address = AGENT_ADDRESS),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    modelName = "gemini-3.8-flash",
+                    sessionActivity = SessionActivity.IDLE,
+                )
+                EmptyChat(
+                    agentName = "ConnectOnion",
+                    keyboardOpen = keyboardOpen,
+                    onStarter = {},
+                    modifier = Modifier.weight(1f),
+                ) {
+                    InputBar(
+                        isConnected = true,
+                        approvalMode = ApprovalMode.AUTO,
+                        onSend = { _, _, _ -> },
+                        centred = true,
+                    )
+                }
+            }
+        }
+
+    @Test
+    fun `empty chat - light`() = captureEmptyChat("chat_empty", Palette.Light)
+
+    @Test
+    fun `empty chat - dark`() = captureEmptyChat("chat_empty", Palette.Dark)
+
+    @Test
+    fun `empty chat keyboard open - light`() = captureEmptyChat("chat_empty_keyboard", Palette.Light, keyboardOpen = true)
+
+    @Test
+    @Config(qualifiers = RobolectricDeviceQualifiers.MediumTablet)
+    fun `empty chat tablet - light`() = captureEmptyChat("chat_empty_tablet", Palette.Light)
+
+    @Test
+    fun `turn steps collapsed - light`() = captureTurnSteps("chat_turn_collapsed", Palette.Light, FINISHED_TURN)
+
+    @Test
+    fun `turn steps collapsed - dark`() = captureTurnSteps("chat_turn_collapsed", Palette.Dark, FINISHED_TURN)
+
+    @Test
+    fun `turn steps expanded - light`() =
+        captureTurnSteps("chat_turn_expanded", Palette.Light, FINISHED_TURN, open = true)
+
+    @Test
+    fun `turn steps expanded - dark`() =
+        captureTurnSteps("chat_turn_expanded", Palette.Dark, FINISHED_TURN, open = true)
+
+    @Test
+    fun `turn steps running - light`() = captureTurnSteps("chat_turn_running", Palette.Light, RUNNING_TURN)
+
+    @Test
+    fun `turn steps running - dark`() = captureTurnSteps("chat_turn_running", Palette.Dark, RUNNING_TURN)
+
     @Test
     fun `message list - light`() = captureMessageList(Palette.Light)
 
@@ -258,11 +418,10 @@ class ChatScreenshotTest {
     private fun captureInputBar(palette: Palette) =
         composeRule.captureThemed("chat_input_bar", palette) {
             Column(verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.lg)) {
-                InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
-                InputBar(isConnected = false, isSending = false, onSend = { _, _, _ -> })
+                InputBar(isConnected = true, onSend = { _, _, _ -> })
+                InputBar(isConnected = false, onSend = { _, _, _ -> })
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     isAgentWorking = true,
                     onSend = { _, _, _ -> },
                 )
@@ -270,7 +429,6 @@ class ChatScreenshotTest {
                 // stays visible, which is the whole point of streaming partials.
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                     onSend = { _, _, _ -> },
                 )
@@ -286,7 +444,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_dictating_mid_run", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 isAgentWorking = true,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                 onSend = { _, _, _ -> },
@@ -302,7 +459,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_fallback_notice", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(
                     phase = VoiceInputPhase.LISTENING,
                     notice = "Using server transcription.",
@@ -326,7 +482,6 @@ class ChatScreenshotTest {
         ) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.PREPARING),
                 onSend = { _, _, _ -> },
             )
@@ -347,7 +502,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_transcribing", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.TRANSCRIBING),
                 onSend = { _, _, _ -> },
             )
@@ -376,7 +530,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_widest_shelf", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 isAgentWorking = true,
                 approvalMode = ApprovalMode.ULW,
                 usage = SessionUsageTotals(
@@ -400,7 +553,6 @@ class ChatScreenshotTest {
         }) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 skills = listOf(
                     AgentSkill(
                         "linkedin-engagement",
@@ -687,6 +839,46 @@ class ChatScreenshotTest {
                 timingMs = 412L,
             ),
             ChatItem.User(id = "u2", content = "Thanks — anything breaking?"),
+        )
+
+        private fun bash(id: String, command: String, timingMs: Long?, status: ToolStatus = ToolStatus.DONE) =
+            ChatItem.ToolCall(id = id, name = "bash", args = mapOf("command" to command), status = status, timingMs = timingMs)
+
+        /** The turn the design draws: a thought, a search, a guide lookup and four commands, one failed. */
+        val TURN_STEPS = listOf(
+            ChatItem.User(id = "w-u1", content = "open up a work room"),
+            ChatItem.Thinking(
+                id = "w-t1",
+                status = ThinkingStatus.DONE,
+                content = "understood, I'll open up a work room for you",
+                kind = "intent",
+                durationMs = 2000.0,
+            ),
+            ChatItem.ToolCall(id = "w-c1", name = "glob", args = mapOf("pattern" to "*"), timingMs = 2000L, status = ToolStatus.DONE),
+            ChatItem.ToolCall(id = "w-c2", name = "load_guide", args = mapOf("path" to "index"), timingMs = 3000L, status = ToolStatus.DONE),
+            bash("w-c3", "echo \$PWD; ls -la ~/.config; ls -la ~/.connectonion", 3000L, ToolStatus.ERROR),
+            bash("w-c4", "pwd", 2000L),
+            bash("w-c5", "ls -la .connectonion", 4000L),
+            bash("w-c6", "which co; python3 -c \"import connectonion; print(connectonion.__file__)\"", null),
+        )
+
+        val FINISHED_TURN = TURN_STEPS + ChatItem.Turn(
+            id = "r1",
+            thinking = ChatItem.Thinking(id = "r1", status = ThinkingStatus.DONE, tokensTotal = 25_300, costUsd = 0.015),
+            agent = ChatItem.Agent(
+                id = "r1",
+                content = "Your work room is open. It is running in ~/.connectonion and is ready for its first task.",
+            ),
+        )
+
+        val RUNNING_TURN = TURN_STEPS.take(5) + bash("w-c4", "pwd", null, ToolStatus.RUNNING) + ChatItem.Turn(
+            id = "w-l1",
+            thinking = ChatItem.Thinking(id = "w-l1", status = ThinkingStatus.RUNNING),
+        )
+
+        val TURN_TIMESTAMPS = mapOf(
+            "w-u1" to DAY_ONE,
+            "r1" to DAY_ONE + 16_000L,
         )
 
         val THINKING_ORDINARY = ChatItem.Thinking(

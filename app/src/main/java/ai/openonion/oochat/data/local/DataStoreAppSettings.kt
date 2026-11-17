@@ -30,9 +30,11 @@ private val STREAMING_RESPONSES_KEY = booleanPreferencesKey("streaming_responses
 private val MEMORY_ENABLED_KEY = booleanPreferencesKey("memory_enabled")
 private val CUSTOM_INSTRUCTIONS_KEY = stringPreferencesKey("custom_instructions")
 private val PUSH_NOTIFICATIONS_ENABLED_KEY = booleanPreferencesKey("push_notifications_enabled")
+private val APPROVAL_NOTIFICATION_OFFER_SHOWN_KEY = booleanPreferencesKey("approval_notification_offer_shown")
 private val NOTIFICATION_SOUND_KEY = stringPreferencesKey("notification_sound")
 private val ANALYTICS_ENABLED_KEY = booleanPreferencesKey("analytics_enabled")
 private val SAFE_MODE_ENABLED_KEY = booleanPreferencesKey("safe_mode_enabled")
+private val DEVELOPER_TOOLS_ENABLED_KEY = booleanPreferencesKey("developer_tools_enabled")
 
 class DataStoreAppSettings(context: Context) : AppSettings {
 
@@ -87,6 +89,12 @@ class DataStoreAppSettings(context: Context) : AppSettings {
         dataStore.edit { it[PUSH_NOTIFICATIONS_ENABLED_KEY] = value }
     }
 
+    override val approvalNotificationOfferShown: Flow<Boolean> =
+        dataStore.data.map { it[APPROVAL_NOTIFICATION_OFFER_SHOWN_KEY] ?: false }
+    override suspend fun setApprovalNotificationOfferShown(value: Boolean) {
+        dataStore.edit { it[APPROVAL_NOTIFICATION_OFFER_SHOWN_KEY] = value }
+    }
+
     override val notificationSound: Flow<String> =
         dataStore.data.map { it[NOTIFICATION_SOUND_KEY] ?: "Chime" }
     override suspend fun setNotificationSound(value: String) {
@@ -103,5 +111,11 @@ class DataStoreAppSettings(context: Context) : AppSettings {
         dataStore.data.map { it[SAFE_MODE_ENABLED_KEY] ?: true }
     override suspend fun setSafeModeEnabled(value: Boolean) {
         dataStore.edit { it[SAFE_MODE_ENABLED_KEY] = value }
+    }
+
+    override val developerToolsEnabled: Flow<Boolean> =
+        dataStore.data.map { it[DEVELOPER_TOOLS_ENABLED_KEY] ?: false }
+    override suspend fun setDeveloperToolsEnabled(value: Boolean) {
+        dataStore.edit { it[DEVELOPER_TOOLS_ENABLED_KEY] = value }
     }
 }

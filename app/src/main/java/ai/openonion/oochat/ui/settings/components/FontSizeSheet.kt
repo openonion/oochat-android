@@ -1,11 +1,10 @@
 package ai.openonion.oochat.ui.settings.components
 
 import ai.openonion.oochat.ui.common.FontSizeOption
-import ai.openonion.oochat.ui.components.AssistantAvatar
+import ai.openonion.oochat.ui.theme.MessageBubbleToken
 import ai.openonion.oochat.ui.theme.bubbleShape
 import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,44 +68,21 @@ internal fun FontSizeSheet(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(MaterialTheme.spacing.lg)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs)
-                ) {
-                    AssistantAvatar(size = 28.dp, iconSize = 12.dp)
-                    Text(
-                        text = "Agent",
-                        // The sender label the real chat bubble uses.
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(modifier = Modifier.height(MaterialTheme.spacing.sm))
-
-                // Agent bubble — mirrors TextBubbleContent's isUser=false
-                // branch: surfaceContainer fill, no border. Hand-synced, since
+                // Agent reply — mirrors TextBubbleContent's isUser=false
+                // branch: plain text, no fill or border. Hand-synced, since
                 // importing from ui/chat would couple this sheet to it.
                 Text(
                     text = "Quantum entanglement is when two particles share a correlated fate — the moment you observe one, the other is instantly determined.",
                     fontSize = currentOption.previewSize,
                     lineHeight = (currentOption.previewSize.value * 1.55f).sp,
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        // Reuses MessageBubble's real bubbleShape (corner +
-                        // 4dp tail) instead of hardcoding different corner
-                        // values, so this preview never drifts from what chat
-                        // actually renders.
-                        .clip(bubbleShape(isUser = false))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(MaterialTheme.spacing.sm))
 
-                // User bubble — TextBubbleContent's isUser=true branch:
-                // outlined, no fill, onSurface text. The fill goes to the
-                // agent's reply because that's the tier carrying new content.
+                // User bubble — TextBubbleContent's isUser=true branch: a
+                // faint primary wash in the real bubbleShape (corner + 4dp
+                // tail), so this preview never drifts from what chat renders.
                 Box(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = "That's fascinating!",
@@ -115,7 +91,7 @@ internal fun FontSizeSheet(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .clip(bubbleShape(isUser = true))
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, bubbleShape(isUser = true))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = MessageBubbleToken.UserFillAlpha))
                             .padding(horizontal = 14.dp, vertical = 8.dp)
                     )
                 }
@@ -200,6 +176,7 @@ internal fun FontSizeSheet(
         Spacer(modifier = Modifier.height(MaterialTheme.spacing.lg))
         Button(
             onClick = { onConfirm(currentIndex); onDismiss() },
+            shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Done")

@@ -9,13 +9,22 @@ import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ProviderInput
+import ai.openonion.oochat.domain.model.RemOutcome
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.network.AgentConnection
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.InMemoryPendingMessageSink
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
+import ai.openonion.oochat.util.runCatchingCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -46,6 +55,14 @@ class ConnectToAgentUseCase(
     private val sessionStore: SessionStore? = null,
     private val agentDiscovery: AgentDiscoveryService = AgentDiscoveryService(),
     private val pendingMessageSink: PendingMessageSink = InMemoryPendingMessageSink(),
+    // Whether the app is on screen; see AgentConnection's isAppVisible.
+    private val isAppVisible: () -> Boolean = { true },
+    // Told when a server URL was given in place of an agent address and the
+    // server's /info named the agent, so the caller can save the address
+    // (W16AAPPLE-98). Called before connecting, so it is saved by the time
+    // anything that reads the config next runs. If it throws, the failure is
+    // logged and the connection goes ahead.
+    private val onAddressResolved: suspend (serverUrl: String, address: String) -> Unit = { _, _ -> },
     // Factory (not a shared instance) so getOrCreateRepository() below still
     // creates at most one repository per use-case instance. Defaults to the
     // real ConnectionRepositoryImpl; tests substitute a fake ConnectionRepository
@@ -56,10 +73,16 @@ class ConnectToAgentUseCase(
             relayUrl,
             sessionStore,
             pendingMessageSink,
-            agentDiscovery = agentDiscovery
+            isAppVisible = isAppVisible
         )
     }
 ) : ConnectToAgentUseCaseContract {
+
+    /** Set when [connect] returns true because ONBOARD_REQUIRED came first; see the contract. */
+    @Volatile
+    override var lastConnectNeedsOnboarding: Boolean = false
+        private set
+
     // @Volatile + @Synchronized on the creator below: this instance is now
     // app-scoped and reached from several ViewModels, so "at most one
     // repository" can't rely on every caller happening to be on the main thread.
@@ -80,8 +103,20 @@ class ConnectToAgentUseCase(
     override val modePending: StateFlow<Boolean>
         get() = getOrCreateRepository().modePending
 
+    override val sessionModes: StateFlow<SessionModes>
+        get() = getOrCreateRepository().sessionModes
+
+    override val hostSessionStatus: StateFlow<ServerSessionStatus>
+        get() = getOrCreateRepository().hostSessionStatus
+
     override val dashboardHtml: StateFlow<String?>
         get() = getOrCreateRepository().dashboardHtml
+
+    override val controlCenterApp: StateFlow<ControlCenterApp?>
+        get() = getOrCreateRepository().controlCenterApp
+
+    override val plan: StateFlow<List<PlanEntry>>
+        get() = getOrCreateRepository().plan
 
     /**
      * Connect to an agent with timeout.
@@ -92,40 +127,59 @@ class ConnectToAgentUseCase(
      *
      * @param agentAddress Agent address (0x...) or URL for discovery
      * @param directUrl Direct connection URL (null for relay mode); overridden if discovery resolves a URL
+     * @param relayUrl Relay to go through in relay mode; null for the default relay
      * @return true if connected successfully, false if timed out or failed
      */
-    override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?): Boolean {
+    override suspend fun connect(
+        agentAddress: String,
+        conversationId: String?,
+        directUrl: String?,
+        relayUrl: String?
+    ): Boolean {
+        lastConnectNeedsOnboarding = false
         val resolved = agentDiscovery.resolveAgentAddress(agentAddress)
         val effectiveAddress = resolved.address
         val effectiveDirectUrl = resolved.directUrl ?: directUrl
+        if (resolved.directUrl != null && AgentDiscoveryService.ADDRESS_REGEX.matches(effectiveAddress)) {
+            // Saving is for next time; this connection already has its address,
+            // so a write that fails (a keystore error, say) is logged, not thrown.
+            runCatchingCancellable { onAddressResolved(resolved.directUrl, effectiveAddress) }
+                .onFailure { error ->
+                    FileLogger.w(LogTags.CONNECT_USE_CASE, "Could not save the resolved agent address: ${error.message}")
+                }
+        }
 
         // First attempt — uses the conversation's persisted sessionId if any.
         // The server may reject this if the session was already attached to
         // another connection (e.g. a previous instance that didn't cleanly
         // disconnect) or if the session expired on the server.
-        if (tryConnectOnce(effectiveAddress, conversationId, effectiveDirectUrl, attempt = 1)) return true
+        if (tryConnectOnce(effectiveAddress, conversationId, effectiveDirectUrl, relayUrl, attempt = 1)) return true
 
         // A relay that already named the reason — the agent has no socket of
         // its own — has answered the question. Re-asking it costs another
         // handshake and a reset() that discards a session nothing is wrong
         // with. Transport failures below still get their retry.
-        val verdict = getOrCreateRepository().connectionState.value.errorMessageOrNull()
+        val state = getOrCreateRepository().connectionState.value
+        val verdict = state.errorMessageOrNull()
         if (verdict != null && ServerErrorText.isOfflineVerdict(verdict)) {
             FileLogger.w(LogTags.CONNECT_USE_CASE, "Relay says the agent is offline; skipping attempt 2")
             return false
         }
+        // The agent refused our protocol version: attempt 2 would send the
+        // same descriptor, be refused again, and show the user a second error.
+        if (state is ConnectionState.Error && !state.retryable) {
+            FileLogger.w(LogTags.CONNECT_USE_CASE, "Non-retryable error; skipping attempt 2")
+            return false
+        }
 
-        // Fallback: drop the persisted session and try once more with
-        // sessionId=null, so the server creates a fresh session. The
-        // wasted 30s timeout on the first attempt is the cost of
-        // auto-recovering from a stale session; the second attempt
-        // either connects (success) or fails fast (no real network
-        // issue, so we don't wait the full timeout again — reset()
-        // closes the WS immediately).
-        FileLogger.w(LogTags.CONNECT_USE_CASE, "First attempt failed; clearing session and retrying")
-        reset()
+        // Anything else may be transient, so one more try on the same session.
+        // Nothing is cleared first: the Host never refuses a CONNECT over its
+        // session id (ws_router/connect.py resumes it, starts one under that
+        // id, or reports a new id in CONNECTED), and reset() would also throw
+        // away the messages queued while offline (W16AAPPLE-84).
+        FileLogger.w(LogTags.CONNECT_USE_CASE, "First attempt failed; retrying on the same session")
 
-        return tryConnectOnce(effectiveAddress, conversationId, effectiveDirectUrl, attempt = 2)
+        return tryConnectOnce(effectiveAddress, conversationId, effectiveDirectUrl, relayUrl, attempt = 2)
     }
 
     override suspend fun switchConversation(conversationId: String?) {
@@ -143,15 +197,15 @@ class ConnectToAgentUseCase(
      * the Connected state within [connectionTimeoutMs] — or the agent
      * gates on ONBOARD_REQUIRED (see below).
      *
-     * Returns false early (no 30s wait) when the server rejects the
-     * attempt with a "Session is already attached" error — that's the
-     * signal to drop the persisted session and try again with
-     * sessionId=null.
+     * Returns false as soon as the state becomes an Error, without waiting
+     * out the timeout; [connect] then decides whether a second attempt is
+     * worth making.
      */
     private suspend fun tryConnectOnce(
         address: String,
         conversationId: String?,
         directUrl: String?,
+        relayUrl: String?,
         attempt: Int
     ): Boolean {
         val repo = getOrCreateRepository()
@@ -177,29 +231,27 @@ class ConnectToAgentUseCase(
                     .first()
             }
             val stateDeferred = async {
-                repo.connect(address, conversationId, directUrl)
+                repo.connect(address, conversationId, directUrl, relayUrl)
                 withTimeoutOrNull(connectionTimeoutMs) {
-                    // Wait until state leaves Connecting/Reconnecting. Surface
-                    // a "stale session" error as a fast-fail so the outer
-                    // connect() can drop the persisted sessionId and retry
-                    // without waiting the full 30s.
-                    while (repo.connectionState.value is ConnectionState.Connecting ||
-                           repo.connectionState.value is ConnectionState.Reconnecting) {
-                        val err = (repo.connectionState.value as? ConnectionState.Error)?.message
-                        if (err != null && isStaleSessionError(err)) {
-                            FileLogger.w(
-                                "ConnectUseCase",
-                                "Fast-fail on stale-session error after <30s: $err"
-                            )
-                            repo.disconnect()
-                            return@withTimeoutOrNull false
-                        }
+                    // Wait until state leaves Connecting/Reconnecting. An Error,
+                    // a stale-session one included, ends the wait at once.
+                    // Reaching CONNECTED is the verdict, not still being on it:
+                    // a drop straight after is the connection's own reconnect to
+                    // handle, and a second attempt would start over without
+                    // last_msg_id (W16AAPPLE-94).
+                    while (!repo.hasConnectedThisAttempt &&
+                           (repo.connectionState.value is ConnectionState.Connecting ||
+                            repo.connectionState.value is ConnectionState.Reconnecting)) {
                         delay(100)
                     }
-                    repo.connectionState.value is ConnectionState.Connected
+                    repo.hasConnectedThisAttempt || repo.connectionState.value is ConnectionState.Connected
                 } ?: run {
                     FileLogger.e(LogTags.CONNECT_USE_CASE, "Connection timeout after ${connectionTimeoutMs}ms")
-                    repo.disconnect()
+                    // Giving up on this attempt is not the user stopping: what
+                    // they queued while it ran still goes out on the next
+                    // connect. Offline at startup, this timeout is what used
+                    // to empty the persisted outbox (W16AAPPLE-102).
+                    repo.disconnect(keepOutbox = true)
                     false
                 }
             }
@@ -211,6 +263,7 @@ class ConnectToAgentUseCase(
 
             if (onboardWon) {
                 stateDeferred.cancel()
+                lastConnectNeedsOnboarding = true
                 true
             } else {
                 onboardDeferred.cancel()
@@ -219,31 +272,41 @@ class ConnectToAgentUseCase(
         }
     }
 
-    private fun isStaleSessionError(message: String): Boolean =
-        StaleSessionDetector.isStaleSessionError(message)
-
     override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<OutgoingFileAttachment>?) {
         getOrCreateRepository().sendMessage(content, agentAddress, images, files)
     }
+
+    override suspend fun executeTool(request: ExecRequest): ExecOutcome {
+        return getOrCreateRepository().executeTool(request)
+    }
+
+    override suspend fun readRem(): RemOutcome = getOrCreateRepository().readRem()
+
+    override suspend fun sendProviderInput(input: ProviderInput): Boolean =
+        getOrCreateRepository().sendProviderInput(input)
 
     override fun observeEvents(): Flow<ChatEvent> {
         return getOrCreateRepository().observeEvents()
     }
 
-    override fun releaseServerTranscript() {
-        getOrCreateRepository().releaseServerTranscript()
+    override fun releaseServerTranscript(merged: ChatEvent.ServerTranscriptReceived) {
+        getOrCreateRepository().releaseServerTranscript(merged)
     }
 
-    override suspend fun respond(answer: String) {
-        getOrCreateRepository().respond(answer)
+    override fun releaseSessionStatus() {
+        getOrCreateRepository().releaseSessionStatus()
+    }
+
+    override suspend fun respond(answer: String, requestId: String?) {
+        getOrCreateRepository().respond(answer, requestId)
     }
 
     override suspend fun interrupt() {
         getOrCreateRepository().interrupt()
     }
 
-    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {
-        getOrCreateRepository().respondToApproval(approved, scope, mode, feedback)
+    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) {
+        getOrCreateRepository().respondToApproval(approved, scope, mode, feedback, requestId)
     }
 
     override suspend fun respondToOnboard(method: String, inviteCode: String?, payment: Double?) {
@@ -275,17 +338,20 @@ class ConnectToAgentUseCase(
         repo.querySessionStatus(sessionId)
     }
 
-    override suspend fun disconnect() {
-        repository?.disconnect()
+    override suspend fun disconnect(keepOutbox: Boolean) {
+        repository?.disconnect(keepOutbox)
     }
 
     override fun isConnected(): Boolean {
         return repository?.isConnected() == true
     }
 
-    override suspend fun reset() {
-        repository?.reset()
+    override suspend fun reset(conversationId: String?) {
+        repository?.reset(conversationId)
     }
+
+    override suspend fun queuedMessageCount(agentAddress: String, conversationId: String): Int? =
+        repository?.queuedMessageCount(agentAddress, conversationId)
 
     @Synchronized
     private fun getOrCreateRepository(): ConnectionRepository {

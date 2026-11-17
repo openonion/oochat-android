@@ -1,13 +1,22 @@
 package ai.openonion.oochat.data.local.mapper
 
+import ai.openonion.oochat.domain.model.ApprovalBoundary
 import ai.openonion.oochat.domain.model.ApprovalDecision
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.CompactStatus
 import ai.openonion.oochat.domain.model.EvalStatus
 import ai.openonion.oochat.domain.model.IntentStatus
+import ai.openonion.oochat.domain.model.ProviderActivity
+import ai.openonion.oochat.domain.model.ProviderActivityStatus
+import ai.openonion.oochat.domain.model.ProviderApprovalPresentation
+import ai.openonion.oochat.domain.model.ProviderArtifact
+import ai.openonion.oochat.domain.model.ProviderInvocationStatus
+import ai.openonion.oochat.domain.model.ProviderMessage
+import ai.openonion.oochat.domain.model.ProviderMessageRole
 import ai.openonion.oochat.domain.model.ReceivedFile
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.ToolStatus
+import ai.openonion.oochat.domain.model.WorkRoomApproval
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -27,8 +36,7 @@ import kotlinx.serialization.json.Json
  * what the agent was allowed to do, which is transcript like any other.
  *
  * The remaining gates (AskUser, Onboard*, PlanReview, UlwTurnsReached) are
- * still excluded — none of them carries its answer on the item yet, so there
- * is nothing to restore them into.
+ * still excluded. AskUser now keeps its answer on the item, but is not saved yet.
  */
 @Serializable
 sealed class TranscriptItemPayload {
@@ -55,7 +63,13 @@ sealed class TranscriptItemPayload {
         val content: String? = null,
         val tokensTotal: Int? = null,
         val costUsd: Double? = null,
-        val contextPercent: Double? = null
+        val contextPercent: Double? = null,
+        /**
+         * [ChatItem.Thinking.kind]; absent on rows written before reasoning
+         * had one. Not serialised as `kind`: that is this codec's class
+         * discriminator.
+         */
+        @SerialName("reasoning_kind") val kind: String? = null
     ) : TranscriptItemPayload()
 
     /**
@@ -130,8 +144,27 @@ sealed class TranscriptItemPayload {
         val approved: Boolean,
         val scope: String,
         val mode: String? = null,
-        val feedback: String? = null
+        val feedback: String? = null,
+        val refused: Boolean = false,
+        /** Kept so a STALE_ANSWER arriving after a reload still finds its card. */
+        val requestId: String? = null,
+        val workRoom: WorkRoomApprovalPayload? = null
     ) : TranscriptItemPayload()
+
+    @Serializable
+    data class WorkRoomApprovalPayload(
+        val provider: String,
+        val invocationId: String,
+        val parentToolCallId: String,
+        val activityId: String? = null,
+        val action: String? = null,
+        val scope: String? = null,
+        val reason: String? = null,
+        val boundary: String? = null,
+        val allowOnce: Boolean = false,
+        val allowSession: Boolean = false,
+        val files: List<String> = emptyList()
+    )
 
     @Serializable
     @SerialName("files_received")
@@ -158,8 +191,59 @@ sealed class TranscriptItemPayload {
     data class ModeChanged(
         override val id: String,
         val mode: String,
-        val triggeredBy: String? = null
+        val triggeredBy: String? = null,
+        val turnsLeft: Int? = null
     ) : TranscriptItemPayload()
+
+    /** A Claude Code or Codex run's Work Room card, with its steps (W16AAPPLE-33). */
+    @Serializable
+    @SerialName("provider_invocation")
+    data class ProviderInvocation(
+        override val id: String,
+        val parentToolCallId: String? = null,
+        val workroomId: String? = null,
+        val provider: String = "",
+        val providerDisplayName: String? = null,
+        val taskTitle: String? = null,
+        val status: String,
+        val currentSummary: String? = null,
+        val resultSummary: String? = null,
+        val errorSummary: String? = null,
+        val elapsedMs: Long? = null,
+        val stateRevision: Long? = null,
+        val activities: List<Step> = emptyList(),
+        val messages: List<Message> = emptyList(),
+        val artifact: Artifact? = null
+    ) : TranscriptItemPayload() {
+        @Serializable
+        data class Step(
+            val id: String,
+            val sequence: Int,
+            // Not `kind`: that is this codec's class discriminator.
+            val activityKind: String = "",
+            val status: String,
+            val title: String,
+            val summary: String = "",
+            val files: List<String> = emptyList(),
+            val legacy: Boolean = false
+        )
+
+        @Serializable
+        data class Message(
+            val id: String,
+            val role: String,
+            val text: String,
+            val continuationOf: String? = null
+        )
+
+        @Serializable
+        data class Artifact(
+            val id: String,
+            val dataUrl: String,
+            val alt: String,
+            val stateRevision: Long
+        )
+    }
 }
 
 /**
@@ -224,7 +308,8 @@ object TranscriptItemCodec {
             content = item.content,
             tokensTotal = item.tokensTotal,
             costUsd = item.costUsd,
-            contextPercent = item.contextPercent
+            contextPercent = item.contextPercent,
+            kind = item.kind
         )
         // A turn that is only a footer (no reply text of its own) — the live
         // llm_call/llm_result row. RUNNING is skipped: llm_result replaces it
@@ -284,7 +369,10 @@ object TranscriptItemCodec {
                 approved = d.approved,
                 scope = d.scope,
                 mode = d.mode,
-                feedback = d.feedback
+                feedback = d.feedback,
+                refused = d.refused,
+                requestId = item.requestId,
+                workRoom = item.workRoom?.toPayload()
             )
         }
         is ChatItem.FilesReceivedItem -> TranscriptItemPayload.FilesReceived(
@@ -301,7 +389,50 @@ object TranscriptItemCodec {
         is ChatItem.ModeChangedItem -> TranscriptItemPayload.ModeChanged(
             id = item.id,
             mode = item.mode,
-            triggeredBy = item.triggeredBy
+            triggeredBy = item.triggeredBy,
+            turnsLeft = item.turnsLeft
+        )
+        is ChatItem.ProviderInvocation -> TranscriptItemPayload.ProviderInvocation(
+            id = item.id,
+            parentToolCallId = item.parentToolCallId,
+            workroomId = item.workroomId,
+            provider = item.provider,
+            providerDisplayName = item.providerDisplayName,
+            taskTitle = item.taskTitle,
+            status = item.status.name,
+            currentSummary = item.currentSummary,
+            resultSummary = item.resultSummary,
+            errorSummary = item.errorSummary,
+            elapsedMs = item.elapsedMs,
+            stateRevision = item.stateRevision,
+            activities = item.activities.map {
+                TranscriptItemPayload.ProviderInvocation.Step(
+                    id = it.id,
+                    sequence = it.sequence,
+                    activityKind = it.kind,
+                    status = it.status.name,
+                    title = it.title,
+                    summary = it.summary,
+                    files = it.files,
+                    legacy = it.legacy
+                )
+            },
+            messages = item.messages.map {
+                TranscriptItemPayload.ProviderInvocation.Message(
+                    id = it.id,
+                    role = it.role.name,
+                    text = it.text,
+                    continuationOf = it.continuationOf
+                )
+            },
+            artifact = item.artifact?.let {
+                TranscriptItemPayload.ProviderInvocation.Artifact(
+                    id = it.id,
+                    dataUrl = it.dataUrl,
+                    alt = it.alt,
+                    stateRevision = it.stateRevision
+                )
+            }
         )
         else -> null
     }
@@ -336,7 +467,8 @@ object TranscriptItemCodec {
             content = payload.content,
             tokensTotal = payload.tokensTotal,
             costUsd = payload.costUsd,
-            contextPercent = payload.contextPercent
+            contextPercent = payload.contextPercent,
+            kind = payload.kind
         )
         is TranscriptItemPayload.TurnThinking -> ChatItem.Turn(
             id = payload.id,
@@ -386,7 +518,9 @@ object TranscriptItemCodec {
             tool = payload.tool,
             arguments = payload.arguments,
             description = payload.description,
-            decision = ApprovalDecision(payload.approved, payload.scope, payload.mode, payload.feedback)
+            decision = ApprovalDecision(payload.approved, payload.scope, payload.mode, payload.feedback, payload.refused),
+            requestId = payload.requestId,
+            workRoom = payload.workRoom?.toDomain()
         )
         is TranscriptItemPayload.FilesReceived -> ChatItem.FilesReceivedItem(
             id = payload.id,
@@ -402,10 +536,81 @@ object TranscriptItemCodec {
         is TranscriptItemPayload.ModeChanged -> ChatItem.ModeChangedItem(
             id = payload.id,
             mode = payload.mode,
-            triggeredBy = payload.triggeredBy
+            triggeredBy = payload.triggeredBy,
+            turnsLeft = payload.turnsLeft
+        )
+        // A run saved while it worked comes back working: only the Host, replaying
+        // the frames missed since (last_msg_id), may say it ended.
+        is TranscriptItemPayload.ProviderInvocation -> ChatItem.ProviderInvocation(
+            id = payload.id,
+            parentToolCallId = payload.parentToolCallId,
+            workroomId = payload.workroomId,
+            provider = payload.provider,
+            providerDisplayName = payload.providerDisplayName,
+            taskTitle = payload.taskTitle,
+            status = enumOrDefault(payload.status, ProviderInvocationStatus.RUNNING),
+            currentSummary = payload.currentSummary,
+            resultSummary = payload.resultSummary,
+            errorSummary = payload.errorSummary,
+            elapsedMs = payload.elapsedMs,
+            stateRevision = payload.stateRevision,
+            activities = payload.activities.map {
+                ProviderActivity(
+                    id = it.id,
+                    sequence = it.sequence,
+                    kind = it.activityKind,
+                    status = enumOrDefault(it.status, ProviderActivityStatus.COMPLETED),
+                    title = it.title,
+                    summary = it.summary,
+                    files = it.files,
+                    legacy = it.legacy
+                )
+            },
+            // A role this build does not know is a message it cannot place, so it is left out
+            // rather than shown as someone else's.
+            messages = payload.messages.mapNotNull {
+                val role = runCatching { enumValueOf<ProviderMessageRole>(it.role) }.getOrNull()
+                    ?: return@mapNotNull null
+                ProviderMessage(id = it.id, role = role, text = it.text, continuationOf = it.continuationOf)
+            },
+            artifact = payload.artifact?.let {
+                ProviderArtifact(id = it.id, dataUrl = it.dataUrl, alt = it.alt, stateRevision = it.stateRevision)
+            }
         )
     }
 
     private inline fun <reified E : Enum<E>> enumOrDefault(name: String, fallback: E): E =
         runCatching { enumValueOf<E>(name) }.getOrDefault(fallback)
+}
+
+private fun WorkRoomApproval.toPayload() = TranscriptItemPayload.WorkRoomApprovalPayload(
+    provider = provider,
+    invocationId = invocationId,
+    parentToolCallId = parentToolCallId,
+    activityId = activityId,
+    action = presentation?.action,
+    scope = presentation?.scope,
+    reason = presentation?.reason,
+    boundary = presentation?.boundary?.name?.lowercase(),
+    allowOnce = presentation?.allowOnce ?: false,
+    allowSession = presentation?.allowSession ?: false,
+    files = presentation?.files.orEmpty()
+)
+
+private fun TranscriptItemPayload.WorkRoomApprovalPayload.toDomain(): WorkRoomApproval {
+    val boundary = ApprovalBoundary.entries.firstOrNull { it.name.lowercase() == this.boundary }
+    val presentation = if (action != null && scope != null && reason != null && boundary != null) {
+        ProviderApprovalPresentation(
+            action = action,
+            scope = scope,
+            reason = reason,
+            boundary = boundary,
+            allowOnce = allowOnce,
+            allowSession = allowSession,
+            files = files
+        )
+    } else {
+        null
+    }
+    return WorkRoomApproval(provider, invocationId, parentToolCallId, activityId, presentation)
 }
