@@ -1,30 +1,44 @@
 package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
+import ai.openonion.oochat.crypto.TestIdentity
 import ai.openonion.oochat.data.protocol.FileAttachment
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.knownIssue
 import ai.openonion.oochat.network.AgentConnection
+import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.PendingMessageSink
 import ai.openonion.oochat.network.QueuedMessage
 import ai.openonion.oochat.network.WebSocketFactory
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okio.ByteString
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -79,7 +93,7 @@ class ConnectionRepositoryImplTest {
     @Before
     fun setUp() {
         keyManager = KeyManager(ApplicationProvider.getApplicationContext())
-        keyManager.save(keyManager.keysFromHex("aa".repeat(32) + "bb".repeat(32)))
+        keyManager.save(TestIdentity.keys())
         factory = FakeWebSocketFactory()
 
         repository = ConnectionRepositoryImpl(
@@ -108,6 +122,13 @@ class ConnectionRepositoryImplTest {
 
     private fun simulateConnected(sessionId: String = "sess-1") {
         factory.lastListener?.onMessage(factory.lastWebSocket!!, """{"type":"CONNECTED","session_id":"$sessionId"}""")
+    }
+
+    private fun simulateToolCall(toolId: String) {
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"tool_call","id":"ev-$toolId","tool_id":"$toolId","name":"bash"}"""
+        )
     }
 
     private fun simulateError(message: String) {
@@ -192,6 +213,43 @@ class ConnectionRepositoryImplTest {
         } as ChatEvent.ChatItemReceived
 
         assertTrue(received.item is ChatItem.OnboardRequired)
+    }
+
+    @Test
+    fun `a burst of frames bigger than the chat event buffer reaches a slow collector whole`() = runBlocking {
+        repository.connect("0xAGENT")
+        simulateConnected()
+
+        // A collector stuck on its first event while the burst arrives, like the chat's Room writes.
+        val release = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        val delivered = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val collector = launch(Dispatchers.Default) {
+            repository.observeEvents().collect { event ->
+                started.complete(Unit)
+                release.await()
+                if (event is ChatEvent.ChatItemReceived) delivered += event.item.id
+            }
+        }
+        // Frames sent before the collector subscribes are lost, so send markers until it has one.
+        var marker = 0
+        withTimeout(5000L) {
+            while (!started.isCompleted) {
+                simulateToolCall("m${marker++}")
+                delay(20)
+            }
+        }
+
+        val burst = 200
+        repeat(burst) { simulateToolCall("t$it") }
+        delay(300) // lets the repository's own collector pass every frame on while the consumer is stuck
+        release.complete(Unit)
+        // The collector is still adding on another thread, and iterating a synchronizedList needs its lock held.
+        fun arrived() = synchronized(delivered) { delivered.count { it.startsWith("t") } }
+        withTimeoutOrNull(5000L) { while (arrived() < burst) delay(20) }
+        collector.cancelAndJoin()
+
+        assertEquals((0 until burst).map { "t$it" }, synchronized(delivered) { delivered.filter { it.startsWith("t") } })
     }
 
     @Test
@@ -284,6 +342,59 @@ class ConnectionRepositoryImplTest {
 
         val state = repository.connectionState.value as ConnectionState.Error
         assertEquals("This agent is offline. Start it, then reconnect.", state.message)
+    }
+
+    // ── W16AAPPLE-12: a refused OIP version ──────────────────────────
+
+    private fun simulateVersionRejection() {
+        factory.lastListener?.onMessage(
+            factory.lastWebSocket!!,
+            """{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,""" +
+                """"protocol":{"name":"oip","version":"0.2","min_version":"0.2","max_version":"0.2"}}"""
+        )
+    }
+
+    @Test
+    fun `a refused OIP version is one readable, non-retryable error`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateVersionRejection() }) {
+            repository.connectionState.value is ConnectionState.Error
+        }
+
+        val state = repository.connectionState.value as ConnectionState.Error
+        assertEquals(
+            "This agent uses a different version of the chat protocol (oip/0.2) than this app (oip/0.1). " +
+                "Update the app or the agent, then reconnect.",
+            state.message
+        )
+        assertFalse("nothing may retry a version mismatch automatically", state.retryable)
+    }
+
+    @Test
+    fun `a refused OIP version after an earlier CONNECTED is still fatal`() = runTest(testDispatcher) {
+        // Unlike a business-logic ERROR on a live session, which stays a
+        // non-fatal chat event: the refusal means the connection is over.
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) {
+            repository.connectionState.value is ConnectionState.Connected
+        }
+
+        simulateVersionRejection()
+        awaitUntil { repository.connectionState.value is ConnectionState.Error }
+
+        assertFalse((repository.connectionState.value as ConnectionState.Error).retryable)
+    }
+
+    @Test
+    fun `an ordinary connect-time ERROR stays retryable`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+
+        awaitUntil(retry = { simulateError("forbidden: Denied by fast rules") }) {
+            repository.connectionState.value is ConnectionState.Error
+        }
+
+        assertTrue((repository.connectionState.value as ConnectionState.Error).retryable)
     }
 
     @Test
@@ -391,6 +502,110 @@ class ConnectionRepositoryImplTest {
         repository.connect("0xAGENT2")
 
         assertEquals(null, repository.agentProfile.value)
+    }
+
+    // -- the published profile: slash-palette skills and agent balance --
+    //
+    // No agent actually sends AGENT_PROFILE; the palette is filled from the
+    // relay's directory on CONNECTED (fetchPublishedProfile). These run the
+    // real AgentDiscoveryService against a local directory.
+
+    private val publishedAgent = "0x" + "c5".repeat(32)
+
+    /** Every directory a test started, shut down in [shutDownDirectories] even when the test fails. */
+    private val directories = mutableListOf<MockWebServer>()
+
+    @After
+    fun shutDownDirectories() = directories.forEach { it.shutdown() }
+
+    /** A directory that answers every lookup with [body], recording the paths asked for. */
+    private fun directory(body: String): MockWebServer = MockWebServer().apply {
+        dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setBody(body)
+        }
+        start()
+        directories += this
+    }
+
+    private fun simulateFrame(json: String) {
+        factory.lastListener?.onMessage(factory.lastWebSocket!!, json)
+    }
+
+    private fun repositoryWithDirectory(server: MockWebServer) = ConnectionRepositoryImpl(
+        keyManager = keyManager,
+        relayUrl = server.url("/").toString(),
+        pendingMessageSink = sink,
+        agentConnectionFactory = { km, url -> AgentConnection(km, url, factory, pendingMessageSink = sink) },
+        agentDiscovery = AgentDiscoveryService()
+    )
+
+    @Test
+    fun `on connect the agent's published skills come from the directory`() = runTest(testDispatcher) {
+        val server = directory(
+            """{"profile":{"alias":"palette-agent","model":"gemini-2.5-flash","tools":["echo"],
+              |"skills":[{"name":"explain","description":"Explain a snippet of code"},{"name":"translate"}]}}"""
+                .trimMargin()
+        )
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+
+        assertEquals(
+            listOf(AgentSkill("explain", "Explain a snippet of code"), AgentSkill("translate")),
+            repo.agentProfile.value?.skills
+        )
+        // The agent's row, not this device's: CONNECTED carries the identity
+        // the relay authenticated, and looking that up returns our own empty row.
+        assertEquals("/api/agents/$publishedAgent", server.takeRequest().path)
+    }
+
+    @Test
+    fun `known issue - the directory path keeps duplicate skill names and placeholder descriptions`() = runTest(testDispatcher) {
+        // An AGENT_PROFILE frame is cleaned by ProtocolParser.toAgentSkills
+        // (one entry per name, "No description" -> none). The directory path -
+        // the one that actually fills the palette - skips both, and the
+        // palette keys its rows on the name.
+        val server = directory(
+            """{"profile":{"skills":[{"name":"explain","description":"No description"},
+              |{"name":"explain","description":"Explain a snippet of code"}]}}""".trimMargin()
+        )
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+        val skills = repo.agentProfile.value!!.skills
+
+        knownIssue("directory skills are not de-duplicated or normalised the way AGENT_PROFILE skills are") {
+            assertEquals("one entry per name", listOf("explain"), skills.map { it.name })
+            assertTrue("placeholder description kept: $skills", skills.none { it.description == "No description" })
+        }
+    }
+
+    @Test
+    fun `a balance the agent published survives the directory filling in its skills`() = runTest(testDispatcher) {
+        val server = directory("""{"profile":{"skills":[{"name":"explain"}]}}""")
+        val repo = repositoryWithDirectory(server)
+
+        repo.connect(publishedAgent)
+        awaitUntil(retry = { simulateFrame("""{"type":"AGENT_PROFILE","name":"low-funds","skills":[],"balance_usd":0.42}""") }) {
+            repo.agentProfile.value != null
+        }
+        awaitUntil(retry = { simulateConnected() }) { repo.agentProfile.value?.skills?.isNotEmpty() == true }
+
+        assertEquals(0.42, repo.agentProfile.value?.balanceUsd)
+    }
+
+    @Test
+    fun `an agent's published balance reaches the live profile the low-balance bar reads`() = runTest(testDispatcher) {
+        repository.connect("0xAGENT")
+        awaitUntil(retry = { simulateConnected() }) { repository.connectionState.value is ConnectionState.Connected }
+
+        awaitUntil(retry = { simulateFrame("""{"type":"AGENT_PROFILE","name":"low-funds","balance_usd":0.42}""") }) {
+            repository.agentProfile.value != null
+        }
+
+        assertEquals(0.42, repository.agentProfile.value?.balanceUsd)
     }
 
     // ── approvalMode ─────────────────────────────────────────────────

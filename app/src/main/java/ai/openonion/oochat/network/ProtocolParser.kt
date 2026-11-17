@@ -1,5 +1,6 @@
 package ai.openonion.oochat.network
 
+import ai.openonion.oochat.data.protocol.OipProtocol
 import ai.openonion.oochat.data.protocol.ServerEvent
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.SkillWire
@@ -18,7 +19,9 @@ import ai.openonion.oochat.util.LogSanitizer
 import ai.openonion.oochat.util.LogTags
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * Pure function for parsing WebSocket messages into ConnectionEvents.
@@ -27,6 +30,19 @@ import kotlinx.serialization.json.JsonPrimitive
  * This class has no side effects and no dependencies on WebSocket state.
  */
 object ProtocolParser {
+
+    /**
+     * Frames the Host writes straight to the socket instead of appending to the agent log it replays
+     * from a CONNECT's `last_msg_id`. Any other frame that carries an `id` is a log frame (the Host
+     * stamps one on every entry), so a new event type needs no entry here to take part in replay.
+     * `RUNTIME_INPUT_ACK` is the one host frame that has an `id` of its own: a fresh UUID the Host
+     * mints for the queued input, which names nothing in its log.
+     */
+    private val HOST_FRAME_TYPES = setOf(
+        "PING", "CONNECTED", "AGENT_PROFILE", "DASHBOARD_SNAPSHOT", "ONBOARD_REQUIRED",
+        "ONBOARD_SUCCESS", "OUTPUT", "ERROR", "SESSION_STATUS", "RUNTIME_INPUT_ACK"
+    )
+
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -65,7 +81,7 @@ object ProtocolParser {
             "Parsed type=${event.type}, ${LogSanitizer.contentSummary(event.content.orEmpty())}"
         )
 
-        return when (event.type) {
+        val parsed = when (event.type) {
             "PING" -> ParseResult(
                 event = ConnectionEvent.Ping,
                 shouldSendPong = true
@@ -466,11 +482,46 @@ object ProtocolParser {
                 }
             }
 
-            "ERROR" -> ParseResult(
-                event = ConnectionEvent.ConnectionError(
-                    message = event.message ?: event.error ?: "Unknown error"
+            // The host took an INPUT that arrived mid-turn as runtime input and
+            // queued it for the running turn's next iteration — see
+            // ws_router/session.py, which sends this only when
+            // `push_runtime_input` accepted it. `id` is a UUID the *host*
+            // minted for the queued item, not the `input_id` we sent, so it
+            // cannot name which of our messages this answers. The frame is
+            // sent immediately and in order, so the caller links it by order;
+            // see ConnectionEvent.RuntimeInputAcknowledged.
+            "RUNTIME_INPUT_ACK" -> ParseResult(
+                event = ConnectionEvent.RuntimeInputAcknowledged(
+                    sessionId = event.sessionId,
+                    hostInputId = event.id
                 )
             )
+
+            "ERROR" -> when (event.code) {
+                // The Host refused our OIP version: final for the connection.
+                OipProtocol.UNSUPPORTED_VERSION_CODE ->
+                    ParseResult(event = ConnectionEvent.ProtocolRejected(hostProtocol = describeProtocol(event.protocol)))
+
+                // A runtime input the running turn would not take. Not a
+                // ConnectionError: the socket is healthy and the agent is still
+                // working; ConnectionError clears outstanding input ids and can
+                // start the reconnect ladder.
+                RUNTIME_INPUT_REJECTED ->
+                    ParseResult(
+                        event = ConnectionEvent.RuntimeInputRejected(
+                            sessionId = event.sessionId,
+                            retryable = event.isRetryable,
+                            message = event.message
+                        )
+                    )
+
+                else ->
+                    ParseResult(
+                        event = ConnectionEvent.ConnectionError(
+                            message = event.message ?: event.error ?: "Unknown error"
+                        )
+                    )
+            }
 
             // Plugin-initiated mode switch (ULW enter/exit, tool_approval's
             // _set_mode, plan_mode enter/exit) — see ServerEvent.mode's own
@@ -507,16 +558,45 @@ object ProtocolParser {
 
             else -> ParseResult(event = ConnectionEvent.Unknown)
         }
+        val msgId = event.id?.takeIf { it.isNotBlank() && event.type !in HOST_FRAME_TYPES }
+        return parsed.copy(
+            msgId = msgId,
+            dedupeKey = if (msgId != null && parsed.isDroppableRepeat()) frameKey(event) else null
+        )
     }
+
+    /**
+     * True when what the client does with this frame depends only on the frame's own content, so an
+     * exact repeat can be dropped. A `session_sync` is excluded: it carries the whole session, a
+     * replayed one carries the session as it is now (so it never equals the original), and receiving
+     * it twice is already safe because a reply's id comes from its content.
+     */
+    private fun ParseResult.isDroppableRepeat(): Boolean = when (val e = event) {
+        is ConnectionEvent.ChatItemReceived -> !e.fromSessionSnapshot
+        is ConnectionEvent.ChatItemUpdated -> true
+        else -> false
+    }
+
+    /**
+     * What identifies a frame to the client: every field it decodes, except `session_id`. Not the raw
+     * text: the relay stamps a `conn_id` on each frame per client socket (and a `session_id` besides),
+     * so the same logged event arrives as different text after a reconnect. `conn_id` is not a field
+     * the client decodes, so it drops out of this; `session_id` is cleared here.
+     */
+    private fun frameKey(event: ServerEvent): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(event.copy(sessionId = null).toString().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     /**
      * Convert a `session_sync` server event into one or more
      * [ConnectionEvent.ChatItemReceived] events — one per assistant
      * message in the session's `messages` array.
      *
-     * Position-based IDs ("session-msg-{index}") keep repeated syncs
-     * idempotent — the [ai.openonion.oochat.domain.model.dedupeUI]
-     * helper in ChatViewModel collapses duplicates by id.
+     * Content-derived IDs ([ai.openonion.oochat.domain.model.stableAssistantId])
+     * keep repeated syncs idempotent — the
+     * [ai.openonion.oochat.domain.model.dedupeUI] helper in ChatViewModel
+     * collapses duplicates by id.
      *
      * Only `role == "assistant"` messages are surfaced as chat items.
      * User messages are skipped (the local [ChatItem.User] is the
@@ -580,7 +660,26 @@ object ProtocolParser {
      */
     const val MAX_DASHBOARD_HTML_CHARS = 2 * 1024 * 1024
 
+    /** `code` of the ERROR frame a host sends when a running turn refuses runtime input. */
+    const val RUNTIME_INPUT_REJECTED = "RUNTIME_INPUT_REJECTED"
+
     private fun generateId(): String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * "oip/0.2" from a Host descriptor, or null when it names no version.
+     *
+     * Peer-controlled text bound for app.log and for an error the app words
+     * as its own, so only a short protocol token is echoed; anything else
+     * reads as undeclared. The Host's own compatibility log refuses to copy
+     * these strings for the same reason (protocol.py).
+     */
+    private fun describeProtocol(descriptor: JsonElement?): String? {
+        val fields = descriptor as? JsonObject ?: return null
+        val version = (fields["version"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val name = (fields["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: OipProtocol.NAME
+        if (!PROTOCOL_TOKEN.matches(name) || !PROTOCOL_TOKEN.matches(version)) return null
+        return "$name/$version"
+    }
 
     /**
      * Wire skills to domain skills. Nameless entries are dropped — there is
@@ -608,6 +707,9 @@ object ProtocolParser {
 
     /** What the host emits for a skill whose file has no summary — see [toAgentSkills]. */
     private const val NO_DESCRIPTION_PLACEHOLDER = "No description"
+
+    /** A protocol name or version short and plain enough to echo — see [describeProtocol]. */
+    private val PROTOCOL_TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,31}")
 
     /**
      * Drops the entries of a nested wire list that carry nothing renderable,
@@ -653,7 +755,15 @@ data class ParseResult(
     val updateSession: ai.openonion.oochat.data.protocol.SessionState? = null,
     val updateSessionId: String? = null,
     val setWaiting: Boolean = false,
-    val extraEvents: List<ConnectionEvent> = emptyList()
+    val extraEvents: List<ConnectionEvent> = emptyList(),
+    /**
+     * The Host's id for this frame when it is an entry in the agent log, which is what a later CONNECT
+     * names in `last_msg_id`. Not the [ChatItem] id: the parser derives that from content for several
+     * frames.
+     */
+    val msgId: String? = null,
+    /** Set when an exact repeat of this frame can be dropped; see [ProtocolParser]'s `frameKey`. */
+    val dedupeKey: String? = null
 )
 
 /**
@@ -707,7 +817,38 @@ sealed class ConnectionEvent {
      * values come from.
      */
     data class SessionStatusReceived(val sessionId: String?, val status: String) : ConnectionEvent()
+
+    /**
+     * `RUNTIME_INPUT_ACK` — the host accepted an INPUT that arrived while the
+     * agent was running and queued it for the running turn.
+     *
+     * [hostInputId] is the host's own id for the queued item. It is **not**
+     * the `input_id` of the INPUT that was sent, so it cannot be matched to a
+     * message by value. The host answers each runtime INPUT immediately and in
+     * the order received, so the oldest message still awaiting an answer is
+     * the one this acknowledges.
+     */
+    data class RuntimeInputAcknowledged(val sessionId: String?, val hostInputId: String?) : ConnectionEvent()
+
+    /**
+     * `ERROR` with `code: RUNTIME_INPUT_REJECTED` — the running turn is not
+     * taking runtime input (it is sealed, or the agent lacks the
+     * `runtime_input` plugin). Nothing was queued. [retryable] is the host's
+     * word that the same text will be accepted as an ordinary INPUT once the
+     * turn's OUTPUT lands. Answers the oldest awaiting message, like
+     * [RuntimeInputAcknowledged].
+     */
+    data class RuntimeInputRejected(val sessionId: String?, val retryable: Boolean, val message: String?) : ConnectionEvent()
     data class ConnectionError(val message: String) : ConnectionEvent()
+    /**
+     * The Host rejected this client's OIP version (ERROR code -32010). Final
+     * for the connection: retrying sends the same descriptor and is refused
+     * the same way, so nothing reconnects automatically after it.
+     *
+     * @param hostProtocol the version the Host speaks, as "oip/0.2", or null
+     *   when its descriptor was missing or unreadable.
+     */
+    data class ProtocolRejected(val hostProtocol: String?) : ConnectionEvent()
     data object Disconnected : ConnectionEvent()
     data object Reconnecting : ConnectionEvent()
     data object Waiting : ConnectionEvent()
