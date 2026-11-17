@@ -1,7 +1,6 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.ChatFileAttachment
-import ai.openonion.oochat.ui.components.AssistantAvatar
 import ai.openonion.oochat.ui.theme.MessageBubbleToken
 import ai.openonion.oochat.ui.theme.spacing
 import androidx.compose.animation.AnimatedVisibility
@@ -17,12 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
@@ -56,7 +53,7 @@ internal fun Modifier.bubbleMaxWidth(fraction: Float, max: Dp): Modifier = layou
  * - Block-level Markdown rendering (headings, lists, code blocks, blockquotes,
  *   horizontal rules) plus inline styling (bold/italic/code/links)
  * - Image grid attachments (1 image = 4:3, 2+ images = 2-column 1:1 grid)
- * - Assistant avatar with icon
+ * - Agent replies as plain text, no bubble or avatar
  * - Timestamp display
  * - Smooth entrance animation
  *
@@ -75,9 +72,10 @@ fun MessageBubble(
     timestamp: String? = null,
     renderMarkdown: Boolean = true,
     // False for a message that continues a run from the same sender — see
-    // MessageListScreen's grouping. The avatar and name only mark where a run
-    // starts; repeating them on every bubble is the clutter chat UIs group away.
-    showSender: Boolean = true,
+    // MessageListScreen's grouping. Nothing reads it since the agent's avatar
+    // and name were dropped for plain-text replies (W16AAPPLE-112); kept so
+    // callers need not change.
+    @Suppress("UNUSED_PARAMETER") showSender: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val hasText = content.isNotBlank()
@@ -94,29 +92,14 @@ fun MessageBubble(
                 .fillMaxWidth()
                 .padding(
                     start = if (isUser) 48.dp else MaterialTheme.spacing.lg,
-                    end = if (isUser) MaterialTheme.spacing.lg else 48.dp,
+                    // A reply is plain text across the column, not a bubble
+                    // held back from the far edge.
+                    end = MaterialTheme.spacing.lg,
                     top = MaterialTheme.spacing.xxs,
                     bottom = MaterialTheme.spacing.xxs
                 ),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
-            // Assistant avatar and name
-            if (!isUser && showSender) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs2)
-                ) {
-                    AssistantAvatar()
-                    Text(
-                        text = "Agent",
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                Spacer(modifier = Modifier.height(MaterialTheme.spacing.xs))
-            }
-
             if (hasImages) {
                 ImageGridBubble(images = images.orEmpty(), isUser = isUser)
                 if (hasFiles || hasText) Spacer(modifier = Modifier.height(MaterialTheme.spacing.xs))

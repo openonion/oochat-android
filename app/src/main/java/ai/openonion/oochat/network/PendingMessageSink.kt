@@ -15,26 +15,31 @@ data class QueuedMessage(val prompt: String, val images: List<String>?, val file
 interface PendingMessageSink {
     /**
      * Enqueues a message for [agentAddress], tagged with [sessionId] — the
-     * conversation's session it was written in. Implementations bound their
-     * own size by both row count and total attachment bytes; see
+     * server session, or local conversation fallback, it was written in.
+     * Implementations bound their own size by both row count and total
+     * attachment bytes; see
      * [AgentConnection.MAX_PENDING_MESSAGES] and
      * [AgentConnection.MAX_PENDING_ATTACHMENT_BYTES].
      */
     fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>? = null)
 
     /**
-     * Removes the messages for [agentAddress] that belong on [sessionId],
-     * oldest first — its own, plus any queued before there was a session to
-     * name — handing each to [send] as it is read. A message queued for a
-     * different conversation stays put: flushing it here would send it as
-     * this conversation.
+     * Removes the messages for [agentAddress] that belong on [sessionId] or
+     * [conversationId], oldest first — its own, plus any queued before there
+     * was a session to name — handing each to [send] as it is read. A message
+     * queued for a different conversation stays put: flushing it here would
+     * send it as this conversation.
      *
-     * A callback rather than a returned list, and that is the point: an
-     * attachment is base64, so materializing the whole queue at once meant
-     * every queued attachment resident simultaneously. One message is decoded
-     * at a time and is free again as soon as it has been sent.
+     * The callback returns false when the message was not accepted. The sink
+     * keeps that message queued and stops, so a socket replacement cannot
+     * lose it.
      */
-    fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit)
+    fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Boolean
+    )
 
     /** Discards every message queued for [agentAddress] without sending them. */
     fun clear(agentAddress: String)
@@ -50,6 +55,7 @@ class InMemoryPendingMessageSink : PendingMessageSink {
 
     private val lock = Any()
     private val entries = mutableListOf<Entry>()
+    private val clearGenerations = mutableMapOf<String, Long>()
 
     override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?) {
         val incoming = attachmentBytes(images, files)
@@ -70,16 +76,28 @@ class InMemoryPendingMessageSink : PendingMessageSink {
         }
     }
 
-    override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) {
+    override fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Boolean
+    ) {
         while (true) {
-            val next = synchronized(lock) {
+            val (next, drainGeneration) = synchronized(lock) {
                 val entry = entries.firstOrNull {
-                    it.agentAddress == agentAddress && (it.sessionId == null || it.sessionId == sessionId)
+                    it.agentAddress == agentAddress && (it.sessionId == null ||
+                        it.sessionId == sessionId || it.sessionId == conversationId)
                 } ?: return
                 entries.remove(entry)
-                entry.message
+                entry to (clearGenerations[agentAddress] ?: 0L)
             }
-            send(next)
+            val accepted = runCatching { send(next.message) }.getOrDefault(false)
+            if (!accepted) {
+                synchronized(lock) {
+                    if ((clearGenerations[agentAddress] ?: 0L) == drainGeneration) entries.add(0, next)
+                }
+                return
+            }
         }
     }
 
@@ -92,6 +110,9 @@ class InMemoryPendingMessageSink : PendingMessageSink {
             files.orEmpty().sumOf { it.name.length.toLong() + it.data.length.toLong() }
 
     override fun clear(agentAddress: String) {
-        synchronized(lock) { entries.removeAll { it.agentAddress == agentAddress } }
+        synchronized(lock) {
+            clearGenerations[agentAddress] = (clearGenerations[agentAddress] ?: 0L) + 1
+            entries.removeAll { it.agentAddress == agentAddress }
+        }
     }
 }

@@ -51,7 +51,7 @@ class TouchTargetComposeTest {
     fun `InputBar attachment menu button meets 48dp`() {
         composeRule.setContent {
             ConnectOnionTheme {
-                InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+                InputBar(isConnected = true, onSend = { _, _, _ -> })
             }
         }
 
@@ -64,7 +64,7 @@ class TouchTargetComposeTest {
     fun `InputBar mic button meets 48dp`() {
         composeRule.setContent {
             ConnectOnionTheme {
-                InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+                InputBar(isConnected = true, onSend = { _, _, _ -> })
             }
         }
 
@@ -83,7 +83,6 @@ class TouchTargetComposeTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                     onSend = { _, _, _ -> }
                 )

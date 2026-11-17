@@ -14,7 +14,6 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -60,7 +59,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = true,
                         onSend = { text, _, _ -> sent += text },
                         onStop = { stops++ }
@@ -76,7 +74,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         onSend = { text, _, _ -> sent += text },
                         onStop = { stops++ }
                     )
@@ -106,10 +103,13 @@ class InputBarInterjectComposeTest {
     }
 
     @Test
-    fun `an empty field is not sendable mid-run either`() {
+    fun `an empty field mid-run offers only Stop`() {
         workingBar()
 
-        composeRule.onNodeWithContentDescription("Send").assertIsNotEnabled().performClick()
+        // Stop takes the trailing circle (W16AAPPLE-112); Send joins it once
+        // there is a follow-up to queue.
+        composeRule.onNodeWithContentDescription("Send").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Stop").assertIsDisplayed()
 
         assertEquals(emptyList<String>(), sent)
     }
@@ -175,7 +175,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = working,
                         onSend = { text, _, _ -> sent += text }
                     )
@@ -208,7 +207,6 @@ class InputBarInterjectComposeTest {
                     Column {
                         InputBar(
                             isConnected = true,
-                            isSending = false,
                             onSend = { text, _, _ -> sent += text }
                         )
                     }
@@ -232,13 +230,11 @@ class InputBarInterjectComposeTest {
     }
 
     @Test
-    fun `stop is a labelled chip on the shelf, not a glyph in the send slot`() {
+    fun `stop is the composer's trailing circle while the agent works`() {
         workingBar()
 
-        // The chip carries its own label, so the icon inside it is decorative —
-        // a node described "Stop" would mean an icon-only pill button is back.
-        composeRule.onNodeWithContentDescription("Stop").assertDoesNotExist()
-        composeRule.onNodeWithText("Stop").assertIsDisplayed().assertIsEnabled().performClick()
+        // An icon-only circle, so the icon carries the label TalkBack reads.
+        composeRule.onNodeWithContentDescription("Stop").assertIsDisplayed().assertIsEnabled().performClick()
 
         assertEquals(1, stops)
     }
@@ -247,7 +243,7 @@ class InputBarInterjectComposeTest {
     fun `stop is only there while there is a run to stop`() {
         idleBar()
 
-        composeRule.onNodeWithText("Stop").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Stop").assertDoesNotExist()
         composeRule.onNodeWithContentDescription("Send").assertIsDisplayed()
     }
 
@@ -258,7 +254,6 @@ class InputBarInterjectComposeTest {
                 Column {
                     InputBar(
                         isConnected = true,
-                        isSending = false,
                         isAgentWorking = true,
                         voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                         onSend = { _, _, _ -> },
@@ -272,8 +267,8 @@ class InputBarInterjectComposeTest {
         // square glyph mid-dictation. That glyph is gone — finishing moved onto
         // the waveform — so the interrupt is available at the one moment the
         // user is dictating an interjection to a runaway agent.
-        composeRule.onNodeWithText("Stop").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithText("Stop").performClick()
+        composeRule.onNodeWithContentDescription("Stop").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithContentDescription("Stop").performClick()
 
         assertEquals(1, stops)
     }
