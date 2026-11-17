@@ -60,6 +60,15 @@ class InMemoryPendingMessageSinkTest {
     }
 
     @Test
+    fun `a rejected send stays queued`() {
+        sink.enqueue("0xagent", SESSION, "retry me", null)
+
+        sink.drain("0xagent", SESSION, null) { false }
+
+        assertEquals(listOf("retry me"), sink.drainAll("0xagent", SESSION).map { it.prompt })
+    }
+
+    @Test
     fun `clear discards queued messages for one address without touching others`() {
         sink.enqueue("0xagentA", "for A")
         sink.enqueue("0xagentB", "for B")
@@ -117,8 +126,13 @@ class InMemoryPendingMessageSinkTest {
      * caller deliberately never does this — see the interface's own doc — but
      * order and contents are what these tests are about.
      */
-    private fun PendingMessageSink.drainAll(agentAddress: String, sessionId: String?): List<QueuedMessage> =
-        buildList { drain(agentAddress, sessionId) { add(it) } }
+    private fun PendingMessageSink.drainAll(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String? = null
+    ): List<QueuedMessage> = buildList {
+        drain(agentAddress, sessionId, conversationId) { add(it) }
+    }
 
     @Test
     fun `enqueue past the attachment byte budget evicts the oldest, not just past the row cap`() {
@@ -165,5 +179,15 @@ class InMemoryPendingMessageSinkTest {
         sink.enqueue("0xagent", "queued offline", sessionId = null)
 
         assertEquals(listOf("queued offline"), sink.drainAll("0xagent", "sess-A").map { it.prompt })
+    }
+
+    @Test
+    fun `a conversation-tagged message drains into a fresh Host session`() {
+        sink.enqueue("0xagent", "conversation-A", "queued after the old session dropped", null)
+
+        assertEquals(
+            listOf("queued after the old session dropped"),
+            sink.drainAll("0xagent", "fresh-host-session", "conversation-A").map { it.prompt }
+        )
     }
 }

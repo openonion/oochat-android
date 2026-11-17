@@ -12,23 +12,24 @@ import androidx.compose.ui.graphics.Color
  * blocked, eval pass/fail, compaction, etc). Mirrors [SpacingTokens] /
  * [LocalSpacing]'s composition-local pattern.
  *
- * The defaults are the dark-theme set; [DarkStatusColors] / [LightStatusColors]
- * name the two instances the theme actually provides. `warning` matches
- * [ai.openonion.oochat.ui.components.ConnectionBanner]'s existing amber
- * (`#CA8A04`) so the two don't visually diverge.
+ * The palette is green on warm greys with no other accent (W16AAPPLE-49), so a
+ * success is the brand green and a warning is a warm grey: what makes a
+ * warning card read as one is its icon and title, not a hue. Errors keep the
+ * theme's red. The defaults are the dark-theme set; [DarkStatusColors] /
+ * [LightStatusColors] name the two instances the theme actually provides.
  *
  * Access from composables via `MaterialTheme.statusColors.warning` etc.
  */
 @Immutable
 data class StatusColors(
-    val warning: Color = Color(0xFFCA8A04),
-    val warningContainer: Color = Color(0xFFFACC15).copy(alpha = 0.12f),
-    val success: Color = Color(0xFF16A34A),
-    val successContainer: Color = Color(0xFF22C55E).copy(alpha = 0.12f),
-    // Brighter dot variants for the tiny connection-status indicator, where
-    // the text-weight warning/success colors read too dark at 8dp.
-    val successDot: Color = Color(0xFF4ADE80),
-    val warningDot: Color = Color(0xFFFACC15),
+    val warning: Color = Stone300,
+    val warningContainer: Color = Stone500.copy(alpha = 0.16f),
+    val success: Color = Green500,
+    val successContainer: Color = Green500.copy(alpha = 0.12f),
+    // The tiny connection-status indicator, where the text-weight success
+    // colour reads too dark at 8dp. A connection still on its way is this same
+    // dot pulsing, since the palette has no second accent to spare for it.
+    val successDot: Color = Green500,
     // The logs console background. Same value in both instances below — it's
     // a monospace panel meant to stay dark regardless of app theme, tuned to
     // surfaceContainerLowestDark rather than a neutral black so it reads as
@@ -36,25 +37,23 @@ data class StatusColors(
     val logSurface: Color = surfaceContainerLowestDark
 )
 
-/** The original Figma values; 4.9–12.1:1 against the dark surfaces. */
+/** Green 500 and the pale warm greys, 7.7:1 and up against the dark surfaces. */
 val DarkStatusColors = StatusColors()
 
 /**
- * The same roles re-toned for the light surfaces, where the dark-tuned values
- * collapsed (successDot measured 1.65:1, warningDot 1.45:1). The text roles
- * clear 4.5:1 both on `surface` and on their own container, and the dots clear
- * WCAG 1.4.11's 3.0:1. Container alpha is above dark's 0.12 because a bright
- * tint over a near-white surface barely registers at that strength (1.05:1
- * against surface, now 1.23:1), and for the same reason the tint base is the
- * darker text amber/green rather than the dot colors.
+ * The same roles re-toned for the light surfaces, where Green 500 is only
+ * 2.3:1: the text roles take the dark end of each scale and clear 4.5:1 both
+ * on `surface` and on their own container, and the dot takes Green 600, which
+ * clears WCAG 1.4.11's 3.0:1. The containers are tints over the surface, so
+ * they are stronger than dark's for the same reason as before: a pale tint
+ * over a near-white surface barely registers.
  */
 val LightStatusColors = StatusColors(
-    warning = Color(0xFF7A5200),
-    warningContainer = Color(0xFFCA8A04).copy(alpha = 0.22f),
-    success = Color(0xFF0C6A2F),
-    successContainer = Color(0xFF16A34A).copy(alpha = 0.22f),
-    successDot = Color(0xFF157F3C),
-    warningDot = Color(0xFFA06E00)
+    warning = Stone700,
+    warningContainer = Stone500.copy(alpha = 0.16f),
+    success = Green900,
+    successContainer = Green500.copy(alpha = 0.16f),
+    successDot = Green600
 )
 
 val LocalStatusColors = staticCompositionLocalOf { StatusColors() }

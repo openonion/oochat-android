@@ -41,6 +41,19 @@ class TurnFooterFormattingTest {
         assertEquals("$12.30", formatCostUsd(12.3))
     }
 
+    @Test
+    fun `a cost takes a decimal point whatever the phone's locale`() {
+        // A German phone read "$0,0071" under each turn and in the usage bar (W16AAPPLE-67).
+        val original = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.GERMANY)
+        try {
+            assertEquals("$0.0071", formatCostUsd(0.00711))
+            assertEquals("$12.30", formatCostUsd(12.3))
+        } finally {
+            java.util.Locale.setDefault(original)
+        }
+    }
+
     private fun thinking(
         status: ThinkingStatus = ThinkingStatus.DONE,
         model: String? = "gemini-2.5-flash",

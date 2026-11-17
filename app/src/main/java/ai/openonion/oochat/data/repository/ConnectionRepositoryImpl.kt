@@ -2,22 +2,31 @@ package ai.openonion.oochat.data.repository
 
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.protocol.FileAttachment
+import ai.openonion.oochat.data.protocol.OipProtocol
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.toDomain
 import ai.openonion.oochat.domain.model.AgentLiveProfile
-import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
+import ai.openonion.oochat.domain.model.HostModeState
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ProviderInput
+import ai.openonion.oochat.domain.model.RemOutcome
+import ai.openonion.oochat.domain.model.ServerSessionStatus
 import ai.openonion.oochat.domain.model.ServerTranscriptEntry
+import ai.openonion.oochat.domain.model.SessionModes
 import ai.openonion.oochat.domain.usecase.ServerErrorText
 import ai.openonion.oochat.network.AgentConnection
-import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.ConnectionEvent
 import ai.openonion.oochat.network.InMemoryPendingMessageSink
 import ai.openonion.oochat.network.PendingMessageSink
+import ai.openonion.oochat.network.ProtocolParser
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
 import ai.openonion.oochat.util.runCatchingCancellable
@@ -36,12 +45,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /**
  * Implementation of ConnectionRepository.
@@ -61,12 +74,11 @@ class ConnectionRepositoryImpl(
     // Defaults to in-memory, matching the pre-outbox behaviour, so existing tests construct this unchanged.
     private val pendingMessageSink: PendingMessageSink = InMemoryPendingMessageSink(),
     // Factory, not a shared instance, so tests can inject an AgentConnection backed by a fake WebSocketFactory (see AgentConnectionRobolectricTest) instead of opening a real WebSocket.
+    // Whether the app is on screen; see AgentConnection's isAppVisible.
+    private val isAppVisible: () -> Boolean = { true },
     private val agentConnectionFactory: (KeyManager, String) -> AgentConnection = { km, url ->
-        AgentConnection(km, url, pendingMessageSink = pendingMessageSink)
-    },
-    // Reads the relay's directory for the agent's published skills. Defaults to
-    // null so the existing tests construct this unchanged and make no HTTP call.
-    private val agentDiscovery: AgentDiscoveryService? = null
+        AgentConnection(km, url, pendingMessageSink = pendingMessageSink, isAppVisible = isAppVisible)
+    }
 ) : ConnectionRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -103,11 +115,14 @@ class ConnectionRepositoryImpl(
      * the newest session, and leaving the older one queued would let it land
      * afterwards and overwrite this one.
      */
-    private suspend fun saveSessionForCurrentConversation(session: SessionState) {
-        val conversationId = currentConversationId ?: return
+    private suspend fun saveSessionForConversation(conversationId: String?, session: SessionState) {
+        conversationId ?: return
         synchronized(sessionSaveLock) { pendingSessionSave = null }
         sessionWriteMutex.withLock { sessionStore?.saveSession(conversationId, session) }
     }
+
+    private suspend fun saveSessionForCurrentConversation(session: SessionState) =
+        saveSessionForConversation(currentConversationId, session)
 
     /**
      * Queue [session] to be persisted within [SESSION_SAVE_WINDOW_MS], keyed
@@ -115,8 +130,8 @@ class ConnectionRepositoryImpl(
      * it. Conflating, not resetting: a continuous stream of frames still gets
      * a write every window rather than being starved to the end of the turn.
      */
-    private fun scheduleSessionSave(session: SessionState) {
-        val conversationId = currentConversationId ?: return
+    private fun scheduleSessionSave(conversationId: String?, session: SessionState) {
+        conversationId ?: return
         if (sessionStore == null) return
         synchronized(sessionSaveLock) {
             pendingSessionSave = conversationId to session
@@ -139,7 +154,8 @@ class ConnectionRepositoryImpl(
     }
 
     // Reset at the top of every connect() call — distinguishes a genuine connect-time failure from a business-logic ERROR on an already-established session. See the ConnectionEvent.ConnectionError branch below for the full rationale.
-    private var hasConnectedThisAttempt = false
+    @Volatile override var hasConnectedThisAttempt = false
+        private set
 
     // Guards the teardown-then-rebuild section of connect() below — without
     // it, two near-simultaneous calls (e.g. a double-tapped Reconnect banner
@@ -176,6 +192,16 @@ class ConnectionRepositoryImpl(
     private val _modePending = MutableStateFlow(false)
     override val modePending: StateFlow<Boolean> = _modePending.asStateFlow()
 
+    // Who owns the mode and what it may be; see ConnectionRepository.sessionModes.
+    // Reset in connect(), kept across switchSessionTo() (same Host).
+    private val _sessionModes = MutableStateFlow(SessionModes.LEGACY)
+    override val sessionModes: StateFlow<SessionModes> = _sessionModes.asStateFlow()
+
+    // Display-only twin of ConnectionState.Connected.status that is never
+    // released; see ConnectionRepository.hostSessionStatus.
+    private val _hostSessionStatus = MutableStateFlow(ServerSessionStatus.UNKNOWN)
+    override val hostSessionStatus: StateFlow<ServerSessionStatus> = _hostSessionStatus.asStateFlow()
+
     // Same lifetime and the same reset as _agentProfile above — a Home page
     // and the skill list its buttons are validated against have to belong to
     // the same connection, or a button would be checked against the wrong
@@ -183,9 +209,18 @@ class ConnectionRepositoryImpl(
     private val _dashboardHtml = MutableStateFlow<String?>(null)
     override val dashboardHtml: StateFlow<String?> = _dashboardHtml.asStateFlow()
 
+    private val _controlCenterApp = MutableStateFlow<ControlCenterApp?>(null)
+    override val controlCenterApp: StateFlow<ControlCenterApp?> = _controlCenterApp.asStateFlow()
+
+    // Server-session state like the mode chip, with the same resets: cleared
+    // on every connect and conversation switch, so one conversation's Todo
+    // List never shows over another's.
+    private val _plan = MutableStateFlow<List<PlanEntry>>(emptyList())
+    override val plan: StateFlow<List<PlanEntry>> = _plan.asStateFlow()
+
     // Long-lived broadcast bus for chat events. ChatViewModel.init subscribes to observeEvents() BEFORE connect() establishes the connection, so this hot bus survives the "not yet connected" window and forwards every event once a connection exists.
     private val _chatEvents = MutableSharedFlow<ChatEvent>(
-        extraBufferCapacity = 64,
+        extraBufferCapacity = AgentConnection.EVENT_BUFFER_CAPACITY,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
@@ -193,7 +228,21 @@ class ConnectionRepositoryImpl(
     // connection a ViewModel routinely subscribes *after* CONNECTED landed,
     // and this is what conversation-resume reconciles against. Replay is
     // safe — merging a transcript the local copy already has is a no-op.
-    private val _serverTranscript = MutableStateFlow<ChatEvent.ServerTranscriptReceived?>(null)
+    // Null between conversations, so a collector that runs late sees the latest
+    // state and never a transcript for a conversation it has since left.
+    private val _serverTranscript = MutableStateFlow<TranscriptDelivery?>(null)
+
+    /**
+     * One CONNECTED's transcript. A plain class, so equality is identity: a
+     * StateFlow skips a value equal to the last one its collector saw, and a
+     * conversation's transcript replayed after switching away and back is an
+     * equal value. Unwrapped, that second replay was lost whenever the
+     * collector did not run while the value was null in between (W16AAPPLE-104).
+     * So each CONNECTED of the same conversation is now merged again, where an
+     * equal one used to be skipped: harmless, as merging entries already in
+     * Room adds nothing, but it costs one database read per reconnect.
+     */
+    private class TranscriptDelivery(val event: ChatEvent.ServerTranscriptReceived)
 
     private var eventCollectionJob: Job? = null
 
@@ -221,27 +270,34 @@ class ConnectionRepositoryImpl(
                     is ConnectionEvent.Connected -> {
                         FileLogger.i(LogTags.CONN_REPO, "→ Connected: ${event.address.take(16)}")
                         hasConnectedThisAttempt = true
-                        fetchPublishedProfile()
+                        // Before the state below: a screen reacting to Connected
+                        // must already see the Host's mode, not the reset default.
+                        event.modes?.let { applyHostModes(it) }
+                        _hostSessionStatus.value = event.status
                         _connectionState.value = ConnectionState.Connected(
                             address = event.address,
-                            session = event.session?.toDomain()
+                            session = event.session?.toDomain(),
+                            status = event.status,
+                            serverNewer = event.serverNewer
                         )
                         event.session?.let { session ->
                             // Inline, not debounced: CONNECTED is once per
                             // connection and carries the id resume depends on,
                             // so it is worth the one write it costs.
-                            saveSessionForCurrentConversation(session)
+                            saveSessionForConversation(event.conversationId ?: currentConversationId, session)
                             // Wire -> domain mapping of the replayed transcript
                             // happens here, at the same boundary toDomain() sits
                             // on. Assistant entries only; the session is this
                             // conversation's alone, so the whole transcript
                             // belongs to it and needs no further attribution.
-                            _serverTranscript.value = ChatEvent.ServerTranscriptReceived(
-                                entries = session.messages.orEmpty().mapNotNull { msg ->
-                                    msg.content?.takeIf { msg.role.equals("assistant", ignoreCase = true) }
-                                        ?.let { ServerTranscriptEntry(content = it) }
-                                },
-                                turn = session.turn
+                            _serverTranscript.value = TranscriptDelivery(
+                                ChatEvent.ServerTranscriptReceived(
+                                    entries = session.messages.orEmpty().mapNotNull { msg ->
+                                        msg.content?.takeIf { msg.role.equals("assistant", ignoreCase = true) }
+                                            ?.let { ServerTranscriptEntry(content = it) }
+                                    },
+                                    turn = session.turn
+                                )
                             )
                         }
                     }
@@ -249,7 +305,13 @@ class ConnectionRepositoryImpl(
                         // Post-Connected ERROR is non-fatal (matches web client): a business-logic rejection like "Insufficient ConnectOnion Credits"; the server keeps the socket open (verified via PING/PONG). Pre-Connected ERROR must flip state to Error, or LoadingScreen hangs on "Connecting…".
                         // Logs keep the server's raw wording; only what the user reads goes through the mapper.
                         val shown = ServerErrorText.humanize(event.message)
-                        if (hasConnectedThisAttempt) {
+                        if (hasConnectedThisAttempt && ServerErrorText.isAgentOffline(event.message)) {
+                            // The relay answering a live socket after the Host dropped off
+                            // (W16AAPPLE-93). It drops the socket straight after, and that
+                            // reconnect is the status the user sees, so this is no reply:
+                            // the web client never adds an ERROR to the conversation either.
+                            FileLogger.eRepeating(LogTags.CONN_REPO, "→ Error (agent offline, reconnect follows): ${event.message}")
+                        } else if (hasConnectedThisAttempt) {
                             FileLogger.eRepeating(LogTags.CONN_REPO, "→ Error (non-fatal, socket stays open): ${event.message}")
                             // The two windows a mode_change frame can miss its
                             // mark (session.py's active_io gate, or the
@@ -257,20 +319,51 @@ class ConnectionRepositoryImpl(
                             // naming mode_change — see ConnectionRepository.modePending's
                             // doc. Roll the chip back rather than leave it
                             // claiming a mode the agent never adopted.
-                            if (_modePending.value && event.message.contains("mode_change")) {
+                            // A Host that manages modes answers at once, with one of
+                            // the refusals ServerErrorText.isModeRefusal names (busy,
+                            // unavailable mode). Either way the chip goes back.
+                            if (_modePending.value && ServerErrorText.isModeRefusal(event.message)) {
                                 _approvalMode.value = confirmedApprovalMode
                                 _modePending.value = false
+                            } else if (_hostSessionStatus.value == ServerSessionStatus.RUNNING) {
+                                settleRunningStatusAfterError(event.message)
                             }
                             _chatEvents.tryEmit(ChatEvent.ConnectionErrorOccurred(shown))
                         } else {
                             // Rate-limited: the reconnect ladder replays the
                             // same rejection once per rung.
                             FileLogger.eRepeating(LogTags.CONN_REPO, "→ Error (never connected this attempt): ${event.message}")
+                            dropAdmittedState()
                             _connectionState.value = ConnectionState.Error(message = shown)
                         }
                     }
+                    is ConnectionEvent.ProtocolRejected -> {
+                        // Fatal whether or not this attempt connected before:
+                        // an auto-reconnect after a Host upgrade can be the
+                        // CONNECT that is refused. retryable = false is what
+                        // stops ConnectToAgentUseCase spending its second attempt.
+                        FileLogger.e(LogTags.CONN_REPO, "→ Error (OIP version rejected, host=${event.hostProtocol ?: "<undeclared>"})")
+                        dropAdmittedState()
+                        _connectionState.value = ConnectionState.Error(
+                            message = ServerErrorText.incompatibleProtocol(
+                                hostProtocol = event.hostProtocol,
+                                clientProtocol = "${OipProtocol.NAME}/${OipProtocol.VERSION}"
+                            ),
+                            retryable = false
+                        )
+                    }
+                    is ConnectionEvent.ReconnectRefused -> {
+                        // Fatal although this attempt connected before: it is
+                        // the reconnect that was refused, so the session it
+                        // was resuming is gone and only the user can try again
+                        // (W16AAPPLE-82). Retryable, so Reconnect is offered.
+                        FileLogger.e(LogTags.CONN_REPO, "→ Error (reconnect refused): ${event.message}")
+                        dropAdmittedState()
+                        _connectionState.value = ConnectionState.Error(message = ServerErrorText.humanize(event.message))
+                    }
                     is ConnectionEvent.Disconnected -> {
                         FileLogger.i(LogTags.CONN_REPO, "→ Disconnected")
+                        dropAdmittedState()
                         _connectionState.value = ConnectionState.Disconnected
                     }
                     is ConnectionEvent.Reconnecting -> {
@@ -283,19 +376,35 @@ class ConnectionRepositoryImpl(
                         // session, and each one is the whole transcript again.
                         // Conflated rather than written per frame — see the
                         // session-persistence block above.
-                        scheduleSessionSave(event.session)
+                        scheduleSessionSave(event.conversationId ?: currentConversationId, event.session)
+                        // CONNECTED, session_sync and OUTPUT all carry the
+                        // Host's plan, which is how a reconnect gets it back
+                        // without waiting for the next `plan` frame. A snapshot
+                        // with no plan, or a malformed one, keeps what is shown.
+                        ProtocolParser.decodePlan(event.session.plan)?.let { _plan.value = it }
+                    }
+                    is ConnectionEvent.PlanUpdated -> {
+                        _plan.value = event.entries
                     }
                     is ConnectionEvent.ChatItemReceived -> {
+                        // The Host is asking for an invite code again, so this
+                        // user is not admitted (any more): an operator who has
+                        // just blocked them gates the reconnect this way.
+                        if (event.item is ChatItem.OnboardRequired) dropAdmittedState()
                         // The one frame that is both a chat entry and connection
                         // state. Applied for replayed snapshot items too: the
                         // server's session mode survives a dropped socket, so
                         // the last mode_changed in a replayed transcript is the
                         // mode we are actually resuming into.
                         (event.item as? ChatItem.ModeChangedItem)?.let { changed ->
-                            ApprovalMode.fromWire(changed.mode)?.let {
-                                _approvalMode.value = it
-                                confirmedApprovalMode = it
+                            ApprovalMode.fromWire(changed.mode)?.let { mode ->
+                                _approvalMode.value = mode
+                                confirmedApprovalMode = mode
                                 _modePending.value = false
+                                // turns_left belongs to full access alone; any
+                                // other mode ends a budget the chip was showing.
+                                val turnsLeft = changed.turnsLeft?.takeIf { mode.isUnattended && it > 0 }
+                                _sessionModes.update { it.copy(turnsLeft = turnsLeft) }
                             }
                         }
                         _chatEvents.tryEmit(ChatEvent.ChatItemReceived(
@@ -308,10 +417,16 @@ class ConnectionRepositoryImpl(
                         _chatEvents.tryEmit(ChatEvent.ChatItemUpdated(event.item))
                     }
                     is ConnectionEvent.OutputReceived -> {
+                        // A finished turn ends whatever CONNECT said was running. Before the emit
+                        // below, not after it: a screen that sees the OUTPUT must not read "running".
+                        releaseSessionStatus()
+                        _hostSessionStatus.value = ServerSessionStatus.CONNECTED
                         // Inline for the same reason as CONNECTED: OUTPUT ends
                         // a turn, so it is the durable checkpoint worth paying
                         // a write for, and there is one per turn.
-                        event.session?.let { session -> saveSessionForCurrentConversation(session) }
+                        event.session?.let { session ->
+                            saveSessionForConversation(event.conversationId ?: currentConversationId, session)
+                        }
                         _chatEvents.tryEmit(ChatEvent.OutputReceived(event.result, event.session?.toDomain()))
                     }
                     is ConnectionEvent.Waiting -> {
@@ -319,14 +434,56 @@ class ConnectionRepositoryImpl(
                     }
                     is ConnectionEvent.AgentProfileReceived -> {
                         FileLogger.i(LogTags.CONN_REPO, "→ AgentProfile: model=${event.profile.model}, tools=${event.profile.tools.size}, skills=${event.profile.skills.size}")
-                        _agentProfile.value = event.profile
+                        // The only source of skills (W16AAPPLE-71). The Host sends this
+                        // only once CONNECT has passed its trust gate, so skills never
+                        // show before the user is let in. The relay's public profile
+                        // also lists skills but needs no admission, so it is not read.
+                        // Stamped with the address this connection dialled: the frame's
+                        // own is written by the agent, and older Hosts leave it out,
+                        // which would leave the agent screen waiting forever.
+                        _agentProfile.value = event.profile.copy(address = currentAgentAddress ?: event.profile.address)
                     }
                     is ConnectionEvent.DashboardSnapshotReceived -> {
                         FileLogger.i(LogTags.CONN_REPO, "→ DashboardSnapshot: ${event.html.length} chars")
                         _dashboardHtml.value = event.html
                     }
+                    is ConnectionEvent.ControlCenterAppReceived -> {
+                        FileLogger.i(LogTags.CONN_REPO, "ControlCenterApp: ${if (event.app != null) "published" else "none"}")
+                        _controlCenterApp.value = event.app
+                    }
+                    is ConnectionEvent.ControlCenterStateReceived -> {
+                        FileLogger.i(
+                            LogTags.CONN_REPO,
+                            "ControlCenterState: ${event.status}" +
+                                (event.errorCode?.let { " ($it: ${event.errorMessage.orEmpty()})" } ?: "")
+                        )
+                    }
                     is ConnectionEvent.SessionStatusReceived -> {
+                        // Shown only when it is about the session on screen. The Host echoes the
+                        // id it was asked about, so a reply to a query sent before a conversation
+                        // switch names the session that was left.
+                        val current = connection?.currentSession?.sessionId
+                        if (event.sessionId == null || event.sessionId == current) {
+                            _hostSessionStatus.value = ServerSessionStatus.fromWire(event.status)
+                        }
                         _chatEvents.tryEmit(ChatEvent.SessionStatusReceived(event.sessionId, event.status))
+                    }
+                    is ConnectionEvent.ModeBudgetChanged -> {
+                        if (event.mode == _approvalMode.value) {
+                            _sessionModes.update { it.copy(turnsLeft = event.turnsLeft?.takeIf { n -> n > 0 }) }
+                        }
+                    }
+                    is ConnectionEvent.RuntimeInputAcknowledged -> {
+                        _chatEvents.tryEmit(ChatEvent.RuntimeInputAcknowledged(event.sessionId))
+                    }
+                    is ConnectionEvent.AnswerRefused -> {
+                        _chatEvents.tryEmit(ChatEvent.AnswerRefused(event.requestId))
+                    }
+                    is ConnectionEvent.ProviderInputAcked -> {
+                        _chatEvents.tryEmit(ChatEvent.ProviderInputAcked(event.ack))
+                    }
+                    is ConnectionEvent.RuntimeInputRejected -> {
+                        _chatEvents.tryEmit(ChatEvent.RuntimeInputRejected(event.sessionId, event.retryable))
                     }
                     else -> { }
                 }
@@ -339,15 +496,30 @@ class ConnectionRepositoryImpl(
     }
 
     override fun observeEvents(): Flow<ChatEvent> =
-        merge(_chatEvents.asSharedFlow(), _serverTranscript.filterNotNull())
+        merge(_chatEvents.asSharedFlow(), _serverTranscript.filterNotNull().map { it.event })
 
-    override fun releaseServerTranscript() {
+    override fun releaseServerTranscript(merged: ChatEvent.ServerTranscriptReceived) {
         // The whole transcript, held only so a subscriber that joined after
         // CONNECTED can still reconcile. Once one has, the entries are in Room
         // and nothing else will ever ask for them — keeping the copy alive for
         // the connection's life was pure retention. A ViewModel recreated later
         // reads the merged rows back from Room, not from here.
-        _serverTranscript.value = null
+        // Only the one that was merged: by identity, as the subscriber was
+        // handed this very object. A transcript set while it was being merged
+        // has not been read yet, and clearing it would lose it (W16AAPPLE-104).
+        _serverTranscript.update { held -> if (held?.event === merged) null else held }
+    }
+
+    override fun releaseSessionStatus() {
+        // CONNECTED said it once, but this state stays Connected for the life of the socket, and a
+        // screen created later starts from it and cannot tell a stale answer from a fresh one.
+        _connectionState.update { state ->
+            if (state is ConnectionState.Connected) {
+                state.copy(status = ServerSessionStatus.UNKNOWN, serverNewer = false)
+            } else {
+                state
+            }
+        }
     }
 
     override suspend fun switchConversation(conversationId: String?) {
@@ -372,48 +544,91 @@ class ConnectionRepositoryImpl(
             conversationId == connection?.currentSession?.sessionId
         ) {
             FileLogger.i(LogTags.CONN_REPO, "switchSession: already on $conversationId, adopting it as the key")
+            val liveSession = connection?.currentSession
+            // Keep the connection's frame attribution in step with the
+            // repository even though this fast path keeps the socket open.
+            connection?.setSession(liveSession, conversationId)
             currentConversationId = conversationId
-            connection?.currentSession?.let { saveSessionForCurrentConversation(it) }
+            liveSession?.let { saveSessionForConversation(conversationId, it) }
             return
         }
-        currentConversationId = conversationId
+        // Stop reconnect/open activity before the suspendable session lookup;
+        // otherwise a pending rung can reopen the old session while B loads.
+        connection?.beginSessionSwitch()
         // Belongs to the conversation being left — a late subscriber must not
         // reconcile the new conversation against the previous one's history.
+        val session = try {
+            sessionFor(conversationId)
+        } catch (t: Throwable) {
+            connection?.abortSessionSwitch()
+            throw t
+        }
         _serverTranscript.value = null
+        // So does the Host's answer to the CONNECT being left: it described that session, and the
+        // new one's own CONNECTED has yet to arrive.
+        releaseSessionStatus()
         // Mode is a property of the server session, so switching conversation
         // makes it unknown again for the same reason connect() does: a
         // security-relevant control must not keep showing the mode of the
         // conversation we just left, and a mode_change still awaiting
         // confirmation there is never going to be answered here.
-        _approvalMode.value = ApprovalMode.DEFAULT
-        confirmedApprovalMode = ApprovalMode.DEFAULT
+        // The catalogue stays (same Host), so the default is that Host's own.
+        _sessionModes.update { it.copy(turnsLeft = null) }
+        _approvalMode.value = _sessionModes.value.default
+        confirmedApprovalMode = _sessionModes.value.default
         _modePending.value = false
+        // What the Host said was about the session being left.
+        _hostSessionStatus.value = ServerSessionStatus.UNKNOWN
         // Agent profile and dashboard deliberately survive: same agent, only
         // a different conversation with it.
-        connection?.switchSession(sessionFor(conversationId))
+        // The plan is the left conversation's. The one coming in is its stored
+        // plan: an idle session's CONNECTED carries no snapshot of its own.
+        showStoredPlan(session)
+        // Register the new session on the connection before publishing the
+        // new repository key. The switch barrier prevents a reconnect from
+        // opening during sessionFor(), and a synchronous CONNECTED from the
+        // replacement socket already carries this conversation id.
+        try {
+            connection?.switchSession(session, conversationId)
+            currentConversationId = conversationId
+        } catch (t: Throwable) {
+            connection?.abortSessionSwitch()
+            throw t
+        }
+    }
+
+    /** The plan [session] was saved with, or none — see SessionStateEntity.planJson. */
+    private fun showStoredPlan(session: SessionState?) {
+        _plan.value = ProtocolParser.decodePlan(session?.plan).orEmpty()
     }
 
     /**
-     * The wire session for [conversationId]: its stored one, or a bare
-     * session under the conversation's own id when nothing is stored yet.
-     *
-     * The conversation id IS the session id — the server allocates under the
-     * id it is given (websocket-protocol.md's state table, "Provided / not
-     * found / allocate new session (same id)"). So a conversation's session
-     * is recoverable from its id alone, and the store only adds the
-     * transcript and turn count on top.
+     * The wire session for [conversationId]. A configured store owns the
+     * connect policy and may deliberately return null to ask the Host for a
+     * fresh session. Without a store, retain the conversation-id fallback.
      */
     private suspend fun sessionFor(conversationId: String?): SessionState? {
         if (conversationId == null) return null
-        val stored = conversationId.let { sessionStore?.getSession(it) }
+        val session = if (sessionStore != null) {
+            sessionStore.sessionForConnect(conversationId)
+        } else {
+            SessionState(sessionId = conversationId)
+        }
         FileLogger.i(
             LogTags.CONN_REPO,
-            "Conversation $conversationId: sid=$conversationId (${if (stored != null) "stored" else "fresh"})"
+            "Conversation $conversationId: sid=${session?.sessionId ?: "<new>"}"
         )
-        return stored ?: SessionState(sessionId = conversationId)
+        return session
     }
 
-    override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?) {
+    override suspend fun connect(
+        agentAddress: String,
+        conversationId: String?,
+        directUrl: String?,
+        relayUrl: String?
+    ) {
+        // A self-hosted relay is per agent; everything else uses this repository's own.
+        val effectiveRelayUrl = relayUrl ?: this.relayUrl
         withContext(Dispatchers.IO) {
             connectMutex.withLock {
                 // One socket per agent. The Loading probe and ChatViewModel now
@@ -455,6 +670,10 @@ class ConnectionRepositoryImpl(
                 _approvalMode.value = ApprovalMode.DEFAULT
                 confirmedApprovalMode = ApprovalMode.DEFAULT
                 _modePending.value = false
+                // A different Host, or the same one upgraded: what it manages
+                // is unknown again until its CONNECTED says.
+                _sessionModes.value = SessionModes.LEGACY
+                _hostSessionStatus.value = ServerSessionStatus.UNKNOWN
 
                 // Cleared alongside the profile, not just for staleness: the
                 // dashboard's buttons are validated against _agentProfile's
@@ -462,9 +681,15 @@ class ConnectionRepositoryImpl(
                 // point the previous agent's Home at the new agent's
                 // allowlist.
                 _dashboardHtml.value = null
+                _controlCenterApp.value = null
+                _plan.value = emptyList()
 
                 runCatchingCancellable {
-                    connection?.disconnect()
+                    // Replaced, not ended: teardown keeps the outbox, which the
+                    // new connection flushes on its CONNECTED. disconnect() would
+                    // drop it, losing every message typed offline the moment
+                    // the user taps Reconnect (W16AAPPLE-102).
+                    connection?.teardown()
                     eventCollectionJob?.cancel()
 
                     // Rows whose conversation never materialised or has since
@@ -476,11 +701,14 @@ class ConnectionRepositoryImpl(
                     // see sessionFor.
                     currentConversationId = conversationId
                     val restoredSession = sessionFor(conversationId)
+                    // Shown before the socket opens: an idle session's CONNECTED
+                    // carries no snapshot, so the stored plan is the only one.
+                    showStoredPlan(restoredSession)
 
                     val newConnection = agentConnectionFactory(
                         keyManager ?: error("keyManager is required to connect"),
-                        relayUrl
-                    ).also { it.setSession(restoredSession) }
+                        effectiveRelayUrl
+                    ).also { it.setSession(restoredSession, conversationId) }
                     connection = newConnection
 
                     // Subscribe first, and wait until the subscription is
@@ -505,9 +733,70 @@ class ConnectionRepositoryImpl(
             // Domain -> wire-protocol mapping happens here, not in domain/
             // usecase — see OutgoingFileAttachment's doc.
             val wireFiles = files?.map { FileAttachment(name = it.name, data = it.data) }
-            connection?.sendMessage(content, agentAddress, images, wireFiles)
+            val live = connection
+            if (live != null) {
+                live.sendMessage(content, agentAddress, images, wireFiles)
+            } else {
+                // No connection at all: before the first connect, or after a
+                // disconnect (the first-connect timeout included). The bubble
+                // already says "Waiting to send", so queue it for this
+                // conversation's next CONNECTED rather than drop it
+                // (W16AAPPLE-102). The conversation id is the local routing
+                // fallback; the flush also accepts it alongside a fresh Host
+                // session id when Memory is off.
+                FileLogger.w(LogTags.CONN_REPO, "No connection, queuing message")
+                pendingMessageSink.enqueue(agentAddress, currentConversationId, content, images, wireFiles)
+            }
         }
     }
+
+    override suspend fun executeTool(request: ExecRequest): ExecOutcome =
+        withContext(Dispatchers.IO) {
+            val activeConnection = connection
+                ?: return@withContext ExecOutcome.NotSent(
+                    "There is no active agent connection"
+                )
+
+            if (request.agentAddress != currentAgentAddress) {
+                return@withContext ExecOutcome.NotSent(
+                    "The EXEC target is not the connected agent"
+                )
+            }
+
+            if (request.execId.isBlank()) {
+                return@withContext ExecOutcome.NotSent(
+                    "The EXEC id cannot be blank"
+                )
+            }
+
+            if (request.tool.isBlank()) {
+                return@withContext ExecOutcome.NotSent(
+                    "The EXEC tool cannot be blank"
+                )
+            }
+
+            val parsedArgs = runCatching {
+                Json.parseToJsonElement(request.argsJson)
+            }.getOrNull()
+
+            val args = parsedArgs as? JsonObject
+                ?: return@withContext ExecOutcome.NotSent(
+                    "EXEC arguments must be a JSON object"
+                )
+
+            activeConnection.executeTool(
+                execId = request.execId,
+                tool = request.tool,
+                args = args,
+                recipient = request.agentAddress
+            )
+        }
+
+    override suspend fun readRem(): RemOutcome =
+        withContext(Dispatchers.IO) { connection?.readRem() ?: RemOutcome.NotConnected }
+
+    override suspend fun sendProviderInput(input: ProviderInput): Boolean =
+        withContext(Dispatchers.IO) { connection?.sendProviderInput(input) ?: false }
 
     override suspend fun interrupt() {
         withContext(Dispatchers.IO) {
@@ -515,15 +804,15 @@ class ConnectionRepositoryImpl(
         }
     }
 
-    override suspend fun respond(answer: String) {
+    override suspend fun respond(answer: String, requestId: String?) {
         withContext(Dispatchers.IO) {
-            connection?.respond(answer)
+            connection?.respond(answer, requestId)
         }
     }
 
-    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {
+    override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) {
         withContext(Dispatchers.IO) {
-            connection?.respondToApproval(approved, scope, mode, feedback)
+            connection?.respondToApproval(approved, scope, mode, feedback, requestId)
         }
     }
 
@@ -547,13 +836,55 @@ class ConnectionRepositoryImpl(
 
     override suspend fun setMode(mode: ApprovalMode, turns: Int?) {
         withContext(Dispatchers.IO) {
+            val modes = _sessionModes.value
+            // A Host that manages modes has no alias for the legacy names, and
+            // a legacy agent knows nothing of the new ones: either would come
+            // back as a refusal. Only what this connection offers goes out.
+            if (mode !in modes.available) {
+                FileLogger.w(LogTags.CONN_REPO, "setMode: ${mode.wire} is not offered here, not sent")
+                return@withContext
+            }
             // Optimistic before the send, not after the server confirms: a
             // trust control that lags a round trip behind the tap reads as
             // broken, and the inbound mode_changed corrects us either way.
             _approvalMode.value = mode
             _modePending.value = true
-            connection?.setMode(mode.wire, turns)
+            // The Host grants full access's budget; no client field can.
+            connection?.setMode(mode.wire, if (modes.hostManaged) null else turns)
         }
+    }
+
+    /**
+     * An `ERROR` arrived while the Host was last known to be running a turn. A failed turn ends
+     * with an `ERROR` instead of an `OUTPUT`, and the status line would otherwise say "Running"
+     * until the next reconnect. The Host's own turn-ending errors ([ServerErrorText.endsTurn])
+     * settle it to idle at once. Any `ERROR` here also asks `SESSION_STATUS`, whose reply has the
+     * last word, so an error in a wording this client does not know still settles it, and one
+     * that left the turn running (the reply says `running`) changes nothing.
+     */
+    private fun settleRunningStatusAfterError(message: String) {
+        if (ServerErrorText.endsTurn(message)) {
+            _hostSessionStatus.value = ServerSessionStatus.CONNECTED
+        }
+        val sessionId = connection?.currentSession?.sessionId ?: return
+        connection?.querySessionStatus(sessionId)
+    }
+
+    /**
+     * Adopt `session_modes` from CONNECTED as the confirmed truth: the catalogue, the current
+     * mode and its budget. Clears a pending request, which that CONNECT outlived. An empty or
+     * wholly unknown catalogue keeps the current mode as the only option rather than none.
+     */
+    private fun applyHostModes(state: HostModeState) {
+        val current = state.current ?: ApprovalMode.AUTO
+        _sessionModes.value = SessionModes(
+            available = state.available.ifEmpty { listOf(current) },
+            hostManaged = true,
+            turnsLeft = state.turnsLeft?.takeIf { current.isUnattended }
+        )
+        _approvalMode.value = current
+        confirmedApprovalMode = current
+        _modePending.value = false
     }
 
     override fun retryNow() {
@@ -566,7 +897,7 @@ class ConnectionRepositoryImpl(
         }
     }
 
-    override suspend fun disconnect() {
+    override suspend fun disconnect(keepOutbox: Boolean) {
         withContext(Dispatchers.IO) {
             connection?.currentSession?.let { saveSessionForCurrentConversation(it) }
 
@@ -578,8 +909,9 @@ class ConnectionRepositoryImpl(
             eventCollectionJob?.cancel()
             eventCollectionJob = null
 
-            connection?.disconnect()
+            if (keepOutbox) connection?.teardown() else connection?.disconnect()
             connection = null
+            dropAdmittedState()
             _connectionState.value = ConnectionState.Disconnected
         }
     }
@@ -599,6 +931,18 @@ class ConnectionRepositoryImpl(
         sessionStore?.getSession(conversationId)?.sessionId
     }
 
+    /**
+     * Forget what only an admitted connection may show (W16AAPPLE-71). Called
+     * whenever this connection stops being one: ended, refused, or gated
+     * again. Not on Reconnecting: a relay reattach does not necessarily resend
+     * AGENT_PROFILE, so clearing there could hide skills on a connection that
+     * comes straight back. The dashboard needs no clearing of its own: its
+     * skill buttons are checked against this profile and refused without it.
+     */
+    private fun dropAdmittedState() {
+        _agentProfile.value = null
+    }
+
     override fun liveSessionIdFor(agentAddress: String): String? {
         if (agentAddress != currentAgentAddress || connection?.isConnected() != true) return null
         return connection?.currentSession?.sessionId
@@ -606,44 +950,6 @@ class ConnectionRepositoryImpl(
 
     override fun getCurrentSession(): SessionState? {
         return connection?.currentSession
-    }
-
-    /**
-     * Fills [agentProfile] from the relay's directory, because nothing ever
-     * pushes an `AGENT_PROFILE` frame — see [AgentDiscoveryService.fetchPublishedProfile].
-     *
-     * A pushed frame still wins: this only writes when the slot is empty or
-     * holds a profile with no skills, so if the relay ever starts sending one
-     * this becomes a harmless prefetch rather than something to unwind.
-     */
-    private fun fetchPublishedProfile() {
-        val discovery = agentDiscovery ?: return
-        // Deliberately not ConnectionEvent.Connected.address: that field carries
-        // the identity the relay authenticated — this device's own address, not
-        // the agent's. Looking that up returns our own directory row, whose
-        // profile is null, and the palette stays empty for a second reason.
-        val address = currentAgentAddress ?: return
-        scope.launch {
-            val published = discovery.fetchPublishedProfile(address, relayUrl) ?: return@launch
-            val existing = _agentProfile.value
-            if (existing != null && existing.skills.isNotEmpty()) return@launch
-
-            _agentProfile.value = AgentLiveProfile(
-                sessionId = existing?.sessionId,
-                name = existing?.name ?: published.alias,
-                address = address,
-                model = existing?.model ?: published.model,
-                tools = existing?.tools?.takeIf { it.isNotEmpty() } ?: published.tools,
-                skills = published.skills
-                    .filter { it.name.isNotBlank() }
-                    .map { AgentSkill(it.name, it.description?.trim()?.takeIf(String::isNotEmpty)) },
-                balanceUsd = existing?.balanceUsd
-            )
-            FileLogger.i(
-                LogTags.CONN_REPO,
-                "→ Published profile: ${published.skills.size} skill(s) from the relay directory"
-            )
-        }
     }
 
     companion object {

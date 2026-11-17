@@ -18,16 +18,14 @@ package ai.openonion.oochat.util
  * generic-card.tsx `formatArgs()`, adapted to show keys too since this app
  * has no per-tool-kind icon to carry that context on its own.
  *
- * No secret redaction here, by design: hiding argument values would defeat
- * the fix this exists for (letting the user see what they're approving
- * instead of approving blind — see the fix's own commit message). This is
- * a different threat model than [LogSanitizer], which exists to keep
- * plaintext content out of an unencrypted on-disk log file the user isn't
- * actively looking at. The web reference's own `redact()` only masks a
- * value the user just typed into a dedicated login-credential modal, a
- * browser-automation echo-back guard this app has no equivalent surface
- * for (its AskUser has no credential-fields variant) — there is nothing to
- * port.
+ * No redaction here, by design: hiding argument values would defeat the
+ * fix this exists for (letting the user see what they're approving instead
+ * of approving blind — see the fix's own commit message). The arguments it
+ * is given are already redacted for display ([ai.openonion.oochat.domain.model.ChatItemPrivacy],
+ * W16AAPPLE-50), which masks only credentials and the home folder, so the
+ * command and its path still read as what they do. A different threat
+ * model again from [LogSanitizer], which keeps content out of the
+ * unencrypted on-disk log altogether.
  */
 private const val DEFAULT_MAX_LENGTH = 80
 

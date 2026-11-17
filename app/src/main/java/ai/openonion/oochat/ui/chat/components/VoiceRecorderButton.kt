@@ -285,7 +285,7 @@ private fun LiveWaveform(onQueryVoiceAmplitude: () -> Float = { 0f }, modifier: 
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight(animatedHeight)
-                    .clip(RoundedCornerShape(3.dp))
+                    .clip(MaterialTheme.shapes.extraSmall)
                     .background(MaterialTheme.colorScheme.error.copy(alpha = 0.4f + h * 0.6f))
             )
         }

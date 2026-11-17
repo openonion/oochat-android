@@ -34,7 +34,6 @@ class ComposerBoxGeometryComposeTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                     onSend = { _, _, _ -> }
                 )
