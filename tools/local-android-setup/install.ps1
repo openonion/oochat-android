@@ -80,6 +80,26 @@ if ($UseSystemSdk) {
     }
 }
 
+# --- Java: sdkmanager needs 17+, checked before anything is asked or written -----
+# sdkmanager.bat runs %JAVA_HOME%\bin\java.exe when JAVA_HOME is set, so check that one.
+$javaExe = if ($env:JAVA_HOME) { Join-Path $env:JAVA_HOME 'bin\java.exe' } else { 'java' }
+$javaRaw = ''
+if (Get-Command $javaExe -ErrorAction SilentlyContinue) {
+    # Java writes its version to stderr, which Windows PowerShell 5.1 turns into a terminating error under 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    # The first `version "` line: JAVA_TOOL_OPTIONS adds a line before it.
+    $javaRaw = & $javaExe -version 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -match 'version "' } | Select-Object -First 1
+    $ErrorActionPreference = 'Stop'
+}
+$javaMajor = if ("$javaRaw" -match 'version "(\d+)') { [int]$Matches[1] } else { 0 }
+if ($javaMajor -lt 17) {
+    $checked = if ($javaRaw) { "Checked: $javaExe ($javaRaw)" } else { "Checked: $javaExe" }
+    Stop-WithHelp 'Java 17 or newer is needed: the Android SDK manager runs on it.' @(
+        $checked,
+        'Install JDK 17 (what the build is verified on), then re-run:',
+        '  https://adoptium.net/temurin/releases/?version=17')
+}
+
 # --- Tell them what is about to happen, then wait ------------------------------
 Clear-Host
 Write-Bold '================================================================'
@@ -129,6 +149,8 @@ Write-Info '  ~1.5 GB of Gradle cache under .local\, also removed by .\uninstall
 Write-Info 'Time     : 10-25 minutes, mostly the system image download.'
 Write-Host ''
 Write-Host "Host detected: Windows / $env:PROCESSOR_ARCHITECTURE  ->  emulator ABI $abi"
+Write-Host "Java: $javaRaw"
+if ($javaMajor -ne 17) { Write-Host '  (fine for installing; JDK 17 is what the build is verified on)' }
 Write-Host ''
 
 if (-not $Yes) {
@@ -140,27 +162,6 @@ if (-not $Yes) {
 }
 
 New-Item -ItemType Directory -Force -Path $LocalDir, $AvdDir | Out-Null
-
-# --- Java (only needed to build from source, not to install the APK) -----------
-Write-Step 'Checking for a Java runtime'
-$javaOk = $false
-$java = Get-Command java -ErrorAction SilentlyContinue
-if ($java) {
-    $raw = (& java -version 2>&1 | Select-Object -First 1) -join ''
-    Write-Info "Found: $raw"
-    if ($raw -match 'version "17') { $javaOk = $true }
-    else { Write-Info 'The Gradle build needs exactly JDK 17.' }
-} else {
-    Write-Info 'No java on PATH.'
-}
-if (-not $javaOk) {
-    Write-Info ''
-    Write-Info 'This is not fatal. JDK 17 is needed only to build from source or to'
-    Write-Info 'run the test suite. Installing the pre-built APK does not need it.'
-    Write-Info 'If you do want to build:'
-    Write-Info '  https://adoptium.net/temurin/releases/?version=17'
-    Write-Info ''
-}
 
 # --- Command-line tools ---------------------------------------------------------
 $sdkManager = Join-Path $SdkDir 'cmdline-tools\latest\bin\sdkmanager.bat'

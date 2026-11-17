@@ -4,6 +4,7 @@ import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.CompactStatus
 import ai.openonion.oochat.domain.model.EvalStatus
 import ai.openonion.oochat.domain.model.IntentStatus
+import ai.openonion.oochat.domain.model.PlanReviewReply
 import ai.openonion.oochat.domain.model.ReceivedFile
 import ai.openonion.oochat.ui.theme.ButtonToken
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
@@ -147,12 +148,35 @@ internal fun EvalCard(item: ChatItem.EvalItem) {
     }
 }
 
+/**
+ * Shown under a finished compaction so the percentages read as a consequence
+ * the user can act on: anything said before this line now survives only as a
+ * summary in the agent's context.
+ */
+internal const val COMPACT_DONE_HINT = "Earlier messages were summarised — the agent may not recall their details."
+
 @Composable
 internal fun CompactDivider(item: ChatItem.CompactItem) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = MaterialTheme.spacing.xs),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CompactDividerLabel(item)
+        if (item.status == CompactStatus.DONE) {
+            Text(
+                text = COMPACT_DONE_HINT,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactDividerLabel(item: ChatItem.CompactItem) {
+    Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
@@ -209,6 +233,7 @@ internal fun ModeChangedDivider(item: ChatItem.ModeChangedItem) {
         Text(
             text = buildString {
                 append("Switched to ${modeLabel(item.mode)}")
+                item.turnsLeft?.let { append(" · $it turns") }
                 triggeredBySource(item.triggeredBy)?.let { append(" · $it") }
             },
             style = MaterialTheme.typography.labelSmall,
@@ -224,6 +249,9 @@ private fun modeLabel(mode: String): String = when (mode) {
     "plan" -> "plan mode"
     "accept_edits" -> "accept-edits mode"
     "ulw" -> "ULW mode"
+    "read-only" -> "read-only mode"
+    "auto" -> "auto mode"
+    "full-access" -> "full-access mode"
     else -> "$mode mode"
 }
 
@@ -234,6 +262,7 @@ private fun triggeredBySource(triggeredBy: String?): String? = when (triggeredBy
     "user" -> "you"
     "agent" -> "agent"
     "ulw_checkpoint" -> "checkpoint"
+    "full_access_expired" -> "turns used up"
     else -> triggeredBy
 }
 
@@ -400,7 +429,7 @@ private enum class PlanReviewOutcome { APPROVED, REJECTED }
 @Composable
 internal fun PlanReviewCard(
     item: ChatItem.PlanReviewItem,
-    onPlanReviewResponse: (String) -> Unit
+    onPlanReviewResponse: (PlanReviewReply) -> Unit
 ) {
     var outcome by remember(item.id) { mutableStateOf<PlanReviewOutcome?>(null) }
     var rejecting by remember(item.id) { mutableStateOf(false) }
@@ -465,9 +494,10 @@ internal fun PlanReviewCard(
                         Text("Cancel")
                     }
                     Button(
+                        shape = MaterialTheme.shapes.large,
                         onClick = {
                             outcome = PlanReviewOutcome.REJECTED
-                            onPlanReviewResponse("Plan rejected. Revise with write_plan(). Feedback: $feedback")
+                            onPlanReviewResponse(PlanReviewReply.Reject(feedback))
                         },
                         modifier = Modifier.weight(1f).heightIn(min = ButtonToken.Compact)
                     ) {
@@ -487,11 +517,10 @@ internal fun PlanReviewCard(
                         Text("Reject")
                     }
                     Button(
+                        shape = MaterialTheme.shapes.large,
                         onClick = {
                             outcome = PlanReviewOutcome.APPROVED
-                            onPlanReviewResponse(
-                                "Plan approved. Implement now. Do NOT re-enter plan mode.\n\n---\n\n${item.planContent}"
-                            )
+                            onPlanReviewResponse(PlanReviewReply.Approve)
                         },
                         modifier = Modifier.weight(1f).heightIn(min = ButtonToken.Compact)
                     ) {
@@ -559,6 +588,7 @@ internal fun UlwTurnsReachedCard(
             } else {
                 Button(
                     onClick = { submitted = true; onUlwResponse("continue", 100, null) },
+                    shape = MaterialTheme.shapes.large,
                     // 48dp touch target — was 44dp; full-width, so the 4dp
                     // grow has no layout fallout.
                     modifier = Modifier.fillMaxWidth().height(ButtonToken.Compact)

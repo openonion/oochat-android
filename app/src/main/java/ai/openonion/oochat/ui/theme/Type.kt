@@ -1,70 +1,23 @@
 package ai.openonion.oochat.ui.theme
 
-import ai.openonion.oochat.R
 import androidx.compose.material3.Typography
-import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/**
- * Manrope, bundled as a single variable font (res/font/manrope.ttf). Each weight is
- * derived from the variable axis via FontVariation, so no per-weight files are needed.
- * Works offline on any device (minSdk 26 supports variable fonts).
- */
-@OptIn(ExperimentalTextApi::class)
-private fun manrope(weight: Int) = Font(
-    resId = R.font.manrope,
-    weight = FontWeight(weight),
-    variationSettings = FontVariation.Settings(FontVariation.weight(weight))
-)
-
-val ManropeFontFamily = FontFamily(
-    manrope(400), // Regular
-    manrope(500), // Medium
-    manrope(600), // SemiBold
-    manrope(700), // Bold
-    manrope(800), // ExtraBold
-)
-
-// Start from Material 3 defaults, swapping only the font family so sizes/line-heights
-// keep the tuned M3 type scale.
+// The type is the system's own face, and monospace where the text is code or
+// ticks (W16AAPPLE-49): nothing is bundled, so text matches the device it is on.
+// Start from Material 3 defaults, which are the system font, keeping the tuned
+// M3 sizes and line-heights and adjusting only the tracking below.
 private val baseline = Typography()
 
-val AppTypography = Typography(
-    displayLarge = baseline.displayLarge.copy(fontFamily = ManropeFontFamily),
-    displayMedium = baseline.displayMedium.copy(fontFamily = ManropeFontFamily),
-    displaySmall = baseline.displaySmall.copy(fontFamily = ManropeFontFamily),
-    headlineLarge = baseline.headlineLarge.copy(
-        fontFamily = ManropeFontFamily,
-        letterSpacing = (-0.4).sp // Tighter for large headings
-    ),
-    headlineMedium = baseline.headlineMedium.copy(
-        fontFamily = ManropeFontFamily,
-        letterSpacing = (-0.2).sp // Matches Figma spec
-    ),
-    headlineSmall = baseline.headlineSmall.copy(fontFamily = ManropeFontFamily),
-    titleLarge = baseline.titleLarge.copy(
-        fontFamily = ManropeFontFamily,
-        letterSpacing = (-0.2).sp // Tighter for prominent titles
-    ),
-    titleMedium = baseline.titleMedium.copy(fontFamily = ManropeFontFamily),
-    titleSmall = baseline.titleSmall.copy(fontFamily = ManropeFontFamily),
-    bodyLarge = baseline.bodyLarge.copy(fontFamily = ManropeFontFamily),
-    bodyMedium = baseline.bodyMedium.copy(fontFamily = ManropeFontFamily),
-    bodySmall = baseline.bodySmall.copy(fontFamily = ManropeFontFamily),
-    labelLarge = baseline.labelLarge.copy(
-        fontFamily = ManropeFontFamily,
-        letterSpacing = 0.03.sp // Slightly expanded for chips/labels (matches Figma 0.03em)
-    ),
-    labelMedium = baseline.labelMedium.copy(fontFamily = ManropeFontFamily),
-    labelSmall = baseline.labelSmall.copy(
-        fontFamily = ManropeFontFamily,
-        letterSpacing = 0.04.sp // Expanded for small caps/uppercase (matches Figma 0.04em)
-    ),
+val AppTypography = baseline.copy(
+    headlineLarge = baseline.headlineLarge.copy(letterSpacing = (-0.4).sp), // Tighter for large headings
+    headlineMedium = baseline.headlineMedium.copy(letterSpacing = (-0.2).sp), // Matches Figma spec
+    titleLarge = baseline.titleLarge.copy(letterSpacing = (-0.2).sp), // Tighter for prominent titles
+    labelLarge = baseline.labelLarge.copy(letterSpacing = 0.03.sp), // Slightly expanded for chips/labels (matches Figma 0.03em)
+    labelSmall = baseline.labelSmall.copy(letterSpacing = 0.04.sp) // Expanded for small caps/uppercase (matches Figma 0.04em)
 )
 
 /**
@@ -130,9 +83,10 @@ val Typography.sectionLabel: TextStyle
  */
 
 /**
- * Fixed-width digits. Manrope's default figures are proportional, so a value
- * that ticks — a recording timer, a playback position — changes width as it
- * counts and nudges everything beside it. `tnum` is present in the bundled
- * font, so this is a real substitution rather than a no-op.
+ * Fixed-width digits. A value that ticks — a recording timer, a playback
+ * position — changes width as it counts if its figures are proportional, and
+ * nudges everything beside it. Monospace makes them fixed whatever face the
+ * device's system font is, which `tnum` alone cannot promise: not every system
+ * font has the feature. It is kept for the faces that do.
  */
-fun TextStyle.tabularFigures(): TextStyle = copy(fontFeatureSettings = "tnum")
+fun TextStyle.tabularFigures(): TextStyle = copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum")
