@@ -245,7 +245,10 @@ open class LoadingViewModel @JvmOverloads constructor(
         if (hasReportedOutcome) return
         hasReportedOutcome = true
         connectionJob?.cancel()
-        viewModelScope.launch { connectUseCase.disconnect() }
+        // Cancelling a slow connect is not choosing to discard messages. Offline
+        // after a restart, the outbox is all the user has of what they wrote,
+        // and its bubbles come back from Room looking sent (W16AAPPLE-102).
+        viewModelScope.launch { connectUseCase.disconnect(keepOutbox = true) }
         _events.tryEmit(LoadingEvent.Cancelled)
     }
 

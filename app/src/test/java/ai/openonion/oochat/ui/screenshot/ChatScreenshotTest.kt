@@ -209,7 +209,7 @@ class ChatScreenshotTest {
                 items = CONVERSATION,
                 timestamps = TIMESTAMPS,
                 wasCleared = false,
-                onRespond = {},
+                onRespond = { _, _ -> },
                 onApprove = { _, _, _, _, _ -> },
                 onOnboard = { _, _, _ -> },
                 onPlanReviewResponse = {},
@@ -232,7 +232,7 @@ class ChatScreenshotTest {
                 items = SEND_STATES,
                 timestamps = SEND_STATE_TIMESTAMPS,
                 wasCleared = false,
-                onRespond = {},
+                onRespond = { _, _ -> },
                 onApprove = { _, _, _, _, _ -> },
                 onOnboard = { _, _, _ -> },
                 onPlanReviewResponse = {},
@@ -258,11 +258,10 @@ class ChatScreenshotTest {
     private fun captureInputBar(palette: Palette) =
         composeRule.captureThemed("chat_input_bar", palette) {
             Column(verticalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.lg)) {
-                InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
-                InputBar(isConnected = false, isSending = false, onSend = { _, _, _ -> })
+                InputBar(isConnected = true, onSend = { _, _, _ -> })
+                InputBar(isConnected = false, onSend = { _, _, _ -> })
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     isAgentWorking = true,
                     onSend = { _, _, _ -> },
                 )
@@ -270,7 +269,6 @@ class ChatScreenshotTest {
                 // stays visible, which is the whole point of streaming partials.
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                     onSend = { _, _, _ -> },
                 )
@@ -286,7 +284,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_dictating_mid_run", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 isAgentWorking = true,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.LISTENING),
                 onSend = { _, _, _ -> },
@@ -302,7 +299,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_fallback_notice", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(
                     phase = VoiceInputPhase.LISTENING,
                     notice = "Using server transcription.",
@@ -326,7 +322,6 @@ class ChatScreenshotTest {
         ) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.PREPARING),
                 onSend = { _, _, _ -> },
             )
@@ -347,7 +342,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_transcribing", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 voiceInput = VoiceInputState(phase = VoiceInputPhase.TRANSCRIBING),
                 onSend = { _, _, _ -> },
             )
@@ -376,7 +370,6 @@ class ChatScreenshotTest {
         composeRule.captureThemed("chat_input_bar_widest_shelf", palette) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 isAgentWorking = true,
                 approvalMode = ApprovalMode.ULW,
                 usage = SessionUsageTotals(
@@ -400,7 +393,6 @@ class ChatScreenshotTest {
         }) {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 skills = listOf(
                     AgentSkill(
                         "linkedin-engagement",

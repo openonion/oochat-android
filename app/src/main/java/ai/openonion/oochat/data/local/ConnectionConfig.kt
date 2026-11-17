@@ -4,7 +4,8 @@ import ai.openonion.oochat.Constants
 import kotlinx.serialization.Serializable
 
 /**
- * Single-server config, kept separate from the newer multi-agent AgentRepository/Room model and not synced with it — e.g. AgentListScreenWrapper writes a snapshot here just so LoadingScreen's auto-reconnect can read it. Unifying is a bigger job, left as-is.
+ * The agent a cold start reconnects to (LoadingScreen). Kept separate from the multi-agent Room model;
+ * the chat screen rewrites it whenever it connects, so it follows links and drawer switches too.
  */
 @Serializable
 data class ConnectionConfig(

@@ -82,7 +82,6 @@ class SessionUsageBarComposeTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     approvalMode = ApprovalMode.DEFAULT,
                     usage = SessionUsageTotals(
                         totalTokens = 1234,

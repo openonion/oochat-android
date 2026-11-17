@@ -104,66 +104,9 @@ class AgentDiscoveryService {
         }
     }
 
-    /**
-     * The agent's published profile, from the relay's directory.
-     *
-     * The app used to wait for an `AGENT_PROFILE` frame. Nothing sends one:
-     * the string appears nowhere in the ConnectOnion SDK, and three connects
-     * against a live agent produced CONNECTED, ONBOARD_* and PING and no
-     * profile. What the SDK actually does is put the profile in its ANNOUNCE
-     * ("the relay persists it, so heartbeats don't carry it") and leave
-     * subscribers to fetch it — which is this call. Without it the slash
-     * palette is empty against every agent.
-     *
-     * Null on any failure. The palette is an affordance, not a correctness
-     * requirement, so a directory that is down costs the shortcut and nothing
-     * else.
-     */
-    suspend fun fetchPublishedProfile(address: String, relayUrl: String): PublishedProfile? {
-        val httpBase = relayUrl.replace(Regex("^ws"), "http").trimEnd('/')
-        return withContext(Dispatchers.IO) {
-            runCatchingCancellable {
-                val url = "$httpBase/api/agents/$address"
-                FileLogger.d(LogTags.AGENT_DISCOVERY, "GET ${url.take(60)}…")
-
-                val request = Request.Builder().url(url).get().build()
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        FileLogger.w(LogTags.AGENT_DISCOVERY, "directory returned ${response.code}")
-                        return@withContext null
-                    }
-                    val body = response.body?.string() ?: return@withContext null
-                    json.decodeFromString<DirectoryEntry>(body).profile
-                }
-            }.onFailure { e ->
-                FileLogger.w(LogTags.AGENT_DISCOVERY, "Failed to fetch published profile: ${e.message}")
-            }.getOrNull()
-        }
-    }
-
     @kotlinx.serialization.Serializable
     private data class AgentInfo(
         val address: String? = null
-    )
-
-    @kotlinx.serialization.Serializable
-    private data class DirectoryEntry(
-        val profile: PublishedProfile? = null
-    )
-
-    /** The relay's stored copy of what an agent published about itself. */
-    @kotlinx.serialization.Serializable
-    data class PublishedProfile(
-        val alias: String? = null,
-        val model: String? = null,
-        val tools: List<String> = emptyList(),
-        val skills: List<PublishedSkill> = emptyList()
-    )
-
-    @kotlinx.serialization.Serializable
-    data class PublishedSkill(
-        val name: String = "",
-        val description: String? = null
     )
 
     companion object {

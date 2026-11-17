@@ -19,7 +19,7 @@ import org.junit.Test
  *
  * Exercises [InputBar] directly rather than the full ChatScreen: the
  * blank-input send gating this covers is entirely local to this composable
- * (`canSend = isConnected && !isSending && text.isNotBlank()`), whereas
+ * (`canSend = fieldEnabled && text.isNotBlank()`), whereas
  * ChatScreen itself needs a live ChatViewModel/connection/navigation graph
  * that would only add unrelated scaffolding to these assertions.
  */
@@ -31,7 +31,7 @@ class InputBarTest {
     @Test
     fun blankInputLeavesSendDisabledWithTheMicStillThere() {
         composeTestRule.setContent {
-            InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+            InputBar(isConnected = true, onSend = { _, _, _ -> })
         }
 
         composeTestRule.onNodeWithContentDescription("Dictate a message").assertIsDisplayed()
@@ -41,7 +41,7 @@ class InputBarTest {
     @Test
     fun whitespaceOnlyInputIsTreatedAsBlank() {
         composeTestRule.setContent {
-            InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+            InputBar(isConnected = true, onSend = { _, _, _ -> })
         }
 
         composeTestRule.onNodeWithText("Message…").performTextInput("   ")
@@ -54,7 +54,7 @@ class InputBarTest {
         // The mic no longer gives way to Send: dictation appends to whatever is
         // in the field, so both belong there at once.
         composeTestRule.setContent {
-            InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+            InputBar(isConnected = true, onSend = { _, _, _ -> })
         }
 
         composeTestRule.onNodeWithText("Message…").performTextInput("Hello agent")
@@ -70,7 +70,6 @@ class InputBarTest {
         composeTestRule.setContent {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 onSend = { text, images, _ ->
                     sentText = text
                     sentImages = images
@@ -89,9 +88,9 @@ class InputBarTest {
     }
 
     @Test
-    fun disconnectedInputShowsTheConnectFirstPlaceholderAndNoSendButton() {
+    fun inputWithNoAgentShowsTheConnectFirstPlaceholderAndNoSendButton() {
         composeTestRule.setContent {
-            InputBar(isConnected = false, isSending = false, onSend = { _, _, _ -> })
+            InputBar(isConnected = false, hasAgent = false, onSend = { _, _, _ -> })
         }
 
         composeTestRule.onNodeWithText("Connect to an agent first").assertIsDisplayed()
@@ -104,7 +103,7 @@ class InputBarTest {
     @Test
     fun tappingMicWithoutPermissionShowsTheRationaleDialogInsteadOfTheSystemPrompt() {
         composeTestRule.setContent {
-            InputBar(isConnected = true, isSending = false, onSend = { _, _, _ -> })
+            InputBar(isConnected = true, onSend = { _, _, _ -> })
         }
 
         composeTestRule.onNodeWithContentDescription("Dictate a message").performClick()
@@ -120,7 +119,6 @@ class InputBarTest {
         composeTestRule.setContent {
             InputBar(
                 isConnected = true,
-                isSending = false,
                 onSend = { _, _, _ -> },
                 onStartVoiceRecording = { startedRecording = true }
             )

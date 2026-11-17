@@ -35,7 +35,6 @@ class InputBarVariantBComposeTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     approvalMode = ApprovalMode.DEFAULT,
                     usage = usage,
                     onSend = { _, _, _ -> }
@@ -88,7 +87,6 @@ class InputBarVariantBComposeTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = true,
-                    isSending = false,
                     approvalMode = ApprovalMode.DEFAULT,
                     usage = USAGE,
                     onCycleApprovalMode = { cycles++ },
