@@ -2,7 +2,9 @@ package ai.openonion.oochat.ui.chat
 
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.ThoughtGroup
 import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.domain.model.groupReasoningByTurn
 import ai.openonion.oochat.ui.chat.components.ChatItemBubble
 import ai.openonion.oochat.ui.chat.components.DateDivider
 import ai.openonion.oochat.ui.theme.spacing
@@ -48,7 +50,7 @@ import java.time.format.DateTimeFormatter
 /**
  * Caps the chat column's width on tablets and unfolded foldables
  * instead of letting a line run edge-to-edge. chatBody is 15sp, and a
- * Manrope glyph there averages ~8dp, so 600dp of column holds roughly 70
+ * glyph there averages ~8dp, so 600dp of column holds roughly 70
  * characters once list/bubble padding is subtracted — the middle of the
  * 60-75 char comfortable-measure range. Any phone is narrower than this, so
  * widthIn is a no-op there. Shared with the composer, which has to line up
@@ -61,7 +63,7 @@ fun MessageList(
     items: List<ChatItem>,
     timestamps: Map<String, Long>,
     wasCleared: Boolean,
-    onRespond: (String) -> Unit,
+    onRespond: (itemId: String, answer: String) -> Unit,
     onApprove: (itemId: String, approved: Boolean, scope: String, mode: String?, feedback: String?) -> Unit,
     onOnboard: (method: String, inviteCode: String?, payment: Double?) -> Unit,
     onPlanReviewResponse: (message: String) -> Unit,
@@ -85,6 +87,16 @@ fun MessageList(
     onLoadOlderMessages: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    // Each turn's thoughts ride on its newest one (see groupReasoningByTurn).
+    // Everything below works on the folded list, so indices, scroll anchors
+    // and day labels agree with the rows actually laid out.
+    val reasoning = remember(items) { items.groupReasoningByTurn() }
+    @Suppress("NAME_SHADOWING")
+    val items = reasoning.visible
+    // Turns whose earlier thoughts the reader opened, by ThoughtGroup.key —
+    // held here, not in the bubble, because the bubble is replaced by a new
+    // one each time the agent has another thought.
+    var openThoughtGroups by remember(conversationKey) { mutableStateOf(emptySet<String>()) }
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
     // A tap the transcript's own children did not take is a tap on its
@@ -314,7 +326,12 @@ fun MessageList(
                         onResend = (item as? ChatItem.User)
                             ?.takeIf { it.state == UserMessageState.FAILED }
                             ?.let { { onResendMessage(it.id) } },
-                        hasLiveConnection = hasLiveConnection
+                        hasLiveConnection = hasLiveConnection,
+                        thoughtGroup = reasoning.groups[item.id],
+                        openThoughtGroups = openThoughtGroups,
+                        onToggleThoughts = { key ->
+                            openThoughtGroups = if (key in openThoughtGroups) openThoughtGroups - key else openThoughtGroups + key
+                        }
                     )
                 }
             }
@@ -328,7 +345,7 @@ private fun ChatItemWrapper(
     startsRun: Boolean = true,
     endsRun: Boolean = true,
     timestamps: Map<String, Long>,
-    onRespond: (String) -> Unit,
+    onRespond: (itemId: String, answer: String) -> Unit,
     onApprove: (itemId: String, approved: Boolean, scope: String, mode: String?, feedback: String?) -> Unit,
     onOnboard: (method: String, inviteCode: String?, payment: Double?) -> Unit,
     onPlanReviewResponse: (message: String) -> Unit,
@@ -337,7 +354,10 @@ private fun ChatItemWrapper(
     renderMarkdown: Boolean,
     onRetry: (() -> Unit)? = null,
     onResend: (() -> Unit)? = null,
-    hasLiveConnection: Boolean = true
+    hasLiveConnection: Boolean = true,
+    thoughtGroup: ThoughtGroup? = null,
+    openThoughtGroups: Set<String> = emptySet(),
+    onToggleThoughts: (String) -> Unit = {}
 ) {
     // One timestamp per run, on its last message — a time on every bubble in a
     // burst repeats the same minute three times over.
@@ -349,7 +369,7 @@ private fun ChatItemWrapper(
         ChatItemBubble(
             item = item,
             timestamp = timestamp,
-            onRespond = { answer -> onGateResolved(item.id); onRespond(answer) },
+            onRespond = { answer -> onGateResolved(item.id); onRespond(item.id, answer) },
             onApprove = { approved, scope, mode, feedback ->
                 onGateResolved(item.id)
                 onApprove(item.id, approved, scope, mode, feedback)
@@ -367,7 +387,10 @@ private fun ChatItemWrapper(
             showSender = startsRun,
             onRetry = onRetry,
             hasLiveConnection = hasLiveConnection,
-            onResend = onResend
+            onResend = onResend,
+            earlierThoughts = thoughtGroup?.earlier.orEmpty(),
+            showAllThoughts = thoughtGroup != null && thoughtGroup.key in openThoughtGroups,
+            onToggleThoughts = thoughtGroup?.let { group -> { onToggleThoughts(group.key) } }
         )
     }
     // The run boundary carries the spacing: `lg` between runs, `xs` inside one,

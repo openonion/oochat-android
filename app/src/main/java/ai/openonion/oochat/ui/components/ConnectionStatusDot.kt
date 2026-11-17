@@ -53,8 +53,8 @@ fun ConnectionStatusDot(
         targetValue = when {
             awaitingOnboardCode && connectionState.isConnecting() -> MaterialTheme.statusColors.successDot
             connectionState is ConnectionState.Connected -> MaterialTheme.statusColors.successDot
-            connectionState is ConnectionState.Connecting -> MaterialTheme.statusColors.warningDot
-            connectionState is ConnectionState.Reconnecting -> MaterialTheme.statusColors.warningDot
+            connectionState is ConnectionState.Connecting -> MaterialTheme.statusColors.successDot
+            connectionState is ConnectionState.Reconnecting -> MaterialTheme.statusColors.successDot
             connectionState is ConnectionState.Error -> MaterialTheme.colorScheme.error
             else -> MaterialTheme.colorScheme.outline
         },
