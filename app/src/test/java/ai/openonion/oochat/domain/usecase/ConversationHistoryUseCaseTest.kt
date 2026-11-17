@@ -227,6 +227,28 @@ class ConversationHistoryUseCaseTest {
     }
 
     @Test
+    fun `ensureActiveSession keeps but does not reopen a synced chat with no local messages`() = runTest(testDispatcher) {
+        agentRepo.agents += testAgent()
+        val synced = ChatSession(
+            id = "remote-session",
+            agentId = "agent-1",
+            title = "New conversation",
+            createdAt = 1L,
+            updatedAt = 2L,
+            messageCount = 0,
+            remoteRevision = 4L
+        )
+        sessionRepo.sessions[synced.id] = synced
+        sessionRepo.sessionsByAgent["agent-1"] = MutableStateFlow(listOf(synced))
+
+        useCase.ensureActiveSession("0xabc", scope = backgroundScope)
+        advanceUntilIdle()
+
+        assertEquals(synced, sessionRepo.sessions[synced.id])
+        assertNull(useCase.activeSessionId.value)
+    }
+
+    @Test
     fun `ensureActiveSession resumes the most recent existing session instead of creating a new one`() = runTest(testDispatcher) {
         agentRepo.agents += testAgent()
         val existing = sessionRepo.createSession("agent-1", "Existing conversation")
@@ -428,6 +450,40 @@ class ConversationHistoryUseCaseTest {
 
         assertTrue(fetched.isEmpty())
         assertEquals("no churn when the local copy is current", before, messageRepo.messages.size)
+    }
+
+    @Test
+    fun `mergeServerTranscript does not turn reasoning already shown into a reply`() = runTest(testDispatcher) {
+        // re_act/reflect write their reasoning into the session's messages as
+        // an assistant entry, so the transcript replayed on CONNECT lists it
+        // as a reply. Here it was streamed and stored as reasoning.
+        agentRepo.agents += testAgent()
+        useCase.ensureActiveSession("0xabc", scope = backgroundScope)
+        advanceUntilIdle()
+        useCase.persistMessage(ChatItem.Agent(id = "a0", content = "earlier reply"))
+        // Stored as the real PersistenceTransaction stores a transcript row:
+        // empty content, the item in its payload. (The fake here only
+        // routes chat text.)
+        val reasoning = ChatItem.Thinking(id = "tr-1", status = ThinkingStatus.DONE, content = "Checking the build.", kind = "intent")
+        val payload = TranscriptItemCodec.toPayload(reasoning)!!
+        messageRepo.createMessage(
+            ChatMessage(
+                id = reasoning.id,
+                sessionId = useCase.activeSessionId.value!!,
+                role = Role.SYSTEM,
+                content = "",
+                timestamp = 1L,
+                itemType = payload::class.simpleName,
+                payload = TranscriptItemCodec.encode(payload)
+            )
+        )
+
+        val fetched = useCase.mergeServerTranscript(
+            listOf(entry("Checking the build."), entry("Build passed.")),
+            serverTurn = 2
+        )
+
+        assertEquals(listOf("Build passed."), fetched.map { (it as ChatItem.Turn).agent?.content })
     }
 
     @Test
@@ -1236,6 +1292,7 @@ class FakeDatabaseForTest : ai.openonion.oochat.data.local.db.AppDatabase() {
     override fun sessionDao(): ai.openonion.oochat.data.local.db.dao.SessionDao = NoOpSessionDao
     override fun messageDao(): ai.openonion.oochat.data.local.db.dao.MessageDao = NoOpMessageDao
     override fun sessionStateDao() = throw NotImplementedError()
+    override fun sessionSyncDao() = throw NotImplementedError()
     override fun pendingMessageDao() = throw NotImplementedError()
     override fun clearAllTables() = throw NotImplementedError()
     // RoomDatabase's own constructor eagerly assigns `invalidationTracker = createInvalidationTracker()`

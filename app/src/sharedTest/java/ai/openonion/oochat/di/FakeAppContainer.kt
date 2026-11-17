@@ -8,7 +8,7 @@ import ai.openonion.oochat.data.local.FileAttachResult
 import ai.openonion.oochat.data.local.FileAttachmentStore
 import ai.openonion.oochat.data.local.IgnoredIdsStorage
 import ai.openonion.oochat.data.local.ImageAttachmentStore
-import ai.openonion.oochat.data.local.RecordedVoice
+import ai.openonion.oochat.data.local.RecordingResult
 import ai.openonion.oochat.data.local.VoiceRecorderStore
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.data.repository.AccountSnapshot
@@ -23,9 +23,13 @@ import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatMessage
 import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.model.UserProfile
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.PersistenceTransaction
+import ai.openonion.oochat.domain.usecase.RecentChatsSync
+import ai.openonion.oochat.domain.usecase.RecentChatsSyncResult
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.RecognizerReadiness
 import ai.openonion.oochat.network.SpeechRecognitionEvent
@@ -60,7 +64,7 @@ class FakeAppContainer(
     // KeyManager is a concrete (final) class, not an interface, so unlike
     // every other dependency here it cannot be swapped for a lightweight
     // fake — AppContainer.keyManager is typed as KeyManager itself. This
-    // constructs a real one against the instrumented test's Context;
+    // constructs a real one against the test's Context;
     // whichever of its (Keystore/libsodium-backed) operations a test
     // actually exercises still runs for real.
     override val keyManager: KeyManager = KeyManager(context),
@@ -79,16 +83,19 @@ class FakeAppContainer(
     override val speechRecognitionService: SpeechRecognitionService = FakeSpeechRecognitionService(),
     override val appSettings: AppSettings = FakeAppSettings(),
     override val persistenceTransaction: PersistenceTransaction = FakePersistenceTransaction(context),
+    override val recentChatsSync: RecentChatsSync = RecentChatsSync { _, _, _ ->
+        RecentChatsSyncResult.Unsupported
+    },
     override val agentReplyNotifier: AgentReplyNotifier = FakeAgentReplyNotifier(),
     override val isSecureStorage: Boolean = true,
     override val isIdentityStorageSecure: Boolean = true,
     // Real instance: for a hex address it resolves synchronously, no HTTP.
     override val agentDiscovery: AgentDiscoveryService = AgentDiscoveryService(),
-    override val sessionStore: ai.openonion.oochat.data.repository.SessionStore = FakeSessionStore()
-) : AppContainer {
+    override val sessionStore: ai.openonion.oochat.data.repository.SessionStore = FakeSessionStore(),
     override val connectToAgentUseCase: ConnectToAgentUseCaseContract = FakeConnectToAgentUseCase()
+) : AppContainer {
 
-    /** Always online: instrumented runs have no way to pull the device's radio. */
+    /** Always online: no test here pulls the device's radio. */
     override val networkMonitor: ai.openonion.oochat.network.NetworkMonitor =
         object : ai.openonion.oochat.network.NetworkMonitor {
             override val isOnline: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(true)
@@ -206,7 +213,7 @@ class FakeFileAttachmentStore : FileAttachmentStore {
 
 class FakeVoiceRecorderStore : VoiceRecorderStore {
     override suspend fun startRecording() = true
-    override suspend fun stopRecording(): RecordedVoice? = null
+    override suspend fun stopRecording(): RecordingResult = RecordingResult.Unusable
     override suspend fun cancelRecording() {}
 }
 
@@ -266,6 +273,10 @@ class FakeAppSettings : AppSettings {
     private val safeModeEnabledFlow = MutableStateFlow(false)
     override val safeModeEnabled: Flow<Boolean> = safeModeEnabledFlow
     override suspend fun setSafeModeEnabled(value: Boolean) { safeModeEnabledFlow.value = value }
+
+    private val developerToolsEnabledFlow = MutableStateFlow(false)
+    override val developerToolsEnabled: Flow<Boolean> = developerToolsEnabledFlow
+    override suspend fun setDeveloperToolsEnabled(value: Boolean) { developerToolsEnabledFlow.value = value }
 }
 
 class FakeAgentReplyNotifier : AgentReplyNotifier {
@@ -287,9 +298,10 @@ class FakeConnectToAgentUseCase : ConnectToAgentUseCaseContract {
     override fun retryNow() {}
     override suspend fun querySessionStatus() {}
 
-    override suspend fun disconnect() {}
+    override suspend fun disconnect(keepOutbox: Boolean) {}
     override fun isConnected() = false
     override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?) {}
+    override suspend fun executeTool(request: ExecRequest): ExecOutcome = ExecOutcome.NotSent("Not used in these tests")
     override suspend fun respond(answer: String) {}
     override suspend fun interrupt() {}
     override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {}
@@ -309,7 +321,7 @@ class FakeConnectToAgentUseCase : ConnectToAgentUseCaseContract {
  * real [ai.openonion.oochat.data.local.db.AppDatabase]. Rather than
  * manually re-implementing [androidx.room.RoomDatabase]'s generated
  * internals (fragile and Room-version-specific), this builds a real,
- * Room-generated in-memory database against the instrumented test's
+ * Room-generated in-memory database against the test's
  * Context — cheap, and never actually touched anyway since
  * [persistMessageAtomically] itself is overridden to a no-op below.
  */
