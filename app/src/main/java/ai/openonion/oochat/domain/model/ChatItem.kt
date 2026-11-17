@@ -20,6 +20,15 @@ enum class UserMessageState {
     QUEUED,
 
     /**
+     * On the wire, but sent into a turn that was still running, so the host may
+     * take it as runtime input. In that case it answers `RUNTIME_INPUT_ACK`
+     * (queued) or `RUNTIME_INPUT_REJECTED` (not taken) and the bubble stays
+     * here until one arrives. Unlike [QUEUED] it is not held back: it has been
+     * sent, so it does not pin to the tail of the running turn's output.
+     */
+    AWAITING_ACK,
+
+    /**
      * Delivery failed and will not be retried on its own. The bubble says so
      * and offers to send it again — the only state the user has to act on.
      */
@@ -79,8 +88,19 @@ sealed class ChatItem {
         // Context window occupancy at that same llm_result, as a 0.0-1.0
         // fraction (see ServerEvent.contextPercent's own doc for why this
         // isn't the 0-100 scale CompactItem's fields use).
-        val contextPercent: Double? = null
-    ) : ChatItem()
+        val contextPercent: Double? = null,
+        /**
+         * Set only on the agent's own reasoning — a `thinking` frame with
+         * text (re_act.py's `intent`, reflect.py's `reflect`), as opposed to
+         * an llm_call status or a connection error that also lands in
+         * [content]. Non-null means [content] is something the agent thought,
+         * rendered as reasoning rather than as a reply or a failure.
+         */
+        val kind: String? = null
+    ) : ChatItem() {
+        /** True for a reasoning item — see [kind]. */
+        val isReasoning: Boolean get() = kind != null
+    }
 
     /**
      * One complete assistant "turn": the model thought about it ([thinking])
@@ -106,7 +126,13 @@ sealed class ChatItem {
         override val id: String,
         val text: String,
         val options: List<String>,
-        val multiSelect: Boolean
+        val multiSelect: Boolean,
+        /** The Host's id for this question, sent back as `request_id`. Null when the event had none. */
+        val requestId: String? = null,
+        /** What this device answered. Null while the question is open. Set once, by respond. */
+        val answer: String? = null,
+        /** The Host refused [answer] (STALE_ANSWER): it was no longer waiting for one. */
+        val refused: Boolean = false
     ) : ChatItem()
 
     data class ApprovalNeeded(
@@ -116,7 +142,10 @@ sealed class ChatItem {
         val description: String? = null,
         val batchRemaining: List<BatchToolPreview>? = null,
         /** Null while the gate is still open. Set once, by respondToApproval. */
-        val decision: ApprovalDecision? = null
+        val decision: ApprovalDecision? = null,
+        /** The Host's id for this request, sent back as `request_id`. Null when the event had none. */
+        val requestId: String? = null,
+        val workRoom: WorkRoomApproval? = null
     ) : ChatItem()
 
     data class OnboardRequired(
@@ -225,7 +254,7 @@ sealed class ChatItem {
     /**
      * The agent (or a plugin acting on its behalf) switched session mode —
      * a `mode_changed` server event. [mode] is one of "safe" | "plan" |
-     * "accept_edits" | "ulw" (raw, not an enum: unlike [ThinkingStatus] etc.
+     * "accept_edits" | "ulw" (a legacy Host; see below for 1.7+) (raw, not an enum: unlike [ThinkingStatus] etc.
      * this is free-form content the server may extend, not a fixed UI state
      * machine). [triggeredBy] is one of "user" | "agent" | "ulw_checkpoint"
      * when the server sends it — plan_mode.py's exit path omits the field
@@ -237,12 +266,81 @@ sealed class ChatItem {
      * Either way it is authoritative for
      * [ai.openonion.oochat.data.repository.ConnectionRepository.approvalMode],
      * which the mode chip renders.
+     *
+     * A 1.7+ Host sends the same frame for "read-only" | "auto" |
+     * "full-access", with [turnsLeft] set for full access only, and
+     * [triggeredBy] "full_access_expired" when the budget ran out.
      */
     data class ModeChangedItem(
         override val id: String,
         val mode: String,
-        val triggeredBy: String? = null
+        val triggeredBy: String? = null,
+        val turnsLeft: Int? = null
     ) : ChatItem()
+
+    /**
+     * One Claude Code or Codex run the agent started: the card for its Work
+     * Room (W16AAPPLE-33). [id] is the Host's `invocationId`, which every
+     * frame about the run carries, so each `provider_invocation` replaces this
+     * one in place and its `provider_activity` frames land in [activities].
+     * See [WorkRooms] for how frames are folded, and docs/protocol.md.
+     */
+    data class ProviderInvocation(
+        override val id: String,
+        /** The outer agent's `codex`/`claude_code` tool call this run is; its own card is hidden. */
+        val parentToolCallId: String? = null,
+        val workroomId: String? = null,
+        /** "codex" or "claude_code"; kept raw, the Host may add providers. */
+        val provider: String = "",
+        val providerDisplayName: String? = null,
+        val taskTitle: String? = null,
+        val status: ProviderInvocationStatus = ProviderInvocationStatus.RUNNING,
+        val currentSummary: String? = null,
+        val resultSummary: String? = null,
+        val errorSummary: String? = null,
+        val elapsedMs: Long? = null,
+        /** Orders frames for the same run; an older one never overwrites a newer. */
+        val stateRevision: Long? = null,
+        val activities: List<ProviderActivity> = emptyList(),
+        /** The conversation with the provider, in the order it arrived (W16AAPPLE-34). */
+        val messages: List<ProviderMessage> = emptyList(),
+        /** The latest picture of the run's workspace or browser, once the Host has sent one. */
+        val artifact: ProviderArtifact? = null
+    ) : ChatItem()
+
+    /**
+     * One `provider_activity` frame on its way to its [ProviderInvocation].
+     * Never shown or saved itself: [ChatEventReducer] folds it into the card
+     * with [invocationId] (see [WorkRooms.foldActivity]).
+     */
+    data class ProviderActivityUpdate(
+        val invocationId: String,
+        val parentToolCallId: String? = null,
+        val provider: String = "",
+        val activity: ProviderActivity
+    ) : ChatItem() {
+        override val id: String get() = invocationId
+    }
+
+    /** One `provider_message` frame on its way to its run (W16AAPPLE-34); never shown or saved itself. */
+    data class ProviderMessageUpdate(
+        val invocationId: String,
+        val parentToolCallId: String? = null,
+        val provider: String = "",
+        val message: ProviderMessage
+    ) : ChatItem() {
+        override val id: String get() = invocationId
+    }
+
+    /** One `provider_artifact` frame on its way to its run (W16AAPPLE-34); never shown or saved itself. */
+    data class ProviderArtifactUpdate(
+        val invocationId: String,
+        val parentToolCallId: String? = null,
+        val provider: String = "",
+        val artifact: ProviderArtifact
+    ) : ChatItem() {
+        override val id: String get() = invocationId
+    }
 }
 
 enum class ThinkingStatus { RUNNING, DONE, ERROR }
@@ -279,7 +377,9 @@ data class ApprovalDecision(
     val scope: String,
     val mode: String?,
     // Free-text reason given on a rejection — see APPROVAL_RESPONSE.feedback.
-    val feedback: String? = null
+    val feedback: String? = null,
+    // The Host refused this answer (STALE_ANSWER): another device answered first.
+    val refused: Boolean = false
 )
 
 /**

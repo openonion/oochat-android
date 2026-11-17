@@ -1,23 +1,32 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.PlanReviewReply
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.ui.workroom.WORK_ROOM_DENY_MODE
+import ai.openonion.oochat.ui.workroom.WorkRoomApprovalCard
 import androidx.compose.runtime.Composable
 
 @Composable
 internal fun ChatItemBubble(
     item: ChatItem,
     timestamp: String?,
-    onRespond: (String) -> Unit,
+    onRespond: (optionIndex: Int) -> Unit,
     onApprove: (approved: Boolean, scope: String, mode: String?, feedback: String?) -> Unit,
     onOnboard: (method: String, inviteCode: String?, payment: Double?) -> Unit,
-    onPlanReviewResponse: (String) -> Unit,
+    onPlanReviewResponse: (PlanReviewReply) -> Unit,
     onUlwResponse: (action: String, turns: Int?, mode: String?) -> Unit,
     renderMarkdown: Boolean = true,
     showSender: Boolean = true,
     onRetry: (() -> Unit)? = null,
     hasLiveConnection: Boolean = true,
-    onResend: (() -> Unit)? = null
+    onResend: (() -> Unit)? = null,
+    // The turn's thoughts before this one, when this is its newest — see
+    // groupReasoningByTurn. Only read for a reasoning item.
+    earlierThoughts: List<ChatItem.Thinking> = emptyList(),
+    showAllThoughts: Boolean = false,
+    onToggleThoughts: (() -> Unit)? = null,
+    onOpenWorkRoom: (invocationId: String) -> Unit = {}
 ) {
     when (item) {
         is ChatItem.User -> UserBubble(item, timestamp, renderMarkdown, showSender, onResend)
@@ -26,7 +35,11 @@ internal fun ChatItemBubble(
             // While running with no metadata yet, show the Figma-style
             // bouncing-dots typing indicator; once done/errored (or a model
             // is already known), fall back to the richer status bubble.
-            if (item.status == ThinkingStatus.RUNNING && item.model == null && item.content == null) {
+            // Reasoning is something the agent thought, not a status, so it
+            // gets its own collapsible bubble.
+            if (item.isReasoning) {
+                ReasoningBubble(item, earlierThoughts, showAllThoughts, onToggleThoughts)
+            } else if (item.status == ThinkingStatus.RUNNING && item.model == null && item.content == null) {
                 TypingIndicator()
             } else {
                 ThinkingBubble(item, timestamp, onRetry)
@@ -34,8 +47,20 @@ internal fun ChatItemBubble(
         }
         is ChatItem.Turn -> TurnBubble(item, onRetry, renderMarkdown)
         is ChatItem.ToolCall -> ToolCallDispatch(item)
+        is ChatItem.ProviderInvocation -> WorkRoomCard(item, onOpen = { onOpenWorkRoom(item.id) })
+        // Folded into its run's card by the reducer; never in the list itself.
+        is ChatItem.ProviderActivityUpdate, is ChatItem.ProviderMessageUpdate, is ChatItem.ProviderArtifactUpdate -> Unit
         is ChatItem.AskUser -> AskUserCard(item, onRespond)
-        is ChatItem.ApprovalNeeded -> ApprovalCard(item, onApprove)
+        is ChatItem.ApprovalNeeded -> {
+            val workRoom = item.workRoom
+            if (workRoom != null) {
+                WorkRoomApprovalCard(item, workRoom) { approved, scope ->
+                    onApprove(approved, scope, if (approved) null else WORK_ROOM_DENY_MODE, null)
+                }
+            } else {
+                ApprovalCard(item, onApprove)
+            }
+        }
         // Deliberately one call site for both variants. Compose gives each
         // branch its own identity, so two calls would rebuild the card — and
         // drop the keyboard — every time the gate swapped between them.

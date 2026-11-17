@@ -24,26 +24,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 
+/**
+ * What a tap on a link does: [resolve] is given the link's target as written
+ * and returns the action, or null to leave that link inert (underlined, as
+ * every link was before this existed).
+ */
+fun interface LinkResolver {
+    fun resolve(target: String): (() -> Unit)?
+}
+
 object MarkdownRenderer {
+    /**
+     * @param links makes links tappable. Null, as in the chat, keeps every link
+     *   inert: an agent's reply is not trusted to send the user anywhere.
+     */
     @Composable
     fun RenderBlocks(
         text: String,
         textColor: Color,
-        modifier: Modifier = Modifier
+        modifier: Modifier = Modifier,
+        links: LinkResolver? = null
     ) {
         val blocks = remember(text) { parseMarkdownBlocks(text) }
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            blocks.forEach { MarkdownBlockContent(it, textColor) }
+            blocks.forEach { MarkdownBlockContent(it, textColor, links) }
         }
     }
 }
@@ -67,7 +84,7 @@ internal sealed class MdBlock {
 }
 
 @Composable
-internal fun MarkdownBlockContent(block: MdBlock, textColor: Color) {
+internal fun MarkdownBlockContent(block: MdBlock, textColor: Color, links: LinkResolver? = null) {
     // Size for inline `code` spans — matches the fenced code block's size so
     // inline and block code read as one family. A [SpanStyle] can't take a
     // whole [TextStyle], so this is passed down as a bare TextUnit. Neither
@@ -83,7 +100,7 @@ internal fun MarkdownBlockContent(block: MdBlock, textColor: Color) {
                 else -> MaterialTheme.typography.labelLarge
             }
             Text(
-                text = parseInlineMarkdown(block.text, textColor, codeFontSize),
+                text = parseInlineMarkdown(block.text, textColor, codeFontSize, links),
                 style = baseStyle,
                 fontWeight = FontWeight.Bold,
                 color = textColor
@@ -92,7 +109,7 @@ internal fun MarkdownBlockContent(block: MdBlock, textColor: Color) {
 
         is MdBlock.Paragraph -> {
             Text(
-                text = parseInlineMarkdown(block.text, textColor, codeFontSize),
+                text = parseInlineMarkdown(block.text, textColor, codeFontSize, links),
                 style = MaterialTheme.typography.chatBody,
                 color = textColor
             )
@@ -109,7 +126,7 @@ internal fun MarkdownBlockContent(block: MdBlock, textColor: Color) {
                             modifier = Modifier.width(22.dp)
                         )
                         Text(
-                            text = parseInlineMarkdown(item, textColor, codeFontSize),
+                            text = parseInlineMarkdown(item, textColor, codeFontSize, links),
                             style = MaterialTheme.typography.chatBody,
                             color = textColor
                         )
@@ -154,7 +171,7 @@ internal fun MarkdownBlockContent(block: MdBlock, textColor: Color) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = parseInlineMarkdown(block.text, textColor, codeFontSize),
+                    text = parseInlineMarkdown(block.text, textColor, codeFontSize, links),
                     style = MaterialTheme.typography.chatBody.copy(fontStyle = FontStyle.Italic),
                     color = textColor.copy(alpha = 0.85f)
                 )
@@ -266,9 +283,25 @@ internal fun parseMarkdownBlocks(text: String): List<MdBlock> {
  * [links](url). Kept separate from block parsing so code-block contents are
  * never re-interpreted as inline markup.
  */
-private fun parseInlineMarkdown(text: String, textColor: Color, codeFontSize: TextUnit): AnnotatedString {
+private fun parseInlineMarkdown(
+    text: String,
+    textColor: Color,
+    codeFontSize: TextUnit,
+    links: LinkResolver? = null
+): AnnotatedString {
     return buildAnnotatedString {
         parseInlineSpans(text).forEach { span ->
+            val onTap = span.target?.let { target -> links?.resolve(target) }
+            if (onTap != null) {
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = span.target,
+                        styles = TextLinkStyles(SpanStyle(textDecoration = TextDecoration.Underline)),
+                        linkInteractionListener = { onTap() }
+                    )
+                ) { append(span.text) }
+                return@forEach
+            }
             val style = when (span.style) {
                 InlineStyle.PLAIN -> null
                 InlineStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
@@ -295,8 +328,8 @@ private fun parseInlineMarkdown(text: String, textColor: Color, codeFontSize: Te
 /** Inline styles [parseInlineSpans] can emit. */
 internal enum class InlineStyle { PLAIN, BOLD, ITALIC, BOLD_ITALIC, CODE, LINK }
 
-/** [text] is the visible run, delimiters already stripped. */
-internal data class InlineSpan(val style: InlineStyle, val text: String)
+/** [text] is the visible run, delimiters already stripped. [target] is a link's destination. */
+internal data class InlineSpan(val style: InlineStyle, val text: String, val target: String? = null)
 
 private val INLINE_PATTERN =
     Regex("""\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|\[(.+?)]\((.+?)\)""")
@@ -323,7 +356,7 @@ internal fun parseInlineSpans(text: String): List<InlineSpan> {
             groups[2].isNotEmpty() -> InlineSpan(InlineStyle.BOLD, groups[2])
             groups[3].isNotEmpty() -> InlineSpan(InlineStyle.ITALIC, groups[3])
             groups[4].isNotEmpty() -> InlineSpan(InlineStyle.CODE, groups[4])
-            else -> InlineSpan(InlineStyle.LINK, groups[5])
+            else -> InlineSpan(InlineStyle.LINK, groups[5], target = groups[6])
         }
         index = match.range.last + 1
     }
