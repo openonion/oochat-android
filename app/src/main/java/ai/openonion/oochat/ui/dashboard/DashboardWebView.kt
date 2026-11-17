@@ -1,17 +1,25 @@
 package ai.openonion.oochat.ui.dashboard
 
+import ai.openonion.oochat.ui.components.allowAlgorithmicDarkening
+import ai.openonion.oochat.ui.components.webViewTheme
+import ai.openonion.oochat.ui.theme.LocalDarkTheme
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
 import android.annotation.SuppressLint
+import android.view.ContextThemeWrapper
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -23,47 +31,68 @@ import androidx.compose.ui.viewinterop.AndroidView
  * equivalent of the web client's `sandbox="allow-scripts"` iframe, and the
  * navigation refusal that keeps the page from replacing itself.
  *
+ * A newer snapshot reloads this one WebView in place. That does not flash:
+ * Chromium's paint holding keeps the old page's last frame up until the new
+ * one can paint. A pair of WebViews swapped on ready signals was tried and
+ * dropped — on a device it showed no fewer blank frames, and the hidden page
+ * loaded slower and signalled late. `DashboardReloadTest` (instrumented) checks
+ * every frame across a reload.
+ *
  * `javaScriptEnabled = true` is required — the bridge is a script. Everything
  * else a WebView can reach is switched off.
+ *
+ * @param allowDarkening Lets a page with no dark theme be darkened, on the settings of each WebView made.
+ *   A test passes its own to see the call, since Robolectric's WebView refuses the real feature.
  */
 @Composable
 fun DashboardWebView(
     document: String,
     onRunSkill: (skill: String, args: String) -> Unit,
     onNavigationBlocked: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    allowDarkening: (WebSettings) -> Unit = WebSettings::allowAlgorithmicDarkening
 ) {
     // The bridge is called from a WebView thread and must see the *current*
     // handler, not the one captured when the WebView was first created.
     val currentRunSkill by rememberUpdatedState(onRunSkill)
     val currentNavigationBlocked by rememberUpdatedState(onNavigationBlocked)
     val bridge = remember { SkillBridge { skill, args -> currentRunSkill(skill, args) } }
+    val surface = MaterialTheme.colorScheme.surface
+    val dark = LocalDarkTheme.current
 
-    AndroidView(
-        modifier = modifier,
-        factory = { context ->
-            WebView(context).apply {
-                configureForUntrustedContent()
-                addJavascriptInterface(bridge, DashboardDocument.BRIDGE_NAME)
-                webViewClient = BlockAllNavigationClient { currentNavigationBlocked() }
-            }
-        },
-        update = { webView ->
-            // Only on a genuinely new snapshot. `update` runs on every
-            // recomposition, and reloading the same document would restart the
-            // page (losing scroll and any filter the user typed) for reasons
-            // that have nothing to do with the dashboard.
-            if (webView.tag !== document) {
-                webView.tag = document
-                // A null base URL is what makes the origin opaque: no
-                // same-origin peer, no file:// resolution, no app storage. It
-                // is also why the CSP has to travel inside the document as a
-                // meta tag — there are no response headers to put it in.
-                webView.loadDataWithBaseURL(null, document, "text/html", "utf-8", null)
-            }
-        },
-        onRelease = { it.destroy() }
-    )
+    // Keyed on the theme: a WebView takes its light/dark from the theme it is made under, so a change
+    // of theme is a new WebView, which loads the dashboard again (the document is rebuilt for the new
+    // theme anyway).
+    key(dark) {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                WebView(ContextThemeWrapper(context, webViewTheme(dark))).apply {
+                    configureForUntrustedContent(allowDarkening)
+                    addJavascriptInterface(bridge, DashboardDocument.BRIDGE_NAME)
+                    webViewClient = BlockAllNavigationClient { currentNavigationBlocked() }
+                }
+            },
+            update = { webView ->
+                // Painted before the first snapshot draws, so a dark theme does
+                // not flash white.
+                webView.setBackgroundColor(surface.toArgb())
+                // Only on a genuinely new snapshot. `update` runs on every
+                // recomposition, and reloading the same document would restart the
+                // page (losing scroll and any filter the user typed) for reasons
+                // that have nothing to do with the dashboard.
+                if (webView.tag !== document) {
+                    webView.tag = document
+                    // A null base URL is what makes the origin opaque: no
+                    // same-origin peer, no file:// resolution, no app storage. It
+                    // is also why the CSP has to travel inside the document as a
+                    // meta tag — there are no response headers to put it in.
+                    webView.loadDataWithBaseURL(null, document, "text/html", "utf-8", null)
+                }
+            },
+            onRelease = { it.destroy() }
+        )
+    }
 }
 
 /**
@@ -72,7 +101,7 @@ fun DashboardWebView(
  * bridge.
  */
 @SuppressLint("SetJavaScriptEnabled")
-private fun WebView.configureForUntrustedContent() {
+private fun WebView.configureForUntrustedContent(allowDarkening: (WebSettings) -> Unit) {
     settings.apply {
         // The nonced bridge is a script; without this, skill buttons are dead.
         // The agent's own scripts are refused by the CSP, not by this switch.
@@ -88,6 +117,8 @@ private fun WebView.configureForUntrustedContent() {
         domStorageEnabled = false
         javaScriptCanOpenWindowsAutomatically = false
         setSupportMultipleWindows(false)
+        // The page paints its own colours, so one with no dark theme is darkened when the app is dark.
+        allowDarkening(this)
     }
     // No WebChromeClient is set, so window.open, alert/confirm/prompt and
     // permission requests are all ignored rather than surfaced as app dialogs.

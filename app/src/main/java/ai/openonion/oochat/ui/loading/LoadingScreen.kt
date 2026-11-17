@@ -86,7 +86,7 @@ private const val CTA_DELAY_MS = 180
  * once connected — matching the Figma design's completed-state beat.
  *
  * The ONBOARD_REQUIRED outcome gets a gentler treatment: the VpnKey
- * icon springs in with a soft tertiary halo that breathes, the explanation
+ * icon springs in with a soft halo that breathes, the explanation
  * line and "Continue to Onboarding" button fade + slide in over a few
  * hundred ms so the screen "settles" into the new state instead of
  * snapping. The in-progress and connected outcomes use the existing
@@ -177,10 +177,7 @@ internal fun LoadingContent(
             Spacer(modifier = Modifier.height(MaterialTheme.spacing.xxl))
 
             val outcome = uiState.outcome
-            val accentColor = when (outcome) {
-                LoadingOutcome.ONBOARD_REQUIRED -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.primary
-            }
+            val accentColor = MaterialTheme.colorScheme.primary
 
             // The three outcome glyphs differ in size (48dp ring/checkmark vs
             // the 96dp halo), so a bare `when` snapped everything below them up
@@ -317,10 +314,6 @@ internal fun LoadingContent(
                     ) {
                         Button(
                             onClick = onContinueToOnboarding,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.tertiary,
-                                contentColor = MaterialTheme.colorScheme.onTertiary
-                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(ButtonToken.Compact),

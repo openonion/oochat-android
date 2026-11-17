@@ -3,6 +3,7 @@ package ai.openonion.oochat.notification
 import ai.openonion.oochat.MainActivity
 import ai.openonion.oochat.R
 import ai.openonion.oochat.data.local.AgentReplyNotifier
+import ai.openonion.oochat.util.SensitiveText
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -41,7 +42,10 @@ class AndroidAgentReplyNotifier(private val context: Context) : AgentReplyNotifi
             tapIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val text = preview.take(PREVIEW_MAX_LENGTH)
+        // Shown on the lock screen too (W16AAPPLE-50), so no path at all.
+        // Redacted before the cut, so a key the cut would split is still
+        // recognised whole.
+        val text = SensitiveText.redactWithoutPaths(preview).take(PREVIEW_MAX_LENGTH)
         val notification = NotificationCompat.Builder(context, AGENT_REPLY_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification_reply)
             .setContentTitle(agentName?.takeIf { it.isNotBlank() } ?: "New reply")
