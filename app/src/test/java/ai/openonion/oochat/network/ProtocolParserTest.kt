@@ -2,6 +2,7 @@ package ai.openonion.oochat.network
 
 import ai.openonion.oochat.domain.model.AgentSkill
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.ServerSessionStatus
 import ai.openonion.oochat.domain.model.ToolStatus
 import ai.openonion.oochat.domain.model.stableAssistantId
 import org.junit.Assert.assertEquals
@@ -59,6 +60,62 @@ class ProtocolParserTest {
 
         val ev = result.event as ConnectionEvent.Connected
         assertEquals("", ev.address)
+    }
+
+    @Test
+    fun `CONNECTED reports whether the Host sees the session as new, connected or running`() {
+        val expected = mapOf(
+            "new" to ServerSessionStatus.NEW,
+            "connected" to ServerSessionStatus.CONNECTED,
+            "running" to ServerSessionStatus.RUNNING
+        )
+
+        expected.forEach { (wire, status) ->
+            val ev = parse("""{"type":"CONNECTED","session_id":"s1","status":"$wire"}""").event as ConnectionEvent.Connected
+            assertEquals(wire, status, ev.status)
+        }
+    }
+
+    @Test
+    fun `CONNECTED with no status, or one this client does not know, is UNKNOWN`() {
+        val frames = listOf(
+            """{"type":"CONNECTED","session_id":"s1"}""",
+            """{"type":"CONNECTED","session_id":"s1","status":"index"}""",
+            """{"type":"CONNECTED","session_id":"s1","status":"Running"}"""
+        )
+
+        frames.forEach { frame ->
+            val ev = parse(frame).event as ConnectionEvent.Connected
+            assertEquals(frame, ServerSessionStatus.UNKNOWN, ev.status)
+        }
+    }
+
+    @Test
+    fun `CONNECTED passes server_newer through and defaults it to false`() {
+        val newer = parse("""{"type":"CONNECTED","session_id":"s1","status":"connected","server_newer":true}""")
+        val plain = parse("""{"type":"CONNECTED","session_id":"s1","status":"connected"}""")
+
+        assertTrue((newer.event as ConnectionEvent.Connected).serverNewer)
+        assertFalse((plain.event as ConnectionEvent.Connected).serverNewer)
+    }
+
+    @Test
+    fun `a full CONNECTED frame as the Host sends it still decodes`() {
+        // Everything websocket-protocol.md lists, including fields this client does not read.
+        val result = parse(
+            """{"type":"CONNECTED","session_id":"550e8400","status":"connected","protocol":{"name":"oip","version":"0.1"},
+              |"session_modes":{"currentModeId":"auto","turnsLeft":null,"availableModes":[{"id":"auto","name":"Auto"}]},
+              |"server_newer":true,"session":{"session_id":"550e8400","turn":2,
+              |"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]},
+              |"chat_items":[{"id":"a1","type":"agent","content":"hello"}]}"""
+                .trimMargin()
+        )
+
+        val ev = result.event as ConnectionEvent.Connected
+        assertEquals(ServerSessionStatus.CONNECTED, ev.status)
+        assertTrue(ev.serverNewer)
+        assertEquals("550e8400", ev.sessionId)
+        assertEquals(2, ev.session?.messages?.size)
     }
 
     // ── AGENT_PROFILE ────────────────────────────────────────────────
@@ -239,6 +296,119 @@ class ProtocolParserTest {
         assertTrue(ev is ConnectionEvent.DashboardSnapshotReceived)
     }
 
+    // --- CONTROL_CENTER_APP / CONTROL_CENTER_STATE (W16AAPPLE-29) ---
+
+    private val revision = "sha256:" + "a".repeat(64)
+
+    /** The descriptor control_center/runtime.py activates, with [overrides] applied. */
+    private fun appFrame(vararg overrides: Pair<String, String>): String {
+        val fields = linkedMapOf(
+            "schema" to "\"connectonion.control-app/1\"",
+            "sdk_version" to "\"1\"",
+            "revision" to "\"$revision\"",
+            "url" to "\"https://r-9f86d081.apps.example.net/index.html\"",
+            "capabilities" to """["clipboard-write","fullscreen"]""",
+            "review" to """{"status":"approved","review_id":"r1","reviewed_at":"2026-10-14T00:00:00+00:00","policy":"p1"}"""
+        )
+        overrides.forEach { (key, value) -> fields[key] = value }
+        val app = fields.entries.joinToString(",", "{", "}") { (k, v) -> "\"$k\":$v" }
+        return """{"type":"CONTROL_CENTER_APP","session_id":"s1","app":$app}"""
+    }
+
+    private fun parsedApp(frame: String) =
+        (parse(frame).event as ConnectionEvent.ControlCenterAppReceived).app
+
+    @Test
+    fun `an approved CONTROL_CENTER_APP is read with its address, revision and capabilities`() {
+        val app = parsedApp(appFrame())
+
+        assertEquals("https://r-9f86d081.apps.example.net/index.html", app?.url)
+        assertEquals(revision, app?.revision)
+        assertEquals(listOf("clipboard-write", "fullscreen"), app?.capabilities)
+    }
+
+    @Test
+    fun `CONTROL_CENTER_APP with a null app means none is published`() {
+        assertNull(parsedApp("""{"type":"CONTROL_CENTER_APP","session_id":"s1","app":null}"""))
+        assertNull(parsedApp("""{"type":"CONTROL_CENTER_APP","session_id":"s1"}"""))
+    }
+
+    @Test
+    fun `a descriptor that could not be loaded safely reads as no app`() {
+        // None of these is something the Host's runtime would activate.
+        val refused = mapOf(
+            "plain http" to appFrame("url" to "\"http://apps.example.net/index.html\""),
+            "a query" to appFrame("url" to "\"https://apps.example.net/index.html?v=2\""),
+            "a fragment" to appFrame("url" to "\"https://apps.example.net/index.html#x\""),
+            "credentials" to appFrame("url" to "\"https://user:pw@apps.example.net/index.html\""),
+            "no host" to appFrame("url" to "\"https:///index.html\""),
+            "not a URL" to appFrame("url" to "\"https://apps example.net/\""),
+            "a script URL" to appFrame("url" to "\"javascript:alert(1)\""),
+            "an IPv6 host the frame's origin cannot be pinned to" to appFrame("url" to "\"https://[::1]/index.html\""),
+            "a short revision" to appFrame("revision" to "\"sha256:abc\""),
+            "an uppercase revision" to appFrame("revision" to "\"sha256:${"A".repeat(64)}\""),
+            "another hash" to appFrame("revision" to "\"sha512:${"a".repeat(64)}\""),
+            "a blocked review" to appFrame("review" to """{"status":"blocked"}"""),
+            "no review" to appFrame("review" to "null"),
+            "an unknown schema" to appFrame("schema" to "\"connectonion.control-app/2\""),
+            "another bridge version" to appFrame("sdk_version" to "\"2\""),
+            "a numeric bridge version" to appFrame("sdk_version" to "1"),
+            "an app that is not an object" to """{"type":"CONTROL_CENTER_APP","app":"https://apps.example.net/"}"""
+        )
+
+        refused.forEach { (why, frame) -> assertNull(why, parsedApp(frame)) }
+    }
+
+    @Test
+    fun `an app may only declare the capabilities the React SDK allows`() {
+        // They become the iframe's permissions, so React refuses the whole descriptor otherwise.
+        assertEquals(
+            listOf("camera", "microphone", "geolocation", "clipboard-read"),
+            parsedApp(appFrame("capabilities" to """["camera","microphone","geolocation","clipboard-read"]"""))?.capabilities
+        )
+        assertEquals(emptyList<String>(), parsedApp(appFrame("capabilities" to "[]"))?.capabilities)
+        listOf(
+            """["camera *; payment"]""",
+            """["usb"]""",
+            """["camera",3]""",
+            "null",
+            "\"camera\""
+        ).forEach { assertNull(it, parsedApp(appFrame("capabilities" to it))) }
+    }
+
+    @Test
+    fun `an app that declares no capabilities has none`() {
+        val frame = appFrame().replace(""","capabilities":["clipboard-write","fullscreen"]""", "")
+
+        assertEquals(emptyList<String>(), parsedApp(frame)?.capabilities)
+    }
+
+    @Test
+    fun `CONTROL_CENTER_STATE carries the status and the reason an update failed`() {
+        val frame = """{"type":"CONTROL_CENTER_STATE","session_id":"s1","state":{"schema":1,"active":null,
+            |"history":[],"status":"blocked","error":{"code":"source_changed","message":"Build changed during review"},
+            |"updates":{}}}""".trimMargin().replace("\n", "")
+
+        assertEquals(
+            ConnectionEvent.ControlCenterStateReceived("blocked", "source_changed", "Build changed during review"),
+            parse(frame).event
+        )
+    }
+
+    @Test
+    fun `CONTROL_CENTER_STATE with no error has no reason`() {
+        assertEquals(
+            ConnectionEvent.ControlCenterStateReceived("approved", null, null),
+            parse("""{"type":"CONTROL_CENTER_STATE","state":{"status":"approved","error":null}}""").event
+        )
+    }
+
+    @Test
+    fun `CONTROL_CENTER_STATE without a status is dropped`() {
+        assertEquals(ConnectionEvent.Unknown, parse("""{"type":"CONTROL_CENTER_STATE","state":{"error":null}}""").event)
+        assertEquals(ConnectionEvent.Unknown, parse("""{"type":"CONTROL_CENTER_STATE","state":"approved"}""").event)
+    }
+
     // ── tool_call ────────────────────────────────────────────────────
 
     @Test
@@ -296,7 +466,7 @@ class ProtocolParserTest {
     @Test
     fun `tool_result updates the matching ToolCall to DONE with a result`() {
         val result = parse(
-            """{"type":"tool_result","tool_id":"t1","name":"search","status":"ok","result":"sunny, 72F"}"""
+            """{"type":"tool_result","tool_id":"t1","name":"search","status":"completed","result":"sunny, 72F"}"""
         )
 
         val ev = result.event as ConnectionEvent.ChatItemUpdated
@@ -643,5 +813,95 @@ class ProtocolParserTest {
         assertFalse(result.shouldSendPong)
         assertFalse(result.setWaiting)
         assertNull(result.updateSession)
+    }
+
+    // ── msgId: the Host's id for a frame in its replay log ───────────
+
+    @Test
+    fun `frames from the agent log carry their id as msgId`() {
+        val frames = listOf(
+            """{"type":"llm_call","id":"m1","model":"x"}""",
+            """{"type":"llm_result","id":"m1","status":"done"}""",
+            """{"type":"thinking","id":"m1","content":"hmm"}""",
+            """{"type":"tool_call","id":"m1","tool_id":"t1","name":"bash"}""",
+            """{"type":"tool_result","id":"m1","tool_id":"t1","status":"success","result":"ok"}""",
+            """{"type":"assistant","id":"m1","content":"hello"}""",
+            """{"type":"session_sync","id":"m1","session":{"session_id":"s1","messages":[]}}""",
+            """{"type":"approval_needed","id":"m1","tool":"bash"}""",
+            """{"type":"ask_user","id":"m1","question":"ok?"}""",
+            // Types the client does not decode still take part in replay.
+            """{"type":"plan","id":"m1","entries":[]}""",
+            """{"type":"turn_result","id":"m1"}""",
+            """{"type":"mode_budget_changed","id":"m1"}""",
+            """{"type":"provider_activity","id":"m1"}""",
+            """{"type":"provider_message","id":"m1"}"""
+        )
+
+        frames.forEach { frame -> assertEquals(frame, "m1", parse(frame).msgId) }
+    }
+
+    @Test
+    fun `frames written straight to the socket never carry a msgId`() {
+        // None of these are in the Host's replay log, so an id on one names nothing it could rewind to.
+        val frames = listOf(
+            """{"type":"PING","id":"h1"}""",
+            """{"type":"CONNECTED","id":"h1","session_id":"s1"}""",
+            """{"type":"AGENT_PROFILE","id":"h1","name":"a","model":"m"}""",
+            """{"type":"DASHBOARD_SNAPSHOT","id":"h1","html":"<p>hi</p>"}""",
+            """{"type":"ONBOARD_REQUIRED","id":"h1","methods":["invite_code"]}""",
+            """{"type":"ONBOARD_SUCCESS","id":"h1","level":"contact"}""",
+            """{"type":"OUTPUT","id":"h1","result":"done"}""",
+            """{"type":"ERROR","id":"h1","message":"nope"}""",
+            """{"type":"SESSION_STATUS","id":"h1","session_id":"s1","status":"running"}""",
+            """{"type":"RUNTIME_INPUT_ACK","id":"h1","session_id":"s1"}""",
+            """{"type":"CONTROL_CENTER_APP","id":"h1","session_id":"s1","app":null}""",
+            """{"type":"CONTROL_CENTER_STATE","id":"h1","session_id":"s1","state":{"status":"empty"}}"""
+        )
+
+        frames.forEach { frame -> assertNull(frame, parse(frame).msgId) }
+    }
+
+    @Test
+    fun `a log frame without a usable id has no msgId`() {
+        assertNull(parse("""{"type":"tool_call","tool_id":"t1","name":"bash"}""").msgId)
+        assertNull(parse("""{"type":"tool_call","id":"  ","tool_id":"t1","name":"bash"}""").msgId)
+    }
+
+    @Test
+    fun `a frame has the same dedupe key whichever socket the relay carried it on`() {
+        // The relay stamps its own session_id and a per-socket conn_id on every frame it forwards.
+        val first = parse("""{"session_id":"relay-1","type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash","conn_id":"conn-a"}""")
+        val again = parse("""{"session_id":"relay-2","type":"tool_call","id":"ev-1","tool_id":"t1","name":"bash","conn_id":"conn-b"}""")
+
+        assertNotNull(first.dedupeKey)
+        assertEquals(first.dedupeKey, again.dedupeKey)
+    }
+
+    @Test
+    fun `frames that differ in type, status or content have different dedupe keys`() {
+        val keys = listOf(
+            """{"type":"llm_call","id":"L1","model":"m"}""",
+            """{"type":"llm_result","id":"L1","model":"m","status":"done"}""",
+            """{"type":"compact","id":"C1","status":"compacting"}""",
+            """{"type":"compact","id":"C1","status":"done"}""",
+            """{"type":"thinking","id":"T1","content":"a"}""",
+            """{"type":"thinking","id":"T1","content":"ab"}"""
+        ).map { parse(it).dedupeKey }
+
+        assertTrue(keys.all { it != null })
+        assertEquals(keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun `session snapshots, host frames and frames the client does not decode have no dedupe key`() {
+        val frames = listOf(
+            """{"type":"session_sync","id":"m1","session":{"session_id":"s1","messages":[{"role":"assistant","content":"hi"}]}}""",
+            """{"type":"AGENT_PROFILE","id":"h1","name":"a","model":"m"}""",
+            """{"type":"DASHBOARD_SNAPSHOT","id":"h1","html":"<p>hi</p>"}""",
+            """{"type":"plan","id":"m1","entries":[]}""",
+            """{"type":"tool_call","tool_id":"t1","name":"bash"}"""
+        )
+
+        frames.forEach { frame -> assertNull(frame, parse(frame).dedupeKey) }
     }
 }

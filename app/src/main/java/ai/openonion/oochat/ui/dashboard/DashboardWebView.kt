@@ -7,11 +7,13 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
 
 /**
@@ -22,6 +24,13 @@ import androidx.compose.ui.viewinterop.AndroidView
  * model. This file is the Android half: the settings that make the WebView the
  * equivalent of the web client's `sandbox="allow-scripts"` iframe, and the
  * navigation refusal that keeps the page from replacing itself.
+ *
+ * A newer snapshot reloads this one WebView in place. That does not flash:
+ * Chromium's paint holding keeps the old page's last frame up until the new
+ * one can paint. A pair of WebViews swapped on ready signals was tried and
+ * dropped — on a device it showed no fewer blank frames, and the hidden page
+ * loaded slower and signalled late. `DashboardReloadTest` (instrumented) checks
+ * every frame across a reload.
  *
  * `javaScriptEnabled = true` is required — the bridge is a script. Everything
  * else a WebView can reach is switched off.
@@ -38,6 +47,7 @@ fun DashboardWebView(
     val currentRunSkill by rememberUpdatedState(onRunSkill)
     val currentNavigationBlocked by rememberUpdatedState(onNavigationBlocked)
     val bridge = remember { SkillBridge { skill, args -> currentRunSkill(skill, args) } }
+    val surface = MaterialTheme.colorScheme.surface
 
     AndroidView(
         modifier = modifier,
@@ -49,6 +59,9 @@ fun DashboardWebView(
             }
         },
         update = { webView ->
+            // Painted before the first snapshot draws, so a dark theme does
+            // not flash white.
+            webView.setBackgroundColor(surface.toArgb())
             // Only on a genuinely new snapshot. `update` runs on every
             // recomposition, and reloading the same document would restart the
             // page (losing scroll and any filter the user typed) for reasons

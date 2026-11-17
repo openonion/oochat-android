@@ -4,6 +4,7 @@ import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
 import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.data.repository.AccountClockException
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.data.repository.AccountSnapshot
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
@@ -151,6 +152,10 @@ class SettingsViewModelTest {
         override suspend fun setAnalyticsEnabled(value: Boolean) { analyticsEnabledFlow.value = value }
         override val safeModeEnabled: Flow<Boolean> = safeModeEnabledFlow
         override suspend fun setSafeModeEnabled(value: Boolean) { safeModeEnabledFlow.value = value }
+
+        private val developerToolsEnabledFlow = MutableStateFlow(false)
+        override val developerToolsEnabled: Flow<Boolean> = developerToolsEnabledFlow
+        override suspend fun setDeveloperToolsEnabled(value: Boolean) { developerToolsEnabledFlow.value = value }
     }
 
     private class FakeConfigRepository : ConnectionConfigRepository {
@@ -252,6 +257,45 @@ class SettingsViewModelTest {
 
         assertEquals("a successful reload must fill the key", "token-default", vm.uiState.value.accountApiKey)
         assertEquals("token-default", vm.uiState.value.accountApiKey)
+    }
+
+    @Test
+    fun `an account refused over the device clock says so until a load succeeds`() = runTest(testDispatcher) {
+        // W16AAPPLE-91: the one account failure the user can fix themselves.
+        accountRepo.queuedResults += Result.failure(AccountClockException())
+        val vm = createVm()
+        testScheduler.runCurrent()
+
+        assertEquals(SettingsViewModel.ACCOUNT_CLOCK_WRONG, vm.uiState.value.accountProblem)
+
+        vm.loadAccount()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
+    }
+
+    @Test
+    fun `a later failure for another reason clears the clock message`() = runTest(testDispatcher) {
+        // The user may have fixed the clock since; a lost network must not keep blaming it.
+        accountRepo.queuedResults += Result.failure(AccountClockException())
+        accountRepo.queuedResults += Result.failure(RuntimeException("network down"))
+        val vm = createVm()
+        testScheduler.runCurrent()
+        assertEquals(SettingsViewModel.ACCOUNT_CLOCK_WRONG, vm.uiState.value.accountProblem)
+
+        vm.loadAccount()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
+    }
+
+    @Test
+    fun `any other account failure is not shown as a problem to fix`() = runTest(testDispatcher) {
+        accountRepo.queuedResults += Result.failure(RuntimeException("network down"))
+        val vm = createVm()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
     }
 
     // ── Identity switch invalidates the shared account cache ───────────
@@ -470,12 +514,14 @@ class SettingsViewModelTest {
         vm.setFontSizeIndex(3)
         vm.setCustomInstructions("be brief")
         vm.setNotificationSound("Bell")
+        vm.setDeveloperToolsEnabled(true)
         testScheduler.runCurrent()
 
         assertEquals(false, appSettings.streamingResponses.firstValue())
         assertEquals(3, appSettings.fontSizeIndex.firstValue())
         assertEquals("be brief", appSettings.customInstructions.firstValue())
         assertEquals("Bell", appSettings.notificationSound.firstValue())
+        assertEquals(true, appSettings.developerToolsEnabled.firstValue())
     }
 
     private fun <T> Flow<T>.firstValue(): T = (this as MutableStateFlow<T>).value

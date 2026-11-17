@@ -29,7 +29,7 @@ class VoiceInputInteractionTest {
 
     private fun bar(
         isConnected: Boolean = true,
-        isSending: Boolean = false,
+        hasAgent: Boolean = true,
         isAgentWorking: Boolean = false,
         voiceInput: VoiceInputState = VoiceInputState()
     ) {
@@ -37,7 +37,7 @@ class VoiceInputInteractionTest {
             ConnectOnionTheme {
                 InputBar(
                     isConnected = isConnected,
-                    isSending = isSending,
+                    hasAgent = hasAgent,
                     isAgentWorking = isAgentWorking,
                     voiceInput = voiceInput,
                     onSend = { _, _, _ -> }
@@ -56,8 +56,9 @@ class VoiceInputInteractionTest {
     }
 
     @Test
-    fun micStaysAvailableWhileSending() {
-        bar(isSending = true)
+    fun micStaysAvailableWhileDisconnected() {
+        // Offline the field still takes a message for the outbox (W16AAPPLE-102).
+        bar(isConnected = false)
 
         composeTestRule.onNode(hasContentDescription("Dictate a message")).assert(isEnabled())
     }
@@ -70,9 +71,9 @@ class VoiceInputInteractionTest {
     }
 
     @Test
-    fun micDisabledWhenDisconnected() {
+    fun micDisabledWithNoAgent() {
         // Dictation writes into the field, and the field is locked with no agent.
-        bar(isConnected = false)
+        bar(isConnected = false, hasAgent = false)
 
         composeTestRule.onNode(hasContentDescription("Dictate a message"))
             .assertIsDisplayed()
