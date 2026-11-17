@@ -4,7 +4,17 @@ import ai.openonion.oochat.domain.model.AgentLiveProfile
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
+import ai.openonion.oochat.domain.model.LEGACY_SESSION_MODES
+import ai.openonion.oochat.domain.model.NO_CONTROL_CENTER_APP
+import ai.openonion.oochat.domain.model.NO_PLAN
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionModes
+import ai.openonion.oochat.domain.model.UNKNOWN_SESSION_STATUS
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -46,12 +56,34 @@ interface ConnectToAgentUseCaseContract {
      */
     val modePending: StateFlow<Boolean>
 
+    /**
+     * Which modes may be offered, and whether the Host owns them — see
+     * [ai.openonion.oochat.data.repository.ConnectionRepository.sessionModes].
+     * Default for fakes: [SessionModes.LEGACY].
+     */
+    val sessionModes: StateFlow<SessionModes> get() = LEGACY_SESSION_MODES
+
+    /**
+     * The last thing the Host said about the current session, for display — see
+     * [ai.openonion.oochat.data.repository.ConnectionRepository.hostSessionStatus].
+     */
+    val hostSessionStatus: StateFlow<ServerSessionStatus> get() = UNKNOWN_SESSION_STATUS
+
      /**
      * The connected agent's own Home page (untrusted agent-authored HTML),
      * or null until its `DASHBOARD_SNAPSHOT` frame arrives — see
      * [ai.openonion.oochat.data.repository.ConnectionRepository.dashboardHtml].
      */
     val dashboardHtml: StateFlow<String?>
+
+    /** See [ai.openonion.oochat.data.repository.ConnectionRepository.controlCenterApp]. */
+    val controlCenterApp: StateFlow<ControlCenterApp?> get() = NO_CONTROL_CENTER_APP
+
+    /**
+     * The agent's current Todo List — see
+     * [ai.openonion.oochat.data.repository.ConnectionRepository.plan].
+     */
+    val plan: StateFlow<List<PlanEntry>> get() = NO_PLAN
 
     /**
      * Observe chat events from the connected agent (Thinking / Agent
@@ -66,6 +98,14 @@ interface ConnectToAgentUseCaseContract {
      * Default no-op so a fake with no connection behind it needs no override.
      */
     fun releaseServerTranscript() {}
+
+    /**
+     * Tell the connection a screen has acted on the Host's answer to the last CONNECT and it can
+     * be let go — see
+     * [ai.openonion.oochat.data.repository.ConnectionRepository.releaseSessionStatus].
+     * Default no-op so a fake with no connection behind it needs no override.
+     */
+    fun releaseSessionStatus() {}
 
     /**
      * Connect to an agent by address (relay mode) or URL (direct mode).
@@ -100,6 +140,11 @@ interface ConnectToAgentUseCaseContract {
      * @param files Non-image file attachments (name + base64 data URL each)
      */
     suspend fun sendMessage(content: String, agentAddress: String, images: List<String>? = null, files: List<OutgoingFileAttachment>? = null)
+
+    /**
+     * Send a direct tool command and wait for the corresponding EXEC_RESULT.
+     */
+    suspend fun executeTool(request: ExecRequest): ExecOutcome
 
     /**
      * Reply to an `ask_user` event.

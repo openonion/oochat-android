@@ -13,6 +13,14 @@ data class AccountSnapshot(
 )
 
 /**
+ * Sign-in was refused and the account server's clock is more than its five-minute window away
+ * from this device's, beyond what its `Date` header may correct (W16AAPPLE-91). Only fixing the
+ * device's date and time helps; retrying does not.
+ */
+class AccountClockException(cause: Throwable? = null) :
+    Exception("account sign-in refused: this device's clock is wrong", cause)
+
+/**
  * Repository for the OpenOnion account service (balance/credits). UI must
  * not talk to `oo.openonion.ai` directly - only through this interface.
  */
