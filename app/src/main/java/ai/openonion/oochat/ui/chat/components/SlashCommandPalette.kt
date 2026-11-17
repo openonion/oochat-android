@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +41,12 @@ fun SlashCommandPalette(
 ) {
     if (candidates.isEmpty()) return
 
+    // One row per name: the rows are keyed on it, and LazyColumn throws on a
+    // repeated key, which took the whole composer down. Two rows with one name
+    // would insert the same `/name` anyway. First wins, as in
+    // ProtocolParser.toAgentSkills; this guards every source, cleaned or not.
+    val rows = remember(candidates) { candidates.distinctBy { it.name } }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -60,7 +67,7 @@ fun SlashCommandPalette(
             // keyboard — the only state this is ever shown in.
             modifier = Modifier.heightIn(max = MaxPaletteHeight)
         ) {
-            items(candidates, key = { it.name }) { skill ->
+            items(rows, key = { it.name }) { skill ->
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
