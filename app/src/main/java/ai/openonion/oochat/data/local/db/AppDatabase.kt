@@ -36,7 +36,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SessionStateEntity::class,
         PendingMessageEntity::class
     ],
-    version = 12,
+    version = 14,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -211,13 +211,37 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         /**
+         * The session's Todo List, so a conversation's plan survives a switch
+         * away and an app restart — see SessionStateEntity.planJson. Additive
+         * and nullable; a row written before this reads back as "no plan".
+         */
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE session_states ADD COLUMN plan_json TEXT")
+            }
+        }
+
+        /**
+         * Whether a user message got through, so one that failed still says so
+         * after a restart — see ChatMessageEntity.deliveryState. Additive and
+         * nullable; a row written before this reads back as sent, which is
+         * what every row read back as until now.
+         */
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE chat_messages ADD COLUMN delivery_state TEXT")
+            }
+        }
+
+        /**
          * The one migration chain, shared with the migration tests so a
          * migration can never be written, tested, and then left out of the
          * builder below — which would crash a real upgrade.
          */
         internal val ALL_MIGRATIONS = arrayOf(
             MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-            MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+            MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+            MIGRATION_12_13, MIGRATION_13_14
         )
 
         @Volatile
