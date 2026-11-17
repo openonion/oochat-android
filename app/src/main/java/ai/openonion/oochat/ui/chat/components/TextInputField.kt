@@ -56,6 +56,12 @@ fun TextInputField(
     // Connected is the kind of contradiction that makes people re-check their
     // network instead of the card sitting right above the field.
     awaitingOnboardCode: Boolean = false,
+    // Whether there is an agent to send to at all; see InputBar's hasAgent.
+    // Only picks the placeholder: whether the field is locked is [enabled].
+    hasAgent: Boolean = true,
+    // InputBar's fieldEnabled, the one rule for whether the composer takes
+    // input, so the field cannot disagree with Send, the mic and the palette.
+    enabled: Boolean,
     // Status only — it no longer locks the field. An INPUT arriving on a
     // running session is pushed to the agent as runtime input, so typing now is
     // an interjection, not a mistake. The placeholder still says the agent is
@@ -72,13 +78,16 @@ fun TextInputField(
     trailingContent: (@Composable () -> Unit)? = null
 ) {
     val hasAttachments = attachmentCount > 0
-    val editable = isConnected
     val placeholderText = when {
         // Onboarding runs on a socket that hasn't reached Connected yet, so it
         // is checked inside the disconnected branch, as before.
         !isConnected && awaitingOnboardCode -> "Redeem the invite code above to start"
-        !isConnected -> "Connect to an agent first"
-        isAgentWorking -> "Agent is working…"
+        !hasAgent -> "Connect to an agent first"
+        // Typing is allowed offline; say where the message will wait. With
+        // attachments staged, the missing text is the more useful thing to say.
+        !isConnected && !hasAttachments -> "Message (sends once reconnected)"
+        // Typing mid-run is an interjection the agent picks up when it can.
+        isAgentWorking -> "Queue a follow-up…"
         // Send is disabled until there's text — see InputBar's canSend. Say so
         // here rather than leaving a greyed button with no explanation.
         hasAttachments -> "Add a message to send with your attachment"
@@ -102,21 +111,22 @@ fun TextInputField(
                 .fillMaxWidth()
                 .padding(MaterialTheme.spacing.xs)
                 .clip(RoundedCornerShape(InputBarToken.BorderRadius))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .background(MaterialTheme.colorScheme.surface)
                 // Quieter at rest, full weight only once focused: an empty text
                 // field held at 1.5dp competed with the messages above it.
                 .border(
                     if (isFocused) {
                         BorderStroke(InputBarToken.BorderWidth, MaterialTheme.colorScheme.primary)
                     } else {
-                        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        // A light rule, as drawn: the pill is set off, not boxed in.
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                     },
                     RoundedCornerShape(InputBarToken.BorderRadius)
                 )
                 .padding(start = MaterialTheme.spacing.xs2, top = MaterialTheme.spacing.xs2, end = MaterialTheme.spacing.xs2, bottom = MaterialTheme.spacing.xs2)
         ) {
             AttachmentMenuButton(
-                enabled = editable,
+                enabled = enabled,
                 onCameraClick = onCameraClick,
                 onGalleryClick = onGalleryClick,
                 onFileClick = onFileClick
@@ -127,7 +137,7 @@ fun TextInputField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                enabled = editable,
+                enabled = enabled,
                 maxLines = 5,
                 keyboardOptions = ComposerKeyboardOptions,
                 textStyle = MaterialTheme.typography.chatBody.copy(

@@ -17,7 +17,7 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * A reply the server replayed carries no metadata — its wire transcript is
  * role and content only, so duration and tokens never existed for it. It
- * still gets a footer, holding the tick alone, so it does not read as a
+ * still gets a footer, holding the copy button alone, so it does not read as a
  * different kind of message from the ones this device watched arrive.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -35,7 +35,7 @@ class RestoredTurnFooterComposeTest {
     }
 
     @Test
-    fun `a restored reply still gets the tick`() {
+    fun `a restored reply still gets a footer`() {
         setTurn(
             ChatItem.Turn(
                 id = "asst-restored",
@@ -43,7 +43,8 @@ class RestoredTurnFooterComposeTest {
             )
         )
 
-        composeRule.onNodeWithContentDescription("Done").assertIsDisplayed()
+        // A finished reply leads its footer with copy rather than a tick (W16AAPPLE-112).
+        composeRule.onNodeWithContentDescription("Copy reply").assertIsDisplayed()
     }
 
     @Test
@@ -56,7 +57,7 @@ class RestoredTurnFooterComposeTest {
         )
 
         composeRule.onNodeWithText("tokens", substring = true).assertDoesNotExist()
-        // The footer holds the tick and nothing else — no duration either.
+        // The footer holds the copy button and nothing else — no duration either.
         composeRule.onNodeWithText("·", substring = true).assertDoesNotExist()
     }
 

@@ -1,16 +1,19 @@
 package ai.openonion.oochat.ui.chat.components
 
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.SessionActivity
 import ai.openonion.oochat.ui.theme.ConnectOnionTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -60,7 +63,7 @@ class ChatTopBarComposeTest {
     }
 
     @Test
-    fun `the dot and title sit on the same baseline`() {
+    fun `the dot leads the status line under the title`() {
         composeRule.setContent {
             ConnectOnionTheme {
                 ChatTopBar(
@@ -74,14 +77,16 @@ class ChatTopBarComposeTest {
             }
         }
 
+        // W16AAPPLE-112: the title stands alone; the dot opens the line below it.
         val dot = composeRule.onNodeWithContentDescription("Connected").fetchSemanticsNode()
         val title = composeRule.onNodeWithText("research-assistant").fetchSemanticsNode()
-        val delta = kotlin.math.abs(dot.boundsInRoot.center.y - title.boundsInRoot.center.y)
-        assertTrue("dot and title are $delta px apart vertically, not on one row", delta < 8f)
+        assertTrue("the dot is not below the title", dot.boundsInRoot.center.y > title.boundsInRoot.bottom)
+        val delta = kotlin.math.abs(dot.boundsInRoot.left - title.boundsInRoot.left)
+        assertTrue("the dot is $delta px off the title's left edge, not under it", delta < 1f)
     }
 
     @Test
-    fun `the model line indents to the title, not the dot`() {
+    fun `the model sits on the dot's line, after it`() {
         composeRule.setContent {
             ConnectOnionTheme {
                 ChatTopBar(
@@ -96,10 +101,11 @@ class ChatTopBarComposeTest {
             }
         }
 
-        val title = composeRule.onNodeWithText("research-assistant").fetchSemanticsNode()
+        val dot = composeRule.onNodeWithContentDescription("Connected").fetchSemanticsNode()
         val model = composeRule.onNodeWithText("gemini-2.5-flash").fetchSemanticsNode()
-        val delta = kotlin.math.abs(title.boundsInRoot.left - model.boundsInRoot.left)
-        assertTrue("model line is $delta px off the title's left edge, not aligned to it", delta < 1f)
+        val delta = kotlin.math.abs(dot.boundsInRoot.center.y - model.boundsInRoot.center.y)
+        assertTrue("dot and model are $delta px apart vertically, not on one line", delta < 8f)
+        assertTrue("the model is not after the dot", model.boundsInRoot.left > dot.boundsInRoot.right)
     }
 
     @Test
@@ -127,5 +133,98 @@ class ChatTopBarComposeTest {
         state = ConnectionState.Error(message = "boom")
         composeRule.waitForIdle()
         composeRule.onNodeWithContentDescription("Connection failed").assertExists()
+    }
+
+    // ── Session status (W16AAPPLE-18) ──────────────────────────────────
+
+    private fun setBar(activity: SessionActivity?, model: String? = "gemini-2.5-flash") {
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "research-assistant",
+                    connectionState = ConnectionState.Connected(address = "0xabc"),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    modelName = model,
+                    sessionActivity = activity
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the session status leads the subtitle, ahead of the model`() {
+        setBar(SessionActivity.RUNNING)
+
+        composeRule.onNodeWithTag("chat_top_bar_subtitle").assertTextEquals("Running · gemini-2.5-flash")
+    }
+
+    @Test
+    fun `each session status has its own words`() {
+        var activity by mutableStateOf<SessionActivity?>(SessionActivity.IDLE)
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "t",
+                    connectionState = ConnectionState.Connected(address = "0xabc"),
+                    isConnected = true,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                    sessionActivity = activity
+                )
+            }
+        }
+        mapOf(
+            SessionActivity.IDLE to "Idle",
+            SessionActivity.RUNNING to "Running",
+            SessionActivity.AWAITING_USER to "Waiting for you",
+            SessionActivity.NOT_FOUND to "Session not found"
+        ).forEach { (value, words) ->
+            activity = value
+            composeRule.onNodeWithTag("chat_top_bar_subtitle").assertTextEquals(words)
+        }
+    }
+
+    @Test
+    fun `no status and no model leaves no subtitle`() {
+        setBar(activity = null, model = null)
+
+        composeRule.onNodeWithTag("chat_top_bar_subtitle").assertDoesNotExist()
+    }
+
+    // ── the Rem menu item (W16AAPPLE-69) ──
+
+    private fun openMenu(connected: Boolean) {
+        composeRule.setContent {
+            ConnectOnionTheme {
+                ChatTopBar(
+                    title = "research-assistant",
+                    connectionState = if (connected) ConnectionState.Connected(address = "0xabc") else ConnectionState.Disconnected,
+                    isConnected = connected,
+                    onClearChat = {},
+                    onNavigateToLogs = {},
+                    onMenuClick = {},
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("More options").performClick()
+    }
+
+    @Test
+    fun `Rem is in the menu on a live connection`() {
+        openMenu(connected = true)
+
+        composeRule.onNodeWithText("Rem").assertExists()
+    }
+
+    @Test
+    fun `Rem is not in the menu while disconnected`() {
+        openMenu(connected = false)
+
+        composeRule.onNodeWithText("View logs").assertExists()
+        composeRule.onNodeWithText("Rem").assertDoesNotExist()
     }
 }

@@ -3,6 +3,7 @@ package ai.openonion.oochat.ui.settings
 import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
+import ai.openonion.oochat.data.repository.AccountClockException
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.data.repository.SessionRepository
@@ -10,6 +11,7 @@ import ai.openonion.oochat.di.appContainer
 import ai.openonion.oochat.ui.common.launchScoped
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
+import ai.openonion.oochat.util.runCatchingCancellable
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
@@ -17,6 +19,8 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,6 +31,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Account/identity state for the Settings screen. Wallet address is a fast
@@ -40,6 +45,13 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val walletAddress: String = "",
     val accountApiKey: String? = null,
+    /** Why the account could not be loaded, when it is something the user can fix. */
+    val accountProblem: String? = null,
+    /**
+     * The saved recovery phrase no longer restores this identity — it was
+     * minted before SLIP-0010 derivation. See [KeyManager.hasLegacyDerivation].
+     */
+    val legacyDerivation: Boolean = false,
 )
 
 /**
@@ -72,6 +84,11 @@ open class SettingsViewModel @JvmOverloads constructor(
     },
     // Tests set this to false to control exactly when the first load runs.
     autoLoadAccountOnInit: Boolean = true,
+    // Where [IdentityManager.hasLegacyDerivation] runs. Its first call
+    // stretches the phrase (2048 rounds of PBKDF2-HMAC-SHA512 in pure Kotlin)
+    // and derives a key pair, too slow for the main thread when Settings
+    // opens. Injected so tests can run it inline.
+    private val legacyCheckDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -147,7 +164,7 @@ open class SettingsViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Import an identity from a 12/24-word phrase or raw hex key. Failure
+     * Import an identity from a recovery phrase or raw hex key. Failure
      * (invalid phrase/key — thrown by KeyManager's validation) is returned
      * as a [Result] so ImportKeySheet can show it inline; nothing is
      * invalidated or reloaded unless the import actually succeeded.
@@ -178,10 +195,20 @@ open class SettingsViewModel @JvmOverloads constructor(
         _uiState.update {
             it.copy(
                 walletAddress = newAddress,
-                accountApiKey = null
+                accountApiKey = null,
+                accountProblem = null,
+                // The old identity's answer says nothing about the new one.
+                legacyDerivation = false
             )
         }
+        refreshLegacyDerivation()
         FileLogger.i(LogTags.ACCOUNT, "identity changed → account cache invalidated, reloading")
+        viewModelScope.launch {
+            runCatchingCancellable { sessionRepository.activateIdentity(newAddress) }
+                .onFailure { error ->
+                    FileLogger.w(LogTags.ACCOUNT, "Could not filter conversations for new identity: ${error.message}")
+                }
+        }
         loadAccount()
     }
 
@@ -195,13 +222,19 @@ open class SettingsViewModel @JvmOverloads constructor(
                     if (generation != identityGeneration) return@launch
                     _uiState.update {
                         it.copy(
-                            accountApiKey = snapshot.apiKey
+                            accountApiKey = snapshot.apiKey,
+                            accountProblem = null
                         )
                     }
                 }
-                .onFailure {
+                .onFailure { error ->
                     if (generation != identityGeneration) return@launch
                     FileLogger.w(LogTags.ACCOUNT, "loadAccount failed; API key stays unset")
+                    // Only a cause the user can act on is shown; anything else stays a log line,
+                    // and clears an earlier clock message the user may since have acted on.
+                    _uiState.update {
+                        it.copy(accountProblem = if (error is AccountClockException) ACCOUNT_CLOCK_WRONG else null)
+                    }
                 }
         }
     }
@@ -234,6 +267,7 @@ open class SettingsViewModel @JvmOverloads constructor(
     val notificationSound: Flow<String> = appSettings.notificationSound
     val analyticsEnabled: Flow<Boolean> = appSettings.analyticsEnabled
     val safeModeEnabled: Flow<Boolean> = appSettings.safeModeEnabled
+    val developerToolsEnabled: Flow<Boolean> = appSettings.developerToolsEnabled
 
     fun setStreamingResponses(value: Boolean) = persist { appSettings.setStreamingResponses(value) }
     fun setRenderMarkdown(value: Boolean) = persist { appSettings.setRenderMarkdown(value) }
@@ -246,6 +280,21 @@ open class SettingsViewModel @JvmOverloads constructor(
     fun setNotificationSound(value: String) = persist { appSettings.setNotificationSound(value) }
     fun setAnalyticsEnabled(value: Boolean) = persist { appSettings.setAnalyticsEnabled(value) }
     fun setSafeModeEnabled(value: Boolean) = persist { appSettings.setSafeModeEnabled(value) }
+    fun setDeveloperToolsEnabled(value: Boolean) = persist { appSettings.setDeveloperToolsEnabled(value) }
+
+    /**
+     * Fills [SettingsUiState.legacyDerivation] off the main thread. Fenced by
+     * [identityGeneration] like the account load, so a check that started
+     * before an identity switch can't flag (or clear) the identity after it.
+     */
+    private fun refreshLegacyDerivation() {
+        val generation = identityGeneration
+        viewModelScope.launch {
+            val legacy = withContext(legacyCheckDispatcher) { identityManager.hasLegacyDerivation() }
+            if (generation != identityGeneration) return@launch
+            _uiState.update { it.copy(legacyDerivation = legacy) }
+        }
+    }
 
     // Thin alias over the shared [launchScoped] fire-and-forget helper,
     // kept for the many `set…` delegators above that read as `persist { … }`.
@@ -255,8 +304,23 @@ open class SettingsViewModel @JvmOverloads constructor(
         // Fast local Keystore read — same pattern ChatViewModel's
         // initialMyAddress default already uses.
         _uiState.update { it.copy(walletAddress = identityManager.loadOrGenerate().address) }
+        refreshLegacyDerivation()
         if (autoLoadAccountOnInit) {
             loadAccount()
         }
+    }
+
+    companion object {
+        /** Shown under the address when [SettingsUiState.legacyDerivation] (W16AAPPLE-97). */
+        internal const val LEGACY_DERIVATION_WARNING =
+            "This identity was created before recovery phrases moved to the ConnectOnion CLI's derivation. " +
+                "It keeps working, but restoring from its recovery phrase now gives a new, empty identity, not this one. " +
+                "Back up its private key from \"Back up seed phrase\"."
+
+        /** Shown under the account when sign-in is refused over the device clock (W16AAPPLE-91). */
+
+        internal const val ACCOUNT_CLOCK_WRONG =
+            "Can't sign in to your account: this device's clock is wrong. " +
+                "Check the date and time in your phone's settings (set them to automatic)."
     }
 }

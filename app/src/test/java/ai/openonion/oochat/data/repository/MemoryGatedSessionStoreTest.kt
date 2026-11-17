@@ -50,6 +50,45 @@ class MemoryGatedSessionStoreTest {
     }
 
     @Test
+    fun `sessionForConnect returns null when memory is disabled`() = runTest {
+        val delegate = FakeSessionStore()
+        delegate.saved["conv1"] = session("sid1")
+        val store = MemoryGatedSessionStore(delegate, MutableStateFlow(false))
+
+        assertNull(store.sessionForConnect("conv1"))
+    }
+
+    @Test
+    fun `sessionForConnect returns the saved session when memory is enabled`() = runTest {
+        val delegate = FakeSessionStore()
+        delegate.saved["conv1"] = session("sid1")
+        val store = MemoryGatedSessionStore(delegate, MutableStateFlow(true))
+
+        assertEquals("sid1", store.sessionForConnect("conv1")?.sessionId)
+    }
+
+    @Test
+    fun `sessionForConnect uses the conversation id when memory is enabled without a saved session`() = runTest {
+        val delegate = FakeSessionStore()
+        val store = MemoryGatedSessionStore(delegate, MutableStateFlow(true))
+
+        assertEquals("conv1", store.sessionForConnect("conv1")?.sessionId)
+    }
+
+    @Test
+    fun `session saved while memory is disabled is available after memory is enabled`() = runTest {
+        val delegate = FakeSessionStore()
+        val memoryEnabled = MutableStateFlow(false)
+        val store = MemoryGatedSessionStore(delegate, memoryEnabled)
+
+        store.saveSession("conv1", session("sid1"))
+        assertNull(store.sessionForConnect("conv1"))
+
+        memoryEnabled.value = true
+        assertEquals("sid1", store.sessionForConnect("conv1")?.sessionId)
+    }
+
+    @Test
     fun `saveSession always passes through to the delegate regardless of the toggle`() = runTest {
         val delegate = FakeSessionStore()
         val memoryEnabled = MutableStateFlow(false)
