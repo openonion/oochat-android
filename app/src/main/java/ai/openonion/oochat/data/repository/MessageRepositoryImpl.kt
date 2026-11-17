@@ -43,6 +43,14 @@ class MessageRepositoryImpl(
         return messageDao.existsById(id)
     }
 
+    override suspend fun updateTimestamp(id: String, timestamp: Long) {
+        messageDao.updateTimestamp(id, timestamp)
+    }
+
+    override suspend fun updateFailedToSend(id: String, failedToSend: Boolean, inOutbox: Boolean) {
+        messageDao.updateDeliveryState(id, MessageMapper.deliveryStateOf(failedToSend, inOutbox))
+    }
+
     override suspend fun getOwningSessionId(id: String): String? {
         return messageDao.getSessionIdById(id)
     }

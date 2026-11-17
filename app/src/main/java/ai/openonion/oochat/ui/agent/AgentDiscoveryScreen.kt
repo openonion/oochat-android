@@ -230,7 +230,7 @@ fun AgentDiscoveryScreen(
                                 text = "Tap to select",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.tertiary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         } else if (addedCount > 0) {
                             Text(

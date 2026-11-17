@@ -55,6 +55,13 @@ sealed class LoadingEvent {
     data object Cancelled : LoadingEvent()
     /** Auto-navigates rather than waiting for user confirmation. */
     data object ConnectSucceeded : LoadingEvent()
+
+    /**
+     * The agent wants an invite code or payment first. Auto-navigates to the
+     * chat's invite-code card too: there is nothing to decide here, and a
+     * "Continue" tap was one step more than the client wants (W16AAPPLE-111).
+     */
+    data object OnboardRequired : LoadingEvent()
 }
 
 /**
@@ -182,7 +189,8 @@ open class LoadingViewModel @JvmOverloads constructor(
                     connectUseCase.connect(
                         agentAddress = agentAddress,
                         conversationId = conversationId,
-                        directUrl = directUrl
+                        directUrl = directUrl,
+                        relayUrl = target.relayUrl
                     )
                 }
 
@@ -206,8 +214,9 @@ open class LoadingViewModel @JvmOverloads constructor(
                     return@launch
                 }
 
-                if (onboardWon) {
-                    connectDeferred.cancel()
+                // Straight on to the invite-code card (W16AAPPLE-111).
+                // Reported, so a late Cancel cannot also navigate.
+                fun goToInviteCode() {
                     _uiState.update {
                         it.copy(
                             statusMessage = "Onboarding required",
@@ -215,12 +224,21 @@ open class LoadingViewModel @JvmOverloads constructor(
                             outcome = LoadingOutcome.ONBOARD_REQUIRED
                         )
                     }
-                    // Wait for the user to tap "Continue to Onboarding" —
-                    // the gate is a manual decision they need to make.
+                    hasReportedOutcome = true
+                    _events.tryEmit(LoadingEvent.OnboardRequired)
+                }
+
+                if (onboardWon) {
+                    connectDeferred.cancel()
+                    goToInviteCode()
                 } else {
                     onboardDeferred.cancel()
                     val connected = connectDeferred.await()
-                    if (connected) {
+                    if (connected && connectUseCase.lastConnectNeedsOnboarding) {
+                        // connect() treats ONBOARD_REQUIRED as success too, and
+                        // can return before the listener above has run.
+                        goToInviteCode()
+                    } else if (connected) {
                         _uiState.update {
                             it.copy(statusMessage = "Connected!", progress = 1.0f, outcome = LoadingOutcome.CONNECTED)
                         }
@@ -245,7 +263,10 @@ open class LoadingViewModel @JvmOverloads constructor(
         if (hasReportedOutcome) return
         hasReportedOutcome = true
         connectionJob?.cancel()
-        viewModelScope.launch { connectUseCase.disconnect() }
+        // Cancelling a slow connect is not choosing to discard messages. Offline
+        // after a restart, the outbox is all the user has of what they wrote,
+        // and its bubbles come back from Room looking sent (W16AAPPLE-102).
+        viewModelScope.launch { connectUseCase.disconnect(keepOutbox = true) }
         _events.tryEmit(LoadingEvent.Cancelled)
     }
 

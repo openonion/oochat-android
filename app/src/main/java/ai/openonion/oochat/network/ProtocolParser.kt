@@ -1,24 +1,42 @@
 package ai.openonion.oochat.network
 
+import ai.openonion.oochat.data.protocol.OipProtocol
+import ai.openonion.oochat.data.protocol.PlanEntryWire
 import ai.openonion.oochat.data.protocol.ServerEvent
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.SkillWire
 import ai.openonion.oochat.domain.model.AgentLiveProfile
 import ai.openonion.oochat.domain.model.AgentSkill
+import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.CompactStatus
+import ai.openonion.oochat.domain.model.ControlCenterApp
 import ai.openonion.oochat.domain.model.EvalStatus
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.HostModeState
 import ai.openonion.oochat.domain.model.IntentStatus
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.PlanPriority
+import ai.openonion.oochat.domain.model.PlanStatus
+import ai.openonion.oochat.domain.model.ProviderInputAck
+import ai.openonion.oochat.domain.model.ProviderPermissionAck
+import ai.openonion.oochat.domain.model.ProviderStopAck
 import ai.openonion.oochat.domain.model.ReceivedFile
+import ai.openonion.oochat.domain.model.ServerSessionStatus
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.ToolStatus
 import ai.openonion.oochat.domain.model.stableAssistantId
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogSanitizer
 import ai.openonion.oochat.util.LogTags
+import ai.openonion.oochat.util.stringField
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 /**
  * Pure function for parsing WebSocket messages into ConnectionEvents.
@@ -27,6 +45,20 @@ import kotlinx.serialization.json.JsonPrimitive
  * This class has no side effects and no dependencies on WebSocket state.
  */
 object ProtocolParser {
+
+    /**
+     * Frames the Host writes straight to the socket instead of appending to the agent log it replays
+     * from a CONNECT's `last_msg_id`. Any other frame that carries an `id` is a log frame (the Host
+     * stamps one on every entry), so a new event type needs no entry here to take part in replay.
+     * `RUNTIME_INPUT_ACK` is the one host frame that has an `id` of its own: a fresh UUID the Host
+     * mints for the queued input, which names nothing in its log.
+     */
+    private val HOST_FRAME_TYPES = setOf(
+        "PING", "CONNECTED", "AGENT_PROFILE", "DASHBOARD_SNAPSHOT", "ONBOARD_REQUIRED",
+        "ONBOARD_SUCCESS", "OUTPUT", "ERROR", "SESSION_STATUS", "RUNTIME_INPUT_ACK",
+        "CONTROL_CENTER_APP", "CONTROL_CENTER_STATE"
+    )
+
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -43,6 +75,8 @@ object ProtocolParser {
      * @return ParsedResult containing the event and any side effects
      */
     fun parse(text: String, outstandingInputIds: Set<String>, isDirect: Boolean): ParseResult {
+        // Claude Code and Codex Work Room frames have a decoder of their own; see ProviderFrames.
+        ProviderFrames.parse(text)?.let { return it }
         val event = try {
             json.decodeFromString<ServerEvent>(text)
         } catch (e: kotlinx.serialization.SerializationException) {
@@ -65,21 +99,33 @@ object ProtocolParser {
             "Parsed type=${event.type}, ${LogSanitizer.contentSummary(event.content.orEmpty())}"
         )
 
-        return when (event.type) {
+        val parsed = when (event.type) {
             "PING" -> ParseResult(
                 event = ConnectionEvent.Ping,
                 shouldSendPong = true
             )
 
-            "CONNECTED" -> ParseResult(
-                event = ConnectionEvent.Connected(
-                    address = "", // Will be filled by caller
-                    sessionId = event.sessionId,
-                    session = event.session
-                ),
-                updateSession = event.session,
-                updateSessionId = event.sessionId
-            )
+            // A Host that accepted our CONNECT but speaks another OIP version would have its frames
+            // misread, so it is refused like the -32010 ERROR, and its session is not taken on.
+            // A descriptor refused for its shape (no name, a numeric version) can still describe
+            // as our own version; the error must not say the Host speaks what the app speaks.
+            "CONNECTED" -> if (!OipProtocol.supports(event.protocol)) {
+                val hostProtocol = describeProtocol(event.protocol)?.takeIf { it != "${OipProtocol.NAME}/${OipProtocol.VERSION}" }
+                ParseResult(event = ConnectionEvent.ProtocolRejected(hostProtocol = hostProtocol))
+            } else {
+                ParseResult(
+                    event = ConnectionEvent.Connected(
+                        address = "", // Will be filled by caller
+                        sessionId = event.sessionId,
+                        session = event.session,
+                        status = ServerSessionStatus.fromWire(event.status),
+                        serverNewer = event.serverNewer == true,
+                        modes = decodeSessionModes(event.sessionModes)
+                    ),
+                    updateSession = event.session,
+                    updateSessionId = event.sessionId
+                )
+            }
 
             // Sent once, right after CONNECT clears the trust gate (see
             // ws_router/connect.py's handle_connect, ~line 147) — the
@@ -123,6 +169,31 @@ object ProtocolParser {
                         ParseResult(event = ConnectionEvent.Unknown)
                     }
                     else -> ParseResult(event = ConnectionEvent.DashboardSnapshotReceived(html))
+                }
+            }
+
+            // Sent after CONNECTED and whenever the Host's review state changes;
+            // `app` is null while nothing is published. A refused descriptor also
+            // reads as no app, so an older one is not left on screen.
+            "CONTROL_CENTER_APP" -> ParseResult(
+                event = ConnectionEvent.ControlCenterAppReceived(controlCenterAppOf(event.app))
+            )
+
+            // Only `status` and `error` are read; the rest is for administrators.
+            "CONTROL_CENTER_STATE" -> {
+                val state = event.state as? JsonObject
+                val status = state?.stringField("status")
+                if (status == null) {
+                    ParseResult(event = ConnectionEvent.Unknown)
+                } else {
+                    val error = state["error"] as? JsonObject
+                    ParseResult(
+                        event = ConnectionEvent.ControlCenterStateReceived(
+                            status = status,
+                            errorCode = error?.stringField("code"),
+                            errorMessage = error?.stringField("message")
+                        )
+                    )
                 }
             }
 
@@ -171,16 +242,23 @@ object ProtocolParser {
             "thinking" -> {
                 val id = event.id ?: generateId()
                 if (!event.content.isNullOrBlank()) {
-                    // Streaming assistant text delivered without an
-                    // assistant event — model directly via Turn with the
-                    // content-derived id so it merges with the eventual
-                    // assistant / session_sync Turn for the same content.
-                    val tid = stableAssistantId(event.content)
+                    // The agent's reasoning (re_act.py's `intent`, reflect.py's
+                    // `reflect`), not its reply: a standalone item under the
+                    // Host's trace id, the stable identity a replay of this
+                    // frame carries too. Rendering it as a reply Turn made the
+                    // agent appear to answer before it had done anything.
+                    // With no id, a content-derived one still lets a replay
+                    // dedupe; prefixed so it can never share an id with the
+                    // reply Turn stableAssistantId gives the same text.
+                    val tid = event.id ?: "thinking-${stableAssistantId(event.content)}"
                     ParseResult(
                         event = ConnectionEvent.ChatItemReceived(
-                            ChatItem.Turn(
+                            ChatItem.Thinking(
                                 id = tid,
-                                agent = ChatItem.Agent(id = tid, content = event.content)
+                                status = ThinkingStatus.DONE,
+                                content = event.content,
+                                kind = event.kind?.takeIf { it.isNotBlank() } ?: REASONING_KIND,
+                                model = event.model
                             )
                         )
                     )
@@ -200,43 +278,74 @@ object ProtocolParser {
                 }
             }
 
+            // tool_call and tool_result are keyed on `tool_id`, the LLM's own
+            // call id, which tool_executor.py puts on both frames so a result
+            // can find its start. Each frame's `id` is its own trace entry,
+            // different between the two, so it is only a fallback for a frame
+            // with no tool_id at all.
             "tool_call" -> {
                 val id = event.toolId ?: event.id ?: generateId()
-                ParseResult(
-                    event = ConnectionEvent.ChatItemReceived(
-                        ChatItem.ToolCall(
-                            id = id,
-                            name = event.name ?: "unknown",
-                            args = event.args.toDisplayMap(),
-                            status = ToolStatus.RUNNING
+                // A step of a Claude Code or Codex run is shown in its Work Room, not as a card of its own.
+                val invocationId = event.invocationId?.takeIf { it.isNotBlank() }
+                if (invocationId != null) {
+                    ParseResult(
+                        event = ConnectionEvent.ChatItemUpdated(
+                            ProviderFrames.legacyStep(invocationId, event.parentToolCallId, id, event.status)
                         )
                     )
-                )
+                } else {
+                    ParseResult(
+                        event = ConnectionEvent.ChatItemReceived(
+                            ChatItem.ToolCall(
+                                id = id,
+                                name = event.name ?: "unknown",
+                                args = event.args.toDisplayMap(),
+                                status = toolStartStatus(event.status)
+                            )
+                        )
+                    )
+                }
             }
 
             "tool_result" -> {
                 val id = event.toolId ?: event.id ?: return ParseResult(event = ConnectionEvent.Unknown)
-                ParseResult(
-                    event = ConnectionEvent.ChatItemUpdated(
-                        ChatItem.ToolCall(
-                            id = id,
-                            name = event.name ?: "",
-                            // The reference implementation itself treats
-                            // anything but "success" as an error path (see
-                            // tool_executor.py's `status in ("error",
-                            // "not_found")` on_error gate) — mirror that
-                            // instead of only recognizing the literal string
-                            // "error", which silently rendered a tool-not-
-                            // found failure as a normal DONE result.
-                            status = when (event.status) {
-                                "error", "not_found" -> ToolStatus.ERROR
-                                else -> ToolStatus.DONE
-                            },
-                            result = event.result
+                val invocationId = event.invocationId?.takeIf { it.isNotBlank() }
+                if (invocationId != null) {
+                    ParseResult(
+                        event = ConnectionEvent.ChatItemUpdated(
+                            ProviderFrames.legacyStep(
+                                invocationId,
+                                event.parentToolCallId,
+                                id,
+                                event.status?.takeIf { it.isNotBlank() } ?: "failed"
+                            )
                         )
                     )
-                )
+                } else {
+                    ParseResult(
+                        event = ConnectionEvent.ChatItemUpdated(
+                            ChatItem.ToolCall(
+                                id = id,
+                                name = event.name ?: "",
+                                status = toolResultStatus(event.status),
+                                result = event.result,
+                                timingMs = event.timingMs?.toLong()
+                            )
+                        )
+                    )
+                }
             }
+
+            // A complete Todo List replacement (agent.py's _record_plan).
+            // Session state rather than a chat item: it has no id of its own
+            // and every frame supersedes the last. Its trace `id` still moves
+            // the replay cursor, like any other log frame (see msgId below).
+            // A malformed plan is dropped whole, never applied in part, and
+            // leaves the last good one showing — the web client's rule.
+            "plan" -> ParseResult(
+                event = decodePlan(event.entries)?.let { ConnectionEvent.PlanUpdated(it) }
+                    ?: ConnectionEvent.Unknown
+            )
 
             "agent_image" -> {
                 if (event.image != null) {
@@ -297,6 +406,7 @@ object ProtocolParser {
                 event = ConnectionEvent.ChatItemReceived(
                     ChatItem.AskUser(
                         id = event.id ?: generateId(),
+                        requestId = event.id,
                         // The server's actual field is "question" (see
                         // ask_user.py's event payload) — "text" is not sent
                         // for this event type, only kept as a fallback so an
@@ -313,6 +423,7 @@ object ProtocolParser {
                 event = ConnectionEvent.ChatItemReceived(
                     ChatItem.ApprovalNeeded(
                         id = event.id ?: generateId(),
+                        requestId = event.id,
                         tool = event.tool ?: "",
                         arguments = event.arguments.toDisplayMap() ?: emptyMap(),
                         description = event.description,
@@ -320,7 +431,14 @@ object ProtocolParser {
                             ?.keepUsable("batch_remaining") { it.tool.isNotBlank() }
                             ?.map {
                                 ai.openonion.oochat.domain.model.BatchToolPreview(it.tool, it.arguments)
-                            }
+                            },
+                        workRoom = ProviderApprovals.fromWire(
+                            provider = event.provider,
+                            invocationId = event.invocationId,
+                            parentToolCallId = event.parentToolCallId,
+                            activityId = event.activityId,
+                            presentation = event.providerApproval
+                        )
                     )
                 ),
                 setWaiting = true
@@ -451,6 +569,50 @@ object ProtocolParser {
                 setWaiting = true
             )
 
+            "EXEC_RESULT" -> {
+                val execId = event.execId?.takeIf { it.isNotBlank() }
+                    ?: return ParseResult(event = ConnectionEvent.Unknown)
+
+                val status = event.status
+                    ?: return ParseResult(event = ConnectionEvent.Unknown)
+
+                val hasRequiredContent = when (status) {
+                    "success" -> event.result != null
+                    "error" -> event.error != null
+                    else -> false
+                }
+
+                if (!hasRequiredContent) {
+                    return ParseResult(event = ConnectionEvent.Unknown)
+                }
+
+                ParseResult(
+                    event = ConnectionEvent.ExecResultReceived(
+                        execId = execId,
+                        status = status,
+                        result = event.result,
+                        error = event.error,
+                        tool = event.tool,
+                        durationMs = event.durationMs
+                    )
+                )
+            }
+
+            // The answer to a WIKI_READ (W16AAPPLE-69). Like EXEC_RESULT it
+            // settles one waiting request and is not a chat item.
+            "WIKI_RESULT" -> {
+                val requestId = event.requestId?.takeIf { it.isNotBlank() }
+                    ?: return ParseResult(event = ConnectionEvent.Unknown)
+                ParseResult(
+                    event = ConnectionEvent.RemResultReceived(
+                        requestId = requestId,
+                        ok = event.ok == true,
+                        html = event.html,
+                        error = event.error
+                    )
+                )
+            }
+
             "OUTPUT" -> {
                 val isForUs = isDirect || event.inputId == null || event.inputId in outstandingInputIds
                 if (isForUs) {
@@ -466,11 +628,53 @@ object ProtocolParser {
                 }
             }
 
-            "ERROR" -> ParseResult(
-                event = ConnectionEvent.ConnectionError(
-                    message = event.message ?: event.error ?: "Unknown error"
+            // The host took an INPUT that arrived mid-turn as runtime input and
+            // queued it for the running turn's next iteration — see
+            // ws_router/session.py, which sends this only when
+            // `push_runtime_input` accepted it. `id` is a UUID the *host*
+            // minted for the queued item, not the `input_id` we sent, so it
+            // cannot name which of our messages this answers. The frame is
+            // sent immediately and in order, so the caller links it by order;
+            // see ConnectionEvent.RuntimeInputAcknowledged.
+            "RUNTIME_INPUT_ACK" -> ParseResult(
+                event = ConnectionEvent.RuntimeInputAcknowledged(
+                    sessionId = event.sessionId,
+                    hostInputId = event.id
                 )
             )
+
+            "ERROR" -> when (event.code) {
+                // The Host refused our OIP version: final for the connection.
+                OipProtocol.UNSUPPORTED_VERSION_CODE ->
+                    ParseResult(event = ConnectionEvent.ProtocolRejected(hostProtocol = describeProtocol(event.protocol)))
+
+                // A runtime input the running turn would not take. Not a
+                // ConnectionError: the socket is healthy and the agent is still
+                // working; ConnectionError clears outstanding input ids and can
+                // start the reconnect ladder.
+                RUNTIME_INPUT_REJECTED ->
+                    ParseResult(
+                        event = ConnectionEvent.RuntimeInputRejected(
+                            sessionId = event.sessionId,
+                            retryable = event.isRetryable,
+                            message = event.message
+                        )
+                    )
+
+                // The Host was no longer waiting on that request (another device
+                // answered first, or the turn ended). Nothing was applied, and the
+                // socket is fine. Shape: docs/network/websocket-protocol.md, APPROVAL_RESPONSE.
+                STALE_ANSWER ->
+                    ParseResult(event = ConnectionEvent.AnswerRefused(requestId = event.requestId))
+
+                else ->
+                    ParseResult(
+                        event = ConnectionEvent.ConnectionError(
+                            message = event.message ?: event.error ?: "Unknown error",
+                            code = event.code.takeIf { it.isNotBlank() }
+                        )
+                    )
+            }
 
             // Plugin-initiated mode switch (ULW enter/exit, tool_approval's
             // _set_mode, plan_mode enter/exit) — see ServerEvent.mode's own
@@ -483,10 +687,26 @@ object ProtocolParser {
                         ChatItem.ModeChangedItem(
                             id = event.id ?: generateId(),
                             mode = mode,
-                            triggeredBy = event.triggeredBy
+                            triggeredBy = event.triggeredBy,
+                            turnsLeft = event.turnsLeft
                         )
                     )
                 )
+            }
+
+            // Full access's per-turn countdown (full_access.py's
+            // consume_configured_full_access_turn). Not a chat item: the mode
+            // did not change, only how long it lasts. The expiry itself comes
+            // as a mode_changed back to auto.
+            // A value, not an early return, for a frame naming no known mode:
+            // it is still a log entry, so it must still move the replay cursor.
+            "mode_budget_changed" -> {
+                val mode = event.mode?.let { ApprovalMode.fromWire(it) }
+                if (mode == null) {
+                    ParseResult(event = ConnectionEvent.Unknown)
+                } else {
+                    ParseResult(event = ConnectionEvent.ModeBudgetChanged(mode = mode, turnsLeft = event.turnsLeft))
+                }
             }
 
             // Reply to AgentConnection.querySessionStatus — see
@@ -507,16 +727,45 @@ object ProtocolParser {
 
             else -> ParseResult(event = ConnectionEvent.Unknown)
         }
+        val msgId = event.id?.takeIf { it.isNotBlank() && event.type !in HOST_FRAME_TYPES }
+        return parsed.copy(
+            msgId = msgId,
+            dedupeKey = if (msgId != null && parsed.isDroppableRepeat()) frameKey(event) else null
+        )
     }
+
+    /**
+     * True when what the client does with this frame depends only on the frame's own content, so an
+     * exact repeat can be dropped. A `session_sync` is excluded: it carries the whole session, a
+     * replayed one carries the session as it is now (so it never equals the original), and receiving
+     * it twice is already safe because a reply's id comes from its content.
+     */
+    private fun ParseResult.isDroppableRepeat(): Boolean = when (val e = event) {
+        is ConnectionEvent.ChatItemReceived -> !e.fromSessionSnapshot
+        is ConnectionEvent.ChatItemUpdated -> true
+        else -> false
+    }
+
+    /**
+     * What identifies a frame to the client: every field it decodes, except `session_id`. Not the raw
+     * text: the relay stamps a `conn_id` on each frame per client socket (and a `session_id` besides),
+     * so the same logged event arrives as different text after a reconnect. `conn_id` is not a field
+     * the client decodes, so it drops out of this; `session_id` is cleared here.
+     */
+    private fun frameKey(event: ServerEvent): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(event.copy(sessionId = null).toString().toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     /**
      * Convert a `session_sync` server event into one or more
      * [ConnectionEvent.ChatItemReceived] events — one per assistant
      * message in the session's `messages` array.
      *
-     * Position-based IDs ("session-msg-{index}") keep repeated syncs
-     * idempotent — the [ai.openonion.oochat.domain.model.dedupeUI]
-     * helper in ChatViewModel collapses duplicates by id.
+     * Content-derived IDs ([ai.openonion.oochat.domain.model.stableAssistantId])
+     * keep repeated syncs idempotent — the
+     * [ai.openonion.oochat.domain.model.dedupeUI] helper in ChatViewModel
+     * collapses duplicates by id.
      *
      * Only `role == "assistant"` messages are surfaced as chat items.
      * User messages are skipped (the local [ChatItem.User] is the
@@ -580,34 +829,167 @@ object ProtocolParser {
      */
     const val MAX_DASHBOARD_HTML_CHARS = 2 * 1024 * 1024
 
+    const val CONTROL_APP_SCHEMA = "connectonion.control-app/1"
+
+    const val CONTROL_CENTER_BRIDGE_VERSION = "1"
+
+    private val CONTROL_CENTER_REVISION = Regex("^sha256:[a-f0-9]{64}$")
+
+    /** `CONTROL_CENTER_CAPABILITIES` in connectonion-react's `remote-agent.ts`. */
+    private val CONTROL_CENTER_CAPABILITIES = setOf(
+        "camera", "microphone", "geolocation", "clipboard-read", "clipboard-write", "fullscreen"
+    )
+
+    /**
+     * The app a `CONTROL_CENTER_APP` descriptor names, or null. The checks match what the
+     * Host guarantees before activating a revision (control_center/runtime.py), so only a
+     * hand-written or tampered descriptor fails them.
+     */
+    internal fun controlCenterAppOf(element: JsonElement?): ControlCenterApp? {
+        val app = element as? JsonObject ?: return null
+        val url = app.stringField("url")
+        val revision = app.stringField("revision")
+        val capabilities = app["capabilities"]?.let { value ->
+            (value as? JsonArray)?.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        }
+        val refused = when {
+            app.stringField("schema") != CONTROL_APP_SCHEMA -> "unknown schema"
+            app.stringField("sdk_version") != CONTROL_CENTER_BRIDGE_VERSION -> "unsupported bridge version"
+            (app["review"] as? JsonObject)?.stringField("status") != "approved" -> "not approved"
+            revision == null || !CONTROL_CENTER_REVISION.matches(revision) -> "malformed revision"
+            url == null || !isPinnedHttpsUrl(url) -> "not a plain https address"
+            // As the React SDK: these become the iframe's permissions, so anything else refuses the app.
+            app.containsKey("capabilities") && (capabilities == null || capabilities.any { it !in CONTROL_CENTER_CAPABILITIES }) ->
+                "unknown capability"
+            else -> null
+        }
+        if (refused != null) {
+            FileLogger.w(LogTags.PROTOCOL, "CONTROL_CENTER_APP refused: $refused")
+            return null
+        }
+        return ControlCenterApp(url = url!!, revision = revision!!, capabilities = capabilities.orEmpty().filterNotNull())
+    }
+
+    /**
+     * No credentials, query or fragment (the fragment is added by the bridge), and an origin
+     * the parent page can pin its frame to.
+     */
+    private fun isPinnedHttpsUrl(url: String): Boolean {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+        return uri.scheme == "https" && !uri.host.isNullOrBlank() &&
+            uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&
+            ControlCenterApp.originOf(url) != null
+    }
+
+    /** `code` of the ERROR frame a host sends when a running turn refuses runtime input. */
+    const val RUNTIME_INPUT_REJECTED = "RUNTIME_INPUT_REJECTED"
+
+    /** `code` of the ERROR a host sends when it refuses an answer (docs/network/websocket-protocol.md). */
+    const val STALE_ANSWER = "STALE_ANSWER"
+
+    /** [ChatItem.Thinking.kind] for reasoning text whose frame names no kind. */
+    const val REASONING_KIND = "reasoning"
+
+    /**
+     * Validates a wire plan as a whole: every entry needs non-empty content and
+     * a known priority and status, or the plan is rejected (null) rather than
+     * shown with rows missing. Null in, null out — an absent plan says nothing,
+     * which is different from an empty one, which clears.
+     */
+    fun decodePlan(wire: List<PlanEntryWire>?): List<PlanEntry>? {
+        if (wire == null) return null
+        val entries = wire.map { entry ->
+            PlanEntry(
+                content = entry.content.takeIf { it.isNotEmpty() } ?: return rejectPlan(wire.size),
+                priority = PlanPriority.fromWire(entry.priority) ?: return rejectPlan(wire.size),
+                status = PlanStatus.fromWire(entry.status) ?: return rejectPlan(wire.size)
+            )
+        }
+        return entries
+    }
+
+    /**
+     * CONNECTED's `session_modes`, or null when it is absent or not an object (a pre-1.7 Host,
+     * or one with mode policy off). Read field by field rather than through a serializer, so one
+     * odd value costs that value and not the catalogue: an unknown `currentModeId` is null, an
+     * unknown `availableModes` id is dropped, and a non-positive `turnsLeft` is null.
+     */
+    fun decodeSessionModes(raw: JsonElement?): HostModeState? {
+        val obj = raw as? JsonObject ?: return null
+        val available = (obj["availableModes"] as? JsonArray).orEmpty().mapNotNull { entry ->
+            ((entry as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull?.let { ApprovalMode.fromWire(it) }
+        }
+        val current = (obj["currentModeId"] as? JsonPrimitive)?.contentOrNull?.let { ApprovalMode.fromWire(it) }
+        val turnsLeft = (obj["turnsLeft"] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }
+        return HostModeState(current = current, turnsLeft = turnsLeft, available = available)
+    }
+
+    /** [decodePlan]'s inverse, for a plan kept on the session it is sent back in. */
+    fun encodePlan(entries: List<PlanEntry>): List<PlanEntryWire> =
+        entries.map { PlanEntryWire(it.content, it.priority.wire, it.status.wire) }
+
+    private fun rejectPlan(size: Int): List<PlanEntry>? {
+        // Count only: entries are the agent's own task text.
+        FileLogger.w(LogTags.PROTOCOL, "Ignoring malformed plan of $size entries")
+        return null
+    }
+
+    /**
+     * A tool start's status on the OIP wire (wire_events.py normalises
+     * `running` to `in_progress`). Absent reads as started, the same as the
+     * web client's toolStartStatus; anything else is not a state a start can
+     * be in, so it fails closed.
+     */
+    private fun toolStartStatus(status: String?): ToolStatus = when (status) {
+        null, "pending", "running", "in_progress" -> ToolStatus.RUNNING
+        else -> ToolStatus.ERROR
+    }
+
+    /**
+     * A tool result is terminal. The live wire sends `completed` or `failed`
+     * (wire_events.py's _TOOL_RESULT_STATUSES); a replayed or older trace can
+     * still carry `success`, `error`, `not_found` or `interrupted`. Only a
+     * known success reads as done: a missing or unknown status is an error, as
+     * the Host's own replay (session/ui.py) and the web client both treat it.
+     * Reading everything but `error` as success showed every `failed` tool —
+     * which is how the live wire spells failure — as having worked.
+     */
+    private fun toolResultStatus(status: String?): ToolStatus = when (status) {
+        "completed", "success", "done" -> ToolStatus.DONE
+        else -> ToolStatus.ERROR
+    }
+
     private fun generateId(): String = java.util.UUID.randomUUID().toString()
 
     /**
-     * Wire skills to domain skills. Nameless entries are dropped — there is
-     * no command to complete without one — and a description that says
-     * nothing (blank, or the host's `"No description"` placeholder) becomes
-     * null so the palette shows the name alone rather than filler.
+     * "oip/0.2" from a Host descriptor, or null when it names no version.
      *
-     * Names are deduplicated because the palette keys its list on them, and a
-     * `LazyColumn` throws on a repeated key. Nothing on the wire promises they
-     * are unique: an agent that registers the same skill twice would take the
-     * app down the moment the user typed `/`.
+     * Peer-controlled text bound for app.log and for an error the app words
+     * as its own, so only a short protocol token is echoed; anything else
+     * reads as undeclared. The Host's own compatibility log refuses to copy
+     * these strings for the same reason (protocol.py).
+     */
+    private fun describeProtocol(descriptor: JsonElement?): String? {
+        val fields = descriptor as? JsonObject ?: return null
+        val version = (fields["version"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val name = (fields["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: OipProtocol.NAME
+        if (!PROTOCOL_TOKEN.matches(name) || !PROTOCOL_TOKEN.matches(version)) return null
+        return "$name/$version"
+    }
+
+    /**
+     * Wire skills to domain skills, cleaned by [AgentSkill.cleaned].
+     * [keepUsable] runs first only so a nameless entry is logged as dropped.
      */
     private fun List<SkillWire>?.toAgentSkills(): List<AgentSkill> =
-        this.orEmpty()
-            .keepUsable("skills") { it.name.isNotBlank() }
-            .distinctBy { it.name }
-            .map { wire ->
-                val description = wire.description?.trim()
-                AgentSkill(
-                    name = wire.name,
-                    description = description
-                        ?.takeIf { it.isNotEmpty() && !it.equals(NO_DESCRIPTION_PLACEHOLDER, ignoreCase = true) }
-                )
-            }
+        AgentSkill.cleaned(
+            this.orEmpty().keepUsable("skills") { it.name.isNotBlank() },
+            name = { it.name },
+            description = { it.description }
+        )
 
-    /** What the host emits for a skill whose file has no summary — see [toAgentSkills]. */
-    private const val NO_DESCRIPTION_PLACEHOLDER = "No description"
+    /** A protocol name or version short and plain enough to echo — see [describeProtocol]. */
+    private val PROTOCOL_TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,31}")
 
     /**
      * Drops the entries of a nested wire list that carry nothing renderable,
@@ -653,14 +1035,34 @@ data class ParseResult(
     val updateSession: ai.openonion.oochat.data.protocol.SessionState? = null,
     val updateSessionId: String? = null,
     val setWaiting: Boolean = false,
-    val extraEvents: List<ConnectionEvent> = emptyList()
+    val extraEvents: List<ConnectionEvent> = emptyList(),
+    /**
+     * The Host's id for this frame when it is an entry in the agent log, which is what a later CONNECT
+     * names in `last_msg_id`. Not the [ChatItem] id: the parser derives that from content for several
+     * frames.
+     */
+    val msgId: String? = null,
+    /** Set when an exact repeat of this frame can be dropped; see [ProtocolParser]'s `frameKey`. */
+    val dedupeKey: String? = null
 )
 
 /**
  * Connection events used internally by AgentConnection.
  */
 sealed class ConnectionEvent {
-    data class Connected(val address: String, val sessionId: String? = null, val session: ai.openonion.oochat.data.protocol.SessionState? = null) : ConnectionEvent()
+    data class Connected(
+        val address: String,
+        val sessionId: String? = null,
+        val session: ai.openonion.oochat.data.protocol.SessionState? = null,
+        /** Conversation selected when the CONNECTED frame was handled. */
+        val conversationId: String? = null,
+        /** What the Host says about the session just joined. */
+        val status: ServerSessionStatus = ServerSessionStatus.UNKNOWN,
+        /** The Host's copy of the session was newer than the one sent; [session] is the Host's. */
+        val serverNewer: Boolean = false,
+        /** `session_modes`, or null from a Host that manages no modes — see [ai.openonion.oochat.domain.model.SessionModes]. */
+        val modes: HostModeState? = null
+    ) : ConnectionEvent()
     /**
      * @param fromSessionSnapshot true when this item came out of a
      *   `session_sync` frame, i.e. it is the server replaying its own history
@@ -678,14 +1080,64 @@ sealed class ConnectionEvent {
         val answeredQuestion: String? = null
     ) : ConnectionEvent()
     data class ChatItemUpdated(val item: ChatItem) : ConnectionEvent()
-    data class OutputReceived(val result: String, val session: ai.openonion.oochat.data.protocol.SessionState?) : ConnectionEvent()
+
+    /**
+     * A `plan` frame: the agent's complete current Todo List, replacing any
+     * earlier one; empty clears it. Session state, not a chat item — see
+     * [PlanEntry].
+     */
+    data class PlanUpdated(val entries: List<PlanEntry>) : ConnectionEvent()
+    data class OutputReceived(
+        val result: String,
+        val session: ai.openonion.oochat.data.protocol.SessionState?,
+        /** Conversation selected when the OUTPUT frame was handled. */
+        val conversationId: String? = null
+    ) : ConnectionEvent()
+
+    /**
+     * A direct tool invocation's response.
+     *
+     * [execId] matches the pending EXEC request. This event does not
+     * complete an INPUT turn or update the conversation's session.
+     */
+    data class ExecResultReceived(
+        val execId: String,
+        val status: String,
+        val result: String? = null,
+        val error: String? = null,
+        val tool: String? = null,
+        val durationMs: Double? = null
+    ) : ConnectionEvent()
+
+    /**
+     * Not a frame: an EXEC_RESULT that came when nobody was waiting for it any
+     * more, usually because the wait timed out. The card that gave up on it is
+     * told what the Host said after all (W16AAPPLE-101).
+     */
+    data class LateExecResult(val execId: String, val outcome: ExecOutcome) : ConnectionEvent()
+
+    /**
+     * A `WIKI_RESULT`: the Host's answer to the Rem read with [requestId].
+     * [html] is the whole reader page and stays inside the network layer,
+     * which turns it into a [ai.openonion.oochat.domain.model.RemOutcome].
+     */
+    data class RemResultReceived(
+        val requestId: String,
+        val ok: Boolean,
+        val html: String? = null,
+        val error: String? = null
+    ) : ConnectionEvent()
 
     /**
      * The connection's session changed, from whichever frame carried it —
      * CONNECTED, OUTPUT or session_sync. Emitted so persistence has one thing
      * to listen to instead of guessing which frame types carry a session.
      */
-    data class SessionUpdated(val session: ai.openonion.oochat.data.protocol.SessionState) : ConnectionEvent()
+    data class SessionUpdated(
+        val session: ai.openonion.oochat.data.protocol.SessionState,
+        /** Conversation selected when the frame carrying this session was handled. */
+        val conversationId: String? = null
+    ) : ConnectionEvent()
 
     /** The agent's own name card — see [AgentLiveProfile]'s doc for why this is connection state, not a chat item. */
     data class AgentProfileReceived(val profile: AgentLiveProfile) : ConnectionEvent()
@@ -698,6 +1150,16 @@ sealed class ConnectionEvent {
      * there is no history to keep.
      */
     data class DashboardSnapshotReceived(val html: String) : ConnectionEvent()
+
+    /** `CONTROL_CENTER_APP`: null when there is none or it was refused. Each replaces the last. */
+    data class ControlCenterAppReceived(val app: ControlCenterApp?) : ConnectionEvent()
+
+    /** `CONTROL_CENTER_STATE`: the Host's review status for the app. Logged, not shown. */
+    data class ControlCenterStateReceived(
+        val status: String,
+        val errorCode: String?,
+        val errorMessage: String?
+    ) : ConnectionEvent()
     /**
      * Server's reply to [AgentConnection.querySessionStatus] — whether a
      * previously-started session is still running after a reconnect.
@@ -707,7 +1169,90 @@ sealed class ConnectionEvent {
      * values come from.
      */
     data class SessionStatusReceived(val sessionId: String?, val status: String) : ConnectionEvent()
-    data class ConnectionError(val message: String) : ConnectionEvent()
+
+    /**
+     * `mode_budget_changed`: an unattended mode's turn budget counted down by one finished turn.
+     * Connection state, like [SessionStatusReceived]; the mode itself is unchanged.
+     */
+    data class ModeBudgetChanged(val mode: ApprovalMode, val turnsLeft: Int?) : ConnectionEvent()
+
+    /**
+     * `RUNTIME_INPUT_ACK` — the host accepted an INPUT that arrived while the
+     * agent was running and queued it for the running turn.
+     *
+     * [hostInputId] is the host's own id for the queued item. It is **not**
+     * the `input_id` of the INPUT that was sent, so it cannot be matched to a
+     * message by value. The host answers each runtime INPUT immediately and in
+     * the order received, so the oldest message still awaiting an answer is
+     * the one this acknowledges.
+     */
+    data class RuntimeInputAcknowledged(val sessionId: String?, val hostInputId: String?) : ConnectionEvent()
+
+    /**
+     * `ERROR` with `code: RUNTIME_INPUT_REJECTED` — the running turn is not
+     * taking runtime input (it is sealed, or the agent lacks the
+     * `runtime_input` plugin). Nothing was queued. [retryable] is the host's
+     * word that the same text will be accepted as an ordinary INPUT once the
+     * turn's OUTPUT lands. Answers the oldest awaiting message, like
+     * [RuntimeInputAcknowledged].
+     */
+    data class RuntimeInputRejected(val sessionId: String?, val retryable: Boolean, val message: String?) : ConnectionEvent()
+
+    /** The Host refused an answer to [requestId] (STALE_ANSWER). */
+    data class AnswerRefused(val requestId: String?) : ConnectionEvent()
+
+    /**
+     * `PROVIDER_INPUT_ACK`: the Host's answer to a message typed into a Work
+     * Room (W16AAPPLE-35). Like [AnswerRefused], it settles something the
+     * screen owns and is not a chat item.
+     */
+    data class ProviderInputAcked(val ack: ProviderInputAck) : ConnectionEvent()
+
+    /**
+     * `PROVIDER_INTERRUPT_ACK`: the Host's answer to a Work Room's scoped Stop
+     * (W16AAPPLE-37). Settles that room's Stop, not a chat item.
+     */
+    data class ProviderStopAcked(val ack: ProviderStopAck) : ConnectionEvent()
+
+    /**
+     * `PROVIDER_PERMISSION_ACK`: the Host's answer to a change of a Work Room's
+     * provider permission mode (W16AAPPLE-43). Settles the control, not a chat item.
+     */
+    data class ProviderPermissionAcked(val ack: ProviderPermissionAck) : ConnectionEvent()
+
+    /**
+     * Not a frame: the connection has finished flushing its outbox after a
+     * CONNECTED, for [conversationId]. What is left in the outbox then is what
+     * did not go (a send the socket refused goes back), so the chat settles its
+     * "Waiting to send..." bubbles by it (W16AAPPLE-106).
+     */
+    data class OutboxFlushed(val conversationId: String?) : ConnectionEvent()
+    data class ConnectionError(
+        val message: String,
+        /** Machine-readable ERROR code, when the Host supplied one. */
+        val code: String? = null
+    ) : ConnectionEvent()
+    /**
+     * The Host rejected this client's OIP version (ERROR code -32010). Final
+     * for the connection: retrying sends the same descriptor and is refused
+     * the same way, so nothing reconnects automatically after it.
+     *
+     * @param hostProtocol the version the Host speaks, as "oip/0.2", or null
+     *   when its descriptor was missing or unreadable.
+     */
+    data class ProtocolRejected(val hostProtocol: String?) : ConnectionEvent()
+
+    /**
+     * A reconnect the server would not let back in: its CONNECT was answered
+     * with an ERROR, or the ladder ran out against an agent the relay says is
+     * offline (W16AAPPLE-82, -79). Distinct from [ConnectionError], which on a
+     * cycle that has reached the agent is a business error on a live session:
+     * this one ends the connection, so the screen can say why and offer
+     * Reconnect instead of staying on "Reconnecting…".
+     *
+     * @param message the server's own words, not yet humanised.
+     */
+    data class ReconnectRefused(val message: String) : ConnectionEvent()
     data object Disconnected : ConnectionEvent()
     data object Reconnecting : ConnectionEvent()
     data object Waiting : ConnectionEvent()

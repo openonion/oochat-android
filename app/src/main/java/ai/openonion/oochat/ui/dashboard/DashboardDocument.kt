@@ -1,5 +1,6 @@
 package ai.openonion.oochat.ui.dashboard
 
+import ai.openonion.oochat.util.SensitiveText
 import java.security.SecureRandom
 
 /**
@@ -68,6 +69,8 @@ object DashboardDocument {
     /** Everything except `script-src`, which carries the per-render nonce. */
     val CSP_DIRECTIVES = listOf(
         "default-src 'none'",
+        "form-action 'none'",
+        "base-uri 'none'",
         "style-src 'unsafe-inline'",
         "img-src data:",
         "font-src data:",
@@ -76,6 +79,40 @@ object DashboardDocument {
     fun cspMeta(nonce: String): String {
         val content = (CSP_DIRECTIVES + "script-src 'nonce-$nonce'").joinToString("; ")
         return """<meta http-equiv="Content-Security-Policy" content="$content">"""
+    }
+
+    /**
+     * A skill button's own attributes. Never drawn, and sent back to the agent
+     * as the user's message when tapped (see the bridge below), so they keep
+     * what the agent wrote, as a tapped ask_user option does.
+     */
+    private val SKILL_ATTRIBUTE = Regex(
+        """\bdata-ochat-(?:skill|args)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * The agent's HTML as the Home page may show it (W16AAPPLE-50): every
+     * credential masked and home folders shortened, through
+     * [SensitiveText.redact], as in the transcript, the page being the agent's
+     * content like its replies. Done on the text, not the parsed page, which
+     * is safe here as it is not for the CSP: a part missed is a part left as
+     * the agent wrote it, never a way past the sandbox.
+     *
+     * The skill buttons' attributes are passed over (see [SKILL_ATTRIBUTE]).
+     * A page can still show a secret on purpose, split up or through CSS; this
+     * is for the one that would show it by accident.
+     */
+    fun redactForDisplay(html: String): String {
+        val out = StringBuilder(html.length)
+        var last = 0
+        SKILL_ATTRIBUTE.findAll(html).forEach { m ->
+            out.append(SensitiveText.redact(html.substring(last, m.range.first)))
+            out.append(m.value)
+            last = m.range.last + 1
+        }
+        out.append(SensitiveText.redact(html.substring(last)))
+        return out.toString()
     }
 
     /** What [componentStyles] falls back to when the caller has no theme to hand. */

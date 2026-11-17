@@ -1,3 +1,4 @@
+
 # oochat for Android
 
 [![Build & Test](https://github.com/openonion/oochat-android/actions/workflows/build.yml/badge.svg)](https://github.com/openonion/oochat-android/actions/workflows/build.yml)
@@ -22,9 +23,10 @@ answer; this exists for when the default is not enough.
 ### Slash-command palette
 
 Type `/` in the composer and the agent's published skills appear as a list, each
-with the description the agent gave it. The list comes from the agent itself — an
-agent that publishes nothing shows an empty palette rather than a stale or
-invented one.
+with the description the agent gave it, if any. The list comes from the agent itself, and only
+once its Host has let you in, so an agent's skills are never shown to someone
+without access. An agent that publishes nothing shows an empty palette rather
+than a stale or invented one.
 
 <img src="screenshots/slash-command-palette.png" alt="Typing a slash in the composer lists the agent's published skills with their descriptions" width="320">
 
@@ -45,7 +47,7 @@ This needs `runtime_input` on the agent, which is opt-in
 (`Agent(plugins=[runtime_input])`). Without it the relay acknowledges the
 mid-run message and queues it, and nothing drains the queue.
 
-<img src="screenshots/keep-typing-while-working.png" alt="A reply is still generating, Stop is showing, and a follow-up is already typed with Send enabled" width="320">
+<img src="screenshots/keep-typing-while-working.png" alt="The agent is working, its newest steps showing, and a follow-up is already typed with Send beside the Stop button" width="320">
 
 ### A message that did not send says so
 
@@ -64,8 +66,11 @@ A notification arrives when a reply lands and the app is in the background.
 
 - Multiple sessions per agent, in a drawer, renameable
 - Agent discovery and invite-code onboarding
-- **BIP39 recovery phrase** — generated the same way as the web client, so a
-  phrase created in one restores the identical identity in the other
+- The agent owner's **Rem** notebook, read-only, as readable Markdown on phone
+  and tablet
+- **BIP39 recovery phrase**, derived with SLIP-0010 the way the connectonion
+  SDK does, so a phrase gives the same identity on the phone as in the `co` CLI
+  (see [Identity](docs/architecture.md#identity))
 - Ed25519 signing via lazysodium; credentials in EncryptedSharedPreferences
   (AES256-GCM)
 - Room-backed history: agents, sessions, messages, session state
@@ -96,6 +101,10 @@ cd oochat-android
 ./gradlew :app:testDebugUnitTest    # unit tests
 ./gradlew :app:jacocoTestReport     # coverage
 ```
+
+The regression suite (the core features, plus tests that flag known issues) runs
+on its own with `./gradlew :app:testDebugUnitTest -Pregression`; see
+[docs/regression-suite.md](docs/regression-suite.md).
 
 Instrumented and Compose UI tests need a device attached:
 

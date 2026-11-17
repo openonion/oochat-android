@@ -11,6 +11,7 @@ import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.Role
 import ai.openonion.oochat.domain.model.ServerTranscriptEntry
 import ai.openonion.oochat.domain.model.ThinkingStatus
+import ai.openonion.oochat.domain.model.ToolStatus
 import ai.openonion.oochat.domain.model.sessionUsageTotals
 import ai.openonion.oochat.domain.model.stableAssistantId
 import kotlinx.coroutines.CompletableDeferred
@@ -227,6 +228,28 @@ class ConversationHistoryUseCaseTest {
     }
 
     @Test
+    fun `ensureActiveSession keeps but does not reopen a synced chat with no local messages`() = runTest(testDispatcher) {
+        agentRepo.agents += testAgent()
+        val synced = ChatSession(
+            id = "remote-session",
+            agentId = "agent-1",
+            title = "New conversation",
+            createdAt = 1L,
+            updatedAt = 2L,
+            messageCount = 0,
+            remoteRevision = 4L
+        )
+        sessionRepo.sessions[synced.id] = synced
+        sessionRepo.sessionsByAgent["agent-1"] = MutableStateFlow(listOf(synced))
+
+        useCase.ensureActiveSession("0xabc", scope = backgroundScope)
+        advanceUntilIdle()
+
+        assertEquals(synced, sessionRepo.sessions[synced.id])
+        assertNull(useCase.activeSessionId.value)
+    }
+
+    @Test
     fun `ensureActiveSession resumes the most recent existing session instead of creating a new one`() = runTest(testDispatcher) {
         agentRepo.agents += testAgent()
         val existing = sessionRepo.createSession("agent-1", "Existing conversation")
@@ -428,6 +451,40 @@ class ConversationHistoryUseCaseTest {
 
         assertTrue(fetched.isEmpty())
         assertEquals("no churn when the local copy is current", before, messageRepo.messages.size)
+    }
+
+    @Test
+    fun `mergeServerTranscript does not turn reasoning already shown into a reply`() = runTest(testDispatcher) {
+        // re_act/reflect write their reasoning into the session's messages as
+        // an assistant entry, so the transcript replayed on CONNECT lists it
+        // as a reply. Here it was streamed and stored as reasoning.
+        agentRepo.agents += testAgent()
+        useCase.ensureActiveSession("0xabc", scope = backgroundScope)
+        advanceUntilIdle()
+        useCase.persistMessage(ChatItem.Agent(id = "a0", content = "earlier reply"))
+        // Stored as the real PersistenceTransaction stores a transcript row:
+        // empty content, the item in its payload. (The fake here only
+        // routes chat text.)
+        val reasoning = ChatItem.Thinking(id = "tr-1", status = ThinkingStatus.DONE, content = "Checking the build.", kind = "intent")
+        val payload = TranscriptItemCodec.toPayload(reasoning)!!
+        messageRepo.createMessage(
+            ChatMessage(
+                id = reasoning.id,
+                sessionId = useCase.activeSessionId.value!!,
+                role = Role.SYSTEM,
+                content = "",
+                timestamp = 1L,
+                itemType = payload::class.simpleName,
+                payload = TranscriptItemCodec.encode(payload)
+            )
+        )
+
+        val fetched = useCase.mergeServerTranscript(
+            listOf(entry("Checking the build."), entry("Build passed.")),
+            serverTurn = 2
+        )
+
+        assertEquals(listOf("Build passed."), fetched.map { (it as ChatItem.Turn).agent?.content })
     }
 
     @Test
@@ -642,6 +699,33 @@ class ConversationHistoryUseCaseTest {
         assertEquals(listOf("file:///a.jpg"), (items[0] as ChatItem.User).images)
         assertEquals(session.id, useCase.activeSessionId.value)
         assertEquals(mapOf("m1" to 100L, "m2" to 200L), useCase.itemTimestamps.value)
+    }
+
+    @Test
+    fun `a reloaded conversation shows a Work Room run without its own codex tool card`() = runTest(testDispatcher) {
+        // W16AAPPLE-33: a row saved before the run retired it (or by an older
+        // build) must not bring the parent tool card back beside the run.
+        val session = sessionRepo.createSession("agent-1", "Login page")
+        val parent = ChatItem.ToolCall(id = "call-1", name = "codex", status = ToolStatus.DONE)
+        val run = ChatItem.ProviderInvocation(id = "codex:call-1", parentToolCallId = "call-1", provider = "codex")
+        listOf(parent, run).forEachIndexed { i, item ->
+            val payload = TranscriptItemCodec.toPayload(item)!!
+            messageRepo.createMessage(
+                ChatMessage(
+                    id = item.id,
+                    sessionId = session.id,
+                    role = Role.SYSTEM,
+                    content = "",
+                    timestamp = 100L + i,
+                    itemType = payload::class.simpleName,
+                    payload = TranscriptItemCodec.encode(payload)
+                )
+            )
+        }
+
+        val items = useCase.switchToSession(session.id)
+
+        assertEquals(listOf("codex:call-1"), items.map { it.id })
     }
 
     @Test
@@ -940,6 +1024,27 @@ class ConversationHistoryUseCaseTest {
         assertTrue(messageRepo.deleteCallsForSession.isEmpty())
     }
 
+    @Test
+    fun `clearSession deletes the conversation it names, even once another is active`() = runTest(testDispatcher) {
+        // Clear chat names its conversation up front, so one opened while the
+        // clear is still running is not the one deleted (W16AAPPLE-106).
+        agentRepo.agents += testAgent()
+        useCase.ensureActiveSession("0xabc", scope = backgroundScope)
+        advanceUntilIdle()
+        useCase.persistMessage(ChatItem.User(id = "u1", content = "hi"))
+        val cleared = useCase.activeSessionId.value!!
+        useCase.startNewSession()
+        useCase.persistMessage(ChatItem.User(id = "u2", content = "in the newer conversation"))
+        val opened = useCase.activeSessionId.value!!
+
+        useCase.clearSession(cleared)
+
+        assertEquals(listOf(cleared), messageRepo.deleteCallsForSession)
+        assertTrue(messageRepo.messages.none { it.sessionId == cleared })
+        assertTrue("the one opened is kept", messageRepo.messages.any { it.sessionId == opened })
+        assertEquals(opened, useCase.activeSessionId.value)
+    }
+
     // ── conversation paging ──────────────────────────────────────────
     //
     // The window is bookkeeping with no failure mode of its own: get the
@@ -1236,6 +1341,7 @@ class FakeDatabaseForTest : ai.openonion.oochat.data.local.db.AppDatabase() {
     override fun sessionDao(): ai.openonion.oochat.data.local.db.dao.SessionDao = NoOpSessionDao
     override fun messageDao(): ai.openonion.oochat.data.local.db.dao.MessageDao = NoOpMessageDao
     override fun sessionStateDao() = throw NotImplementedError()
+    override fun sessionSyncDao() = throw NotImplementedError()
     override fun pendingMessageDao() = throw NotImplementedError()
     override fun clearAllTables() = throw NotImplementedError()
     // RoomDatabase's own constructor eagerly assigns `invalidationTracker = createInvalidationTracker()`

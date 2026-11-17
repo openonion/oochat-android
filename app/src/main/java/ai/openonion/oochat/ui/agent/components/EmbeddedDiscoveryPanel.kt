@@ -73,8 +73,8 @@ import java.util.Locale
  * Agent Address field is always directly visible — no "Connect by address
  * instead" toggle hiding it. Shared by Onboarding and Add Agent.
  *
- * [advancedSettings] and [submitButton] are caller-supplied slots since
- * submit validation/labels differ per screen (Onboarding just connects;
+ * [submitButton] is a caller-supplied slot since submit validation/labels
+ * differ per screen (Onboarding just connects;
  * Add Agent also needs a Name field and builds a full [AgentProfile]).
  */
 @Composable
@@ -92,7 +92,6 @@ fun EmbeddedDiscoveryPanel(
     // quick-pick of agents already saved would only re-add a duplicate.
     savedAgentDropdown: Boolean = true,
     modifier: Modifier = Modifier,
-    advancedSettings: @Composable () -> Unit = {},
     submitButton: @Composable () -> Unit
 ) {
     // Mode-switch clearing, mirrors AgentFormContent's own handling so both
@@ -313,13 +312,13 @@ fun EmbeddedDiscoveryPanel(
                                 text = "Tap to ${actionLabel.lowercase()}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.tertiary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         // Capped + independently scrollable rather than laying
                         // every result out flat: a relay can return a dozen-plus
                         // agents, and stacking all of them at full height would
-                        // push the address field/advanced settings/submit far
+                        // push the address field/submit far
                         // down the page.
                         Column(
                             modifier = Modifier
@@ -358,12 +357,7 @@ fun EmbeddedDiscoveryPanel(
 
         Spacer(modifier = Modifier.height(MaterialTheme.spacing.lg))
 
-        // 5. Advanced Settings — caller-supplied (API Key today).
-        advancedSettings()
-
-        Spacer(modifier = Modifier.height(MaterialTheme.spacing.lg))
-
-        // 6. Submit — caller-supplied (label/validation differ per screen).
+        // 5. Submit — caller-supplied (label/validation differ per screen).
         submitButton()
     }
 }

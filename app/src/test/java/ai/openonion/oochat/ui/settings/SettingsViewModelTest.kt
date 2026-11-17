@@ -4,6 +4,7 @@ import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
 import ai.openonion.oochat.data.local.ConnectionConfig
+import ai.openonion.oochat.data.repository.AccountClockException
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.data.repository.AccountSnapshot
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
@@ -12,10 +13,12 @@ import ai.openonion.oochat.domain.model.ChatSession
 import ai.openonion.oochat.domain.model.UserProfile
 import android.app.Application
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -27,6 +30,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Unit tests for [SettingsViewModel].
@@ -79,6 +83,15 @@ class SettingsViewModelTest {
 
         override fun exportBackup(): KeyManager.BackupExport =
             KeyManager.BackupExport.Phrase("exported phrase words")
+
+        var legacyDerivation = false
+        /** Runs once, inside the next check, after that check has read its answer. */
+        var duringNextCheck: (() -> Unit)? = null
+        override fun hasLegacyDerivation(): Boolean {
+            val answer = legacyDerivation
+            duringNextCheck?.also { duringNextCheck = null }?.invoke()
+            return answer
+        }
     }
 
     private class FakeAccountRepository : AccountRepository {
@@ -151,6 +164,10 @@ class SettingsViewModelTest {
         override suspend fun setAnalyticsEnabled(value: Boolean) { analyticsEnabledFlow.value = value }
         override val safeModeEnabled: Flow<Boolean> = safeModeEnabledFlow
         override suspend fun setSafeModeEnabled(value: Boolean) { safeModeEnabledFlow.value = value }
+
+        private val developerToolsEnabledFlow = MutableStateFlow(false)
+        override val developerToolsEnabled: Flow<Boolean> = developerToolsEnabledFlow
+        override suspend fun setDeveloperToolsEnabled(value: Boolean) { developerToolsEnabledFlow.value = value }
     }
 
     private class FakeConfigRepository : ConnectionConfigRepository {
@@ -167,6 +184,11 @@ class SettingsViewModelTest {
     private class FakeSessionRepository : SessionRepository {
         private val all = MutableStateFlow<List<ChatSession>>(emptyList())
         private var counter = 0
+        val activatedIdentities = mutableListOf<String>()
+
+        override suspend fun activateIdentity(identityAddress: String) {
+            activatedIdentities += identityAddress
+        }
 
         override fun getAllSessions(): Flow<List<ChatSession>> = all
         override fun getSessionsByAgent(agentId: String): Flow<List<ChatSession>> =
@@ -216,6 +238,7 @@ class SettingsViewModelTest {
     private fun createVm(
         requiresNotificationPermission: Boolean = true,
         autoLoadAccountOnInit: Boolean = true,
+        legacyCheckDispatcher: CoroutineDispatcher = testDispatcher,
     ) = SettingsViewModel(
         application = Application(),
         identityManager = identityManager,
@@ -226,6 +249,7 @@ class SettingsViewModelTest {
         requiresNotificationPermission = requiresNotificationPermission,
         notificationPermissionChecker = { !requiresNotificationPermission || permissionGranted },
         autoLoadAccountOnInit = autoLoadAccountOnInit,
+        legacyCheckDispatcher = legacyCheckDispatcher,
     )
 
     // ── Construction / initial account load ────────────────────────────
@@ -254,6 +278,45 @@ class SettingsViewModelTest {
         assertEquals("token-default", vm.uiState.value.accountApiKey)
     }
 
+    @Test
+    fun `an account refused over the device clock says so until a load succeeds`() = runTest(testDispatcher) {
+        // W16AAPPLE-91: the one account failure the user can fix themselves.
+        accountRepo.queuedResults += Result.failure(AccountClockException())
+        val vm = createVm()
+        testScheduler.runCurrent()
+
+        assertEquals(SettingsViewModel.ACCOUNT_CLOCK_WRONG, vm.uiState.value.accountProblem)
+
+        vm.loadAccount()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
+    }
+
+    @Test
+    fun `a later failure for another reason clears the clock message`() = runTest(testDispatcher) {
+        // The user may have fixed the clock since; a lost network must not keep blaming it.
+        accountRepo.queuedResults += Result.failure(AccountClockException())
+        accountRepo.queuedResults += Result.failure(RuntimeException("network down"))
+        val vm = createVm()
+        testScheduler.runCurrent()
+        assertEquals(SettingsViewModel.ACCOUNT_CLOCK_WRONG, vm.uiState.value.accountProblem)
+
+        vm.loadAccount()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
+    }
+
+    @Test
+    fun `any other account failure is not shown as a problem to fix`() = runTest(testDispatcher) {
+        accountRepo.queuedResults += Result.failure(RuntimeException("network down"))
+        val vm = createVm()
+        testScheduler.runCurrent()
+
+        assertNull(vm.uiState.value.accountProblem)
+    }
+
     // ── Identity switch invalidates the shared account cache ───────────
 
     @Test
@@ -276,6 +339,7 @@ class SettingsViewModelTest {
             accountRepo.calls
         )
         assertEquals("0xRESET-IDENTITY", vm.uiState.value.walletAddress)
+        assertEquals(listOf("0xRESET-IDENTITY"), sessionRepo.activatedIdentities)
         assertEquals("the reload must surface the NEW identity's snapshot", "new-token", vm.uiState.value.accountApiKey)
         assertTrue("the fresh mnemonic must be returned for immediate backup", fresh.mnemonic.isNotBlank())
     }
@@ -294,6 +358,7 @@ class SettingsViewModelTest {
         assertEquals(1, accountRepo.invalidateCount)
         assertEquals(listOf("load", "invalidate", "load"), accountRepo.calls)
         assertEquals("0xIMPORTED-IDENTITY", vm.uiState.value.walletAddress)
+        assertEquals(listOf("0xIMPORTED-IDENTITY"), sessionRepo.activatedIdentities)
         assertEquals("imported-token", vm.uiState.value.accountApiKey)
     }
 
@@ -357,6 +422,63 @@ class SettingsViewModelTest {
 
         assertTrue(export is KeyManager.BackupExport.Phrase)
         assertEquals("exported phrase words", (export as KeyManager.BackupExport.Phrase).mnemonic)
+    }
+
+    @Test
+    fun `a phrase that no longer derives the identity is flagged until the identity changes`() {
+        identityManager.legacyDerivation = true
+        val vm = createVm(autoLoadAccountOnInit = false)
+
+        assertTrue(vm.uiState.value.legacyDerivation)
+
+        // Restoring from the phrase moves onto the derivation it now gives.
+        identityManager.legacyDerivation = false
+        vm.importIdentity("legal winner thank year wave sausage worth useful legal winner thank yellow")
+
+        assertFalse(vm.uiState.value.legacyDerivation)
+    }
+
+    @Test
+    fun `the legacy check runs on its own dispatcher, not the main thread`() {
+        // Its first call is 2048 rounds of PBKDF2 plus a key derivation.
+        val checkDispatcher = StandardTestDispatcher()
+        identityManager.legacyDerivation = true
+        val vm = createVm(autoLoadAccountOnInit = false, legacyCheckDispatcher = checkDispatcher)
+
+        assertFalse("must not have run inline on Main", vm.uiState.value.legacyDerivation)
+        checkDispatcher.scheduler.advanceUntilIdle()
+        assertTrue(vm.uiState.value.legacyDerivation)
+    }
+
+    @Test
+    fun `a legacy check from before an identity switch cannot flag the new identity`() {
+        // Checks that finish in the order they started need no fence: the
+        // later one writes last. It matters when the older one finishes last,
+        // so run them newest first. The old identity's check answers "legacy".
+        val checks = NewestFirstDispatcher()
+        val vm = createVm(autoLoadAccountOnInit = false, legacyCheckDispatcher = checks)
+        vm.importIdentity("legal winner thank year wave sausage worth useful legal winner thank yellow")
+        identityManager.duringNextCheck = { identityManager.legacyDerivation = true }
+
+        checks.runNewestFirst()
+
+        assertFalse(vm.uiState.value.legacyDerivation)
+    }
+
+    /** Holds what is dispatched to it until [runNewestFirst]. */
+    private class NewestFirstDispatcher : CoroutineDispatcher() {
+        private val queued = ArrayDeque<Runnable>()
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            queued.addLast(block)
+        }
+        fun runNewestFirst() {
+            while (queued.isNotEmpty()) queued.removeLast().run()
+        }
+    }
+
+    @Test
+    fun `a current identity is not flagged`() {
+        assertFalse(createVm(autoLoadAccountOnInit = false).uiState.value.legacyDerivation)
     }
 
     // ── Notification-permission three-way coordination ─────────────────
@@ -470,12 +592,14 @@ class SettingsViewModelTest {
         vm.setFontSizeIndex(3)
         vm.setCustomInstructions("be brief")
         vm.setNotificationSound("Bell")
+        vm.setDeveloperToolsEnabled(true)
         testScheduler.runCurrent()
 
         assertEquals(false, appSettings.streamingResponses.firstValue())
         assertEquals(3, appSettings.fontSizeIndex.firstValue())
         assertEquals("be brief", appSettings.customInstructions.firstValue())
         assertEquals("Bell", appSettings.notificationSound.firstValue())
+        assertEquals(true, appSettings.developerToolsEnabled.firstValue())
     }
 
     private fun <T> Flow<T>.firstValue(): T = (this as MutableStateFlow<T>).value
