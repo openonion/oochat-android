@@ -23,6 +23,21 @@ data class RecordedVoice(
 )
 
 /**
+ * What [VoiceRecorderStore.stopRecording] ended with. Too short is told apart
+ * from the rest because it is the user's to fix: an accidental tap used to
+ * vanish with no word (W16AAPPLE-103).
+ */
+sealed interface RecordingResult {
+    data class Recorded(val voice: RecordedVoice) : RecordingResult
+
+    /** Under the one-second minimum (MINIMUM_DURATION_SECONDS); the file is deleted. */
+    data object TooShort : RecordingResult
+
+    /** Nothing was recording, no audio arrived, or the file could not be finished. */
+    data object Unusable : RecordingResult
+}
+
+/**
  * App-private voice capture boundary, for the server-transcription fallback.
  *
  * Only reached where [android.speech.SpeechRecognizer.isRecognitionAvailable]
@@ -34,7 +49,7 @@ data class RecordedVoice(
  */
 interface VoiceRecorderStore {
     suspend fun startRecording(): Boolean
-    suspend fun stopRecording(): RecordedVoice?
+    suspend fun stopRecording(): RecordingResult
     suspend fun cancelRecording()
 
     /**
@@ -125,31 +140,37 @@ class VoiceRecorderStoreImpl(context: Context) : VoiceRecorderStore {
         }
     }
 
-    override suspend fun stopRecording(): RecordedVoice? = withContext(Dispatchers.IO) {
+    override suspend fun stopRecording(): RecordingResult = withContext(Dispatchers.IO) {
         synchronized(lifecycleLock) {
-            val capture = activeCapture ?: return@withContext null
+            val capture = activeCapture ?: return@withContext RecordingResult.Unusable
             val elapsedSeconds = ((System.nanoTime() - capture.startedAtNanos) / NANOS_PER_SECOND).toFloat()
 
             stopCapture(capture)
             activeCapture = null
 
-            val hasAudio = capture.file.exists() && capture.file.length() > WAV_HEADER_BYTES
-            if (elapsedSeconds < MINIMUM_DURATION_SECONDS || !hasAudio) {
+            if (elapsedSeconds < MINIMUM_DURATION_SECONDS) {
                 capture.file.delete()
-                return@withContext null
+                return@withContext RecordingResult.TooShort
+            }
+            val hasAudio = capture.file.exists() && capture.file.length() > WAV_HEADER_BYTES
+            if (!hasAudio) {
+                capture.file.delete()
+                return@withContext RecordingResult.Unusable
             }
 
             try {
                 writeFinalHeader(capture.file)
-                RecordedVoice(
-                    localPath = Uri.fromFile(capture.file).toString(),
-                    durationSeconds = elapsedSeconds,
-                    file = capture.file
+                RecordingResult.Recorded(
+                    RecordedVoice(
+                        localPath = Uri.fromFile(capture.file).toString(),
+                        durationSeconds = elapsedSeconds,
+                        file = capture.file
+                    )
                 )
             } catch (error: Exception) {
                 FileLogger.e(LogTags.VOICE_STORE, "Unable to finalize WAV: ${error.message}")
                 capture.file.delete()
-                null
+                RecordingResult.Unusable
             }
         }
     }

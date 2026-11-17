@@ -8,6 +8,16 @@
     <style name="Theme.ConnectOnion" parent="android:Theme.Material.Light.NoActionBar" />
 
     <!--
+        The two themes the Control Center's WebView is created under. A WebView tells the page
+        inside it prefers-color-scheme from its theme's isLightTheme, and the activity's theme
+        follows the system's dark setting, not the app's own Light/Dark/System choice. So the
+        WebView takes one of these, chosen by the app's choice, and the agent's app goes dark
+        when the rest of the app does.
+    -->
+    <style name="ConnectOnionWebViewLight" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="ConnectOnionWebViewDark" parent="android:Theme.Material.NoActionBar" />
+
+    <!--
         Theme applied to the launcher Activity (AndroidManifest). The
         androidx.core:core-splashscreen library uses these attributes to
         render a system-level splash screen during cold start, then

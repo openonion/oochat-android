@@ -1,7 +1,9 @@
 package ai.openonion.oochat
 
 import ai.openonion.oochat.di.appContainer
+import ai.openonion.oochat.domain.model.NotificationTarget
 import ai.openonion.oochat.ui.navigation.NavigationGraph
+import ai.openonion.oochat.ui.navigation.OpenNotificationTarget
 import ai.openonion.oochat.ui.navigation.Routes
 import ai.openonion.oochat.ui.theme.Motion
 import ai.openonion.oochat.ui.theme.spacing
@@ -66,7 +68,11 @@ private const val MIN_SPLASH_MS = 450L
  * crossfades into the app once the destination is known.
  */
 @Composable
-fun ConnectOnionApp() {
+fun ConnectOnionApp(
+    // A tapped notification's destination (W16AAPPLE-44), from MainActivity.
+    notificationTarget: NotificationTarget? = null,
+    onNotificationTargetHandled: () -> Unit = {}
+) {
     val context = LocalContext.current
     val navController = rememberNavController()
 
@@ -136,6 +142,14 @@ fun ConnectOnionApp() {
                 navController = navController,
                 startDestination = destination,
                 modifier = Modifier.fillMaxSize()
+            )
+            OpenNotificationTarget(
+                navController = navController,
+                target = notificationTarget,
+                isSavedAgent = { address ->
+                    withContext(Dispatchers.IO) { context.appContainer.agentRepository.getAgentByAddress(address) != null }
+                },
+                onHandled = onNotificationTargetHandled
             )
         } else {
             SplashScreen()

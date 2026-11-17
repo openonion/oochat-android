@@ -58,8 +58,12 @@ class RoomPendingMessageSinkTest {
     }
 
     /** [PendingMessageSink.drain] as a list, for assertions about order and contents. */
-    private fun PendingMessageSink.drainAll(sessionId: String? = session): List<QueuedMessage> =
-        buildList { drain(agent, sessionId) { add(it) } }
+    private fun PendingMessageSink.drainAll(
+        sessionId: String? = session,
+        conversationId: String? = null
+    ): List<QueuedMessage> = buildList {
+        drain(agent, sessionId, conversationId) { add(it) }
+    }
 
     private fun file(name: String, bytes: Int) =
         FileAttachment(name = name, data = "data:application/pdf;base64," + "A".repeat(bytes))
@@ -83,7 +87,7 @@ class RoomPendingMessageSinkTest {
         // payload out of it is the whole reason for the spill file.
         sink.enqueue(agent, session, "big one", null, listOf(file("big.pdf", 4 * 1024 * 1024)))
 
-        val row = db.pendingMessageDao().oldestClaimableForAgent(agent, session, Long.MAX_VALUE)!!
+        val row = db.pendingMessageDao().oldestClaimableForAgent(agent, session, null, Long.MAX_VALUE)!!
         assertNull("images stayed in the row", row.imagesJson)
         assertNull("files stayed in the row", row.filesJson)
         assertEquals(listOf("big one"), sink.drainAll().map { it.prompt })
@@ -140,13 +144,41 @@ class RoomPendingMessageSinkTest {
         repeat(3) { i -> sink.enqueue(agent, session, "m-$i", null, listOf(file("f-$i.pdf", 1024))) }
 
         val remainingWhileDraining = mutableListOf<Int>()
-        sink.drain(agent, session) { remainingWhileDraining += db.pendingMessageDao().countForAgent(agent) }
+        sink.drain(agent, session, null) {
+            remainingWhileDraining += db.pendingMessageDao().countForAgent(agent)
+            true
+        }
 
         assertEquals(
             "the queue must shrink one message at a time as each is handed over",
             listOf(2, 1, 0),
             remainingWhileDraining
         )
+    }
+
+    @Test
+    fun `a rejected send keeps the row queued`() {
+        sink.enqueue(agent, session, "retry me", null, null)
+
+        sink.drain(agent, session, null) { false }
+
+        assertEquals(listOf("retry me"), sink.drainAll().map { it.prompt })
+    }
+
+    @Test
+    fun `a rejected first send stays before later messages`() {
+        sink.enqueue(agent, session, "first", null, null)
+        sink.enqueue(agent, session, "second", null, null)
+        sink.enqueue(agent, session, "third", null, null)
+
+        val attempted = mutableListOf<String>()
+        sink.drain(agent, session, null) {
+            attempted += it.prompt
+            false
+        }
+
+        assertEquals(listOf("first"), attempted)
+        assertEquals(listOf("first", "second", "third"), sink.drainAll().map { it.prompt })
     }
 
     @Test
@@ -159,6 +191,17 @@ class RoomPendingMessageSinkTest {
             sink.drainAll(session).map { it.prompt }
         )
         assertEquals(1, db.pendingMessageDao().countForAgent(agent))
+    }
+
+    @Test
+    fun `a message tagged with the local conversation drains into a fresh Host session`() {
+        sink.enqueue(agent, "conversation-1", "typed with Memory off", null, null)
+
+        assertEquals(
+            listOf("typed with Memory off"),
+            sink.drainAll(sessionId = "fresh-host-session", conversationId = "conversation-1")
+                .map { it.prompt }
+        )
     }
 
     @Test
