@@ -18,9 +18,8 @@ import kotlinx.serialization.json.put
 
 /**
  * One entry of an `AGENT_PROFILE` frame's `skills` list — `{"name": …,
- * "description": …}`, the shape the relay's own directory publishes for every
- * agent that has skills at all (`GET /api/agents`, and connectonion's
- * `tests/unit/test_agent_profile.py` asserts on `s["name"]`).
+ * "description": …}`, as ws_router/connect.py `_send_agent_profile` sends it
+ * (connectonion's `tests/unit/test_agent_profile.py` asserts on `s["name"]`).
  *
  * A missing [name] decodes to blank rather than failing; ProtocolParser drops
  * those entries.

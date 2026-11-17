@@ -3,6 +3,7 @@ package ai.openonion.oochat.ui.settings
 import ai.openonion.oochat.crypto.IdentityManager
 import ai.openonion.oochat.crypto.KeyManager
 import ai.openonion.oochat.data.local.AppSettings
+import ai.openonion.oochat.data.repository.AccountClockException
 import ai.openonion.oochat.data.repository.AccountRepository
 import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.data.repository.SessionRepository
@@ -10,6 +11,7 @@ import ai.openonion.oochat.di.appContainer
 import ai.openonion.oochat.ui.common.launchScoped
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
+import ai.openonion.oochat.util.runCatchingCancellable
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
@@ -40,6 +42,8 @@ import kotlinx.coroutines.launch
 data class SettingsUiState(
     val walletAddress: String = "",
     val accountApiKey: String? = null,
+    /** Why the account could not be loaded, when it is something the user can fix. */
+    val accountProblem: String? = null,
 )
 
 /**
@@ -147,7 +151,7 @@ open class SettingsViewModel @JvmOverloads constructor(
     }
 
     /**
-     * Import an identity from a 12/24-word phrase or raw hex key. Failure
+     * Import an identity from a recovery phrase or raw hex key. Failure
      * (invalid phrase/key — thrown by KeyManager's validation) is returned
      * as a [Result] so ImportKeySheet can show it inline; nothing is
      * invalidated or reloaded unless the import actually succeeded.
@@ -178,10 +182,17 @@ open class SettingsViewModel @JvmOverloads constructor(
         _uiState.update {
             it.copy(
                 walletAddress = newAddress,
-                accountApiKey = null
+                accountApiKey = null,
+                accountProblem = null
             )
         }
         FileLogger.i(LogTags.ACCOUNT, "identity changed → account cache invalidated, reloading")
+        viewModelScope.launch {
+            runCatchingCancellable { sessionRepository.activateIdentity(newAddress) }
+                .onFailure { error ->
+                    FileLogger.w(LogTags.ACCOUNT, "Could not filter conversations for new identity: ${error.message}")
+                }
+        }
         loadAccount()
     }
 
@@ -195,13 +206,19 @@ open class SettingsViewModel @JvmOverloads constructor(
                     if (generation != identityGeneration) return@launch
                     _uiState.update {
                         it.copy(
-                            accountApiKey = snapshot.apiKey
+                            accountApiKey = snapshot.apiKey,
+                            accountProblem = null
                         )
                     }
                 }
-                .onFailure {
+                .onFailure { error ->
                     if (generation != identityGeneration) return@launch
                     FileLogger.w(LogTags.ACCOUNT, "loadAccount failed; API key stays unset")
+                    // Only a cause the user can act on is shown; anything else stays a log line,
+                    // and clears an earlier clock message the user may since have acted on.
+                    _uiState.update {
+                        it.copy(accountProblem = if (error is AccountClockException) ACCOUNT_CLOCK_WRONG else null)
+                    }
                 }
         }
     }
@@ -234,6 +251,7 @@ open class SettingsViewModel @JvmOverloads constructor(
     val notificationSound: Flow<String> = appSettings.notificationSound
     val analyticsEnabled: Flow<Boolean> = appSettings.analyticsEnabled
     val safeModeEnabled: Flow<Boolean> = appSettings.safeModeEnabled
+    val developerToolsEnabled: Flow<Boolean> = appSettings.developerToolsEnabled
 
     fun setStreamingResponses(value: Boolean) = persist { appSettings.setStreamingResponses(value) }
     fun setRenderMarkdown(value: Boolean) = persist { appSettings.setRenderMarkdown(value) }
@@ -246,6 +264,7 @@ open class SettingsViewModel @JvmOverloads constructor(
     fun setNotificationSound(value: String) = persist { appSettings.setNotificationSound(value) }
     fun setAnalyticsEnabled(value: Boolean) = persist { appSettings.setAnalyticsEnabled(value) }
     fun setSafeModeEnabled(value: Boolean) = persist { appSettings.setSafeModeEnabled(value) }
+    fun setDeveloperToolsEnabled(value: Boolean) = persist { appSettings.setDeveloperToolsEnabled(value) }
 
     // Thin alias over the shared [launchScoped] fire-and-forget helper,
     // kept for the many `set…` delegators above that read as `persist { … }`.
@@ -258,5 +277,12 @@ open class SettingsViewModel @JvmOverloads constructor(
         if (autoLoadAccountOnInit) {
             loadAccount()
         }
+    }
+
+    companion object {
+        /** Shown under the account when sign-in is refused over the device clock (W16AAPPLE-91). */
+        internal const val ACCOUNT_CLOCK_WRONG =
+            "Can't sign in to your account: this device's clock is wrong. " +
+                "Check the date and time in your phone's settings (set them to automatic)."
     }
 }

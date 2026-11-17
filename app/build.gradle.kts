@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.PathSensitivity
 import java.io.FileInputStream
 import java.util.Properties
 
@@ -53,6 +54,9 @@ ksp {
 android {
     namespace = "ai.openonion.oochat"
     compileSdk = 36
+    // The version the CI image (cirruslabs/android-sdk:36) ships. AGP's default, 35.0.0, made
+    // every CI job download it, and that download once hung until the runner's 10-minute cap.
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "ai.openonion.oochat"
@@ -164,7 +168,24 @@ baselineProfile {
     saveInSrc = true
 }
 
+// The Android framework jar Robolectric runs every test on. Left to itself,
+// Robolectric downloads it from Maven Central while the tests run, into
+// ~/.m2, which CI does not keep: every pipeline fetched all 150 MB again, and
+// Maven Central refusing one of those (HTTP 429) failed 796 tests at once.
+// Resolved by Gradle instead, it lands in the Gradle cache CI already keeps,
+// and the test task runs Robolectric offline against it (see below).
+//
+// One jar per SDK the tests run on; every test pins sdk = [34]. The "-i6"
+// suffix is Robolectric's instrumentation version, so upgrading Robolectric
+// can change it: an offline run that cannot find its jar names the one it
+// wanted.
+val robolectricSdk: Configuration by configurations.creating {
+    isTransitive = false
+}
+
 dependencies {
+    robolectricSdk("org.robolectric:android-all-instrumented:14-robolectric-10818077-i6")
+
     // Core Android
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
@@ -177,10 +198,15 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // Window size
+    implementation("androidx.compose.material3.adaptive:adaptive")
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
 
     // Navigation
     implementation("androidx.navigation:navigation-compose:2.9.8")
+
+    // Control Center app host: assets at an https origin, and a message channel only our page can use
+    implementation("androidx.webkit:webkit:1.14.0")
 
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -230,6 +256,11 @@ dependencies {
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.27.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.27.0")
     testImplementation("androidx.test:core:1.5.0")
+    // RFC 8032 Ed25519 for the JVM, standing in for libsodium's Android-only
+    // .so in the identity tests (crypto/BouncyCastleEd25519). Robolectric
+    // already brings this exact version; declared so the tests do not hang off
+    // a transitive dependency.
+    testImplementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     // Lets Compose semantics assertions (assertHeightIsAtLeast,
     // assertTouchHeightIsEqualTo, etc.) run on the JVM under Robolectric
     // instead of only on-device — see TouchTargetComposeTest.
@@ -266,10 +297,28 @@ dependencies {
 // Robolectric 用自己的沙箱类加载器，JDK 9+ 下 JaCoCo 默认看不到这些类；
 // includeNoLocationClasses + 排除 jdk.internal.* 是官方推荐组合。
 tasks.withType<Test>().configureEach {
+    // ProtocolFrameCoverageTest reads docs/protocol.md. Without this,
+    // a documentation-only change can leave the test task up to date.
+    inputs.file(rootProject.file("docs/protocol.md"))
+        .withPropertyName("protocolDoc")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
     configure<JacocoTaskExtension> {
         isIncludeNoLocationClasses = true
         excludes = listOf("jdk.internal.*")
     }
+}
+
+// Robolectric reads its framework jar from here instead of downloading it; see
+// robolectricSdk above.
+val robolectricJars = tasks.register<Sync>("robolectricJars") {
+    from(robolectricSdk)
+    into(layout.buildDirectory.dir("robolectric-jars"))
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(robolectricJars)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", robolectricJars.get().destinationDir.absolutePath)
 }
 
 // 仅基于 debug 单测的覆盖率报告（不需要设备/仪器）。
@@ -324,6 +373,95 @@ tasks.register<JacocoReport>("jacocoTestReport") {
     executionData.setFrom(fileTree(layout.buildDirectory.get()) {
         include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
     })
+}
+
+// The regression suite: the tests that hold the features users rely on, grouped
+// by feature. `./gradlew :app:testDebugUnitTest -Pregression` runs these and
+// nothing else; without the flag the task is untouched and runs everything, so
+// CI's unit-test count check is unaffected. A class listed here is in the suite
+// whole — keep feature coverage in these classes, or add the new class here.
+val regressionSuite = mapOf(
+    "add agent by 0x address" to listOf(
+        "ui.agent.AgentViewModelTest",
+        "ui.agent.AgentFormNamingTest",
+        "ui.agent.AgentFormScreenComposeTest",
+        "ui.agent.components.EmbeddedDiscoveryPanelComposeTest",
+        "network.AgentDiscoveryServiceTest",
+        "data.repository.AgentRepositoryImplTest",
+        "data.repository.AgentDiscoveryRepositoryImplTest",
+        "data.local.mapper.AgentMapperTest",
+        "ui.onboarding.AgentQrCodeTest",
+    ),
+    "direct (/ws) and relay (/ws/input)" to listOf(
+        "network.AgentConnectionRobolectricTest",
+        "network.AgentConnectionTest",
+        "network.ProtocolParserTest",
+        "data.local.ConnectionConfigTest",
+        "ConstantsTest",
+        "data.repository.EncryptedPreferencesConnectionConfigRepositoryTest",
+        "ui.loading.LoadingViewModelTest",
+    ),
+    "Ed25519 identity" to listOf(
+        "crypto.IdentityVectorsTest",
+        "crypto.KeyManagerMnemonicTest",
+        "crypto.KeyManagerPersistenceTest",
+        "crypto.KeyManagerTest",
+        "ui.settings.SettingsViewModelTest",
+    ),
+    "onboarding gate" to listOf(
+        "ui.chat.components.OnboardCardsComposeTest",
+        "domain.model.ChatEventReducerTest",
+        "data.protocol.OutgoingMessagesTest",
+        "data.repository.ConnectionRepositoryImplTest",
+        "domain.usecase.ConnectToAgentUseCaseTest",
+        "ui.onboarding.OnboardingViewModelTest",
+    ),
+    "slash-command palette" to listOf(
+        "ui.chat.components.SlashCommandMatcherTest",
+        "ui.chat.components.SlashCommandPaletteComposeTest",
+        "ui.agent.LiveProfileMatchTest",
+    ),
+    "dictation" to listOf(
+        "ui.chat.components.DictationMergeTest",
+        "ui.chat.components.InputBarDictationComposeTest",
+        "ui.chat.ChatViewModelTest",
+        "network.SpeechRecognizerIntentTest",
+        "network.SpeechRecognitionLevelTest",
+        "network.VoiceTranscriptionInstructionTest",
+        "network.VoiceTranscriptionServiceTest",
+        "data.local.VoiceRecorderStoreTest",
+    ),
+    "low-balance bar" to listOf(
+        "ui.chat.components.LowBalanceBarComposeTest",
+    ),
+    "session resume" to listOf(
+        "ui.chat.ProcessDeathResumeTest",
+    ),
+    "relay failover" to listOf(
+        "ui.chat.RelayFailoverTest",
+    ),
+    "Home beside the chat or in a tab" to listOf(
+        "ui.adaptive.HomePlacementTest",
+        "ui.adaptive.HomePlacementWindowComposeTest",
+        "ui.adaptive.ChatWithHomeComposeTest",
+        "ui.adaptive.ChatWithHomeTabsComposeTest",
+        "ui.adaptive.PaneComposeTest",
+        "ui.adaptive.HomeScreenRouteComposeTest",
+        "ui.adaptive.HomeBesideChatComposeTest",
+        "ui.chat.ChatHomeButtonComposeTest",
+        "ui.navigation.ChatWithHomePanesComposeTest",
+        "ui.controlcenter.HomeScreenWrappersComposeTest",
+        "ui.dashboard.RunSkillFromHomeTest",
+        "ui.home.AgentHomeTest",
+    ),
+)
+val regressionOnly = providers.gradleProperty("regression").isPresent
+tasks.withType<Test>().configureEach {
+    if (regressionOnly) {
+        filter {
+            regressionSuite.values.flatten().distinct().forEach { includeTestsMatching("ai.openonion.oochat.$it") }
+        }
+    }
 }
 
 // Roborazzi drives the whole testDebugUnitTest task, so a bare

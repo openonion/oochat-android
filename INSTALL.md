@@ -192,7 +192,15 @@ Everything configurable is set **inside the app**:
 |---|---|---|
 | Relay / server URL | Onboarding, or the agent form | `https://oo.openonion.ai` |
 | Direct connection | Mode toggle on the same panel | off (relay) |
-| API key (optional) | Agent form | empty — stored in `EncryptedSharedPreferences`, excluded from cloud backup and device transfer, and never sent anywhere but the agent it belongs to |
+| API key (optional) | Agent form | empty — stored in `EncryptedSharedPreferences` and excluded from cloud backup and device transfer. **Not used yet**: see below |
+
+**The per-agent API key is not used yet.** The app stores it and shows it in
+the Add, Edit and Setup forms, but sends it nowhere. Connecting is
+authenticated by the device's Ed25519 signature on CONNECT, and an
+invite-gated agent by an invite code or payment (`docs/protocol.md`); the
+ConnectOnion host's WebSocket code reads no API key either. The field is kept
+for a use the client may define later. The account API key that voice
+transcription sends is a different key (`docs/protocol.md`, voice input).
 
 ---
 
@@ -221,11 +229,11 @@ if a card asks for an invite code, the code is `OpenOnion`.
 
 Two things that are working as intended and can read as faults:
 
-- **The `/` command palette stays empty on both.** It lists the skills an agent
-  publishes to the relay's directory, fetched from `/api/agents/<address>` on
-  connect. Both of these agents publish an empty `skills` list — verified
-  against the live directory on 2026-08-09 — so there is nothing for the palette
-  to show. An agent that publishes skills will populate it.
+- **The `/` command palette stays empty on both.** It lists the skills the
+  agent's Host sends in `AGENT_PROFILE` once it has let you in, never the
+  relay's public directory. Both of these agents have an empty `skills` list —
+  verified against the live directory on 2026-08-09 — so there is nothing for
+  the palette to show. An agent with skills will populate it once you are in.
 - **Dictation may pause for a couple of seconds the first time**, showing
   "Preparing…". On a device with no usable speech recogniser the app spends that
   window proving the recogniser is dead before falling back to server
