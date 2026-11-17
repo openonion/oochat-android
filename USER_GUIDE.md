@@ -21,8 +21,16 @@ agents currently online.
 their owners start and stop them.
 
 If you were given an address instead, scroll to **Or enter Agent Address
-manually** and paste it. An address is `0x` followed by 64 hex characters. The
-QR button in the top right scans one from a screen or a printout.
+manually** and paste it. An address is `0x` followed by 64 hex characters.
+
+**Or scan a QR code.** The QR button in the top right opens the camera. It reads
+the code behind the **Share** button on chat.openonion.ai, a code that holds just
+the address, `connectonion://agent/0x…`, and `https://your-server/0x…` for an
+agent on a server of its own. A code it understands fills the form below, and
+**Connect** goes in. Any other QR code is refused with a message above the
+Connect button, and the form stays as it was. The camera only reads the code:
+nothing is recorded or uploaded. To make a code for your own agent, put its
+address into any QR generator.
 
 **Relay Server or Direct Connection.** Leave it on *Relay Server* unless you
 were told otherwise — the relay handles agents behind home routers, which is
@@ -69,7 +77,8 @@ Some agents publish named skills. Type `/` to see them.
 <img src="screenshots/slash-command-palette.png" alt="Typing a slash in the composer lists the agent's published skills, each with its description" width="300">
 
 Each entry shows the description the agent gave it, so you do not have to guess
-what a command does or how it is spelled. **An empty palette is not a fault** —
+what a command does or how it is spelled. A skill the agent did not describe
+shows its name alone. **An empty palette is not a fault** —
 it means this agent publishes no skills, which many do not.
 
 ---
@@ -89,7 +98,9 @@ The first dictation on a phone may pause a second or two on **Preparing…**
 while the app works out whether the phone's own speech recogniser can be used.
 If it cannot, the app records and has the audio transcribed instead — you get
 the same editable text, just only once you stop talking rather than as you
-speak. Either way the audio is not stored and not sent anywhere else.
+speak. Either way the audio is not stored and not sent anywhere else. A
+recording under a second, usually an accidental tap, is dropped with
+"Recording too short. Try again."
 
 > On an emulator, dictation is not worth judging: the microphone is the host
 > machine's and what the emulator reports about it does not match a phone.
@@ -116,6 +127,21 @@ wrote the agent. It is displayed in a locked-down view: it cannot reach the
 network, cannot store anything, and cannot navigate anywhere. If no icon
 appears, this agent has not sent one.
 
+Some agents publish a full **Control Center** instead: a reviewed web app that
+can show live information and act for you. The same icon opens it. Anything it
+does for you, such as sending a message or running a skill, appears in the chat
+as a message from you, so you can always see it. It cannot use your camera,
+microphone or location, read your clipboard, or open other sites. Going back to
+the chat while it is working leaves the work running. If it stops unexpectedly,
+the screen says so; tap **Reload** to start it again.
+
+On a tablet, or a foldable that is open, the page does not replace the chat: it
+sits beside it, so you can use both at once. The icon and the back arrow are not
+shown then, because the page is already open. Running a skill from the page sends
+its message and leaves the page where it is. Fold the device and the page goes
+back behind the icon, and whatever you had typed in the chat is still there. A
+phone, even turned on its side, keeps the full-screen page.
+
 ---
 
 ## 6. Deciding what the agent may do
@@ -133,6 +159,23 @@ bottom left sets how often they have to ask:
 **Ultra work is fenced off deliberately** — it carries a warning and a turn
 budget, and the app drops back to Safe when the budget runs out. Use it when you
 are watching, not when you are away.
+
+Agents on a newer host offer a different set, and the chip shows only what the
+agent offers:
+
+| Mode | What it means |
+|---|---|
+| **Read only** | Ask before anything that changes files or runs commands. |
+| **Auto** | Run routine edits and commands; ask before risky ones. The default. |
+| **Full access** | Fully autonomous, for a number of turns the agent's host sets. The chip shows how many are left, and drops back to Auto when they run out. |
+
+On these agents the mode can't be changed while the agent is working; the chip
+waits until the turn finishes.
+
+The line under the agent's name in the top bar says what it is doing:
+**Running**, **Waiting for you** (a card needs your answer), **Idle**, or
+**Session not found** (after a dropped connection, the agent said it no longer
+holds this conversation's live session).
 
 When a permission card appears you can **Allow once**, **Trust for this
 session**, **Reject**, or ask the agent to **Explain** what it is about to do.
@@ -220,12 +263,17 @@ never saved.
 
 ## 11. When something goes wrong
 
-**"Waiting to send…" under a message.** You are offline. It is queued on the
-device and goes out by itself when the connection returns — including after the
-app is killed.
+**"Waiting to send…" under a message.** You are offline. You can still write
+and send while offline: the message is queued on the device and goes out when
+the connection returns, including after the app is killed. If the banner has
+given up reconnecting, tap **Reconnect**. Tapping **Stop** on the connecting
+banner discards queued messages; the ones on screen turn red so you can send
+them again.
 
-**"Not sent · Tap to try again" in red.** The message did not leave the device.
-Tap it to send it again; it keeps its place in the conversation.
+**"Not sent · Tap to try again" in red.** The message did not reach the agent.
+Tap it, or tap **Retry** in the bar above the message box, to send it again. It
+moves to the bottom of the chat so its reply lands under it. It still shows as
+not sent after the app is closed and reopened.
 
 **A reply says "Failed" with a Retry button.** The agent's turn ended without an
 answer, usually a dropped connection. Retry asks again.
