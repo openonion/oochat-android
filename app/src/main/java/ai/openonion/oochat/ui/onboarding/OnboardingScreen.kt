@@ -1,6 +1,7 @@
 package ai.openonion.oochat.ui.onboarding
 
 import ai.openonion.oochat.Constants
+import ai.openonion.oochat.data.local.CONNECTION_MODE_DIRECT
 import ai.openonion.oochat.data.local.ConnectionConfig
 import ai.openonion.oochat.ui.agent.AgentViewModel
 import ai.openonion.oochat.ui.agent.components.AdvancedSettingsSection
@@ -105,21 +106,10 @@ fun OnboardingScreen(
         }
     }
 
+    // A code that names an agent connects straight away, with no Connect to tap (W16AAPPLE-111).
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let { scanned ->
-            // User-defined QR payload convention: serverUrl and agentAddress
-            // joined by a "/" — split on the LAST "/" since serverUrl itself
-            // contains "//" (e.g. "https://").
-            val lastSlash = scanned.lastIndexOf('/')
-            if (lastSlash > 0 && lastSlash < scanned.length - 1) {
-                val scannedServerUrl = scanned.substring(0, lastSlash)
-                val scannedAgentAddress = scanned.substring(lastSlash + 1)
-                formState = formState.copy(
-                    serverUrl = scannedServerUrl,
-                    agentAddress = scannedAgentAddress,
-                    useDirectConnection = !Constants.isDefaultServerUrl(scannedServerUrl)
-                )
-            }
+        onboardingViewModel.onScanned(result.contents)?.let { scanned ->
+            formState = onboardingViewModel.connectScanned(scanned, formState, onSaved = onProceedToConnect)
         }
     }
     fun launchScan() {
@@ -288,9 +278,9 @@ internal fun OnboardingIntro() {
  * Maps a possibly-null saved [ConnectionConfig] to the [AgentFormState] the
  * Setup form's manual fallback should start from — the saved values verbatim
  * when present, or [AgentFormState]'s ordinary blank defaults for a genuine
- * first run. [AgentFormState.useDirectConnection] is derived from whether the
- * saved `serverUrl` was one of the known default relays, since
- * [ConnectionConfig] itself doesn't store the mode the user picked it in.
+ * first run. [AgentFormState.useDirectConnection] is the saved mode when the
+ * config recorded one; older configs didn't, so for those it is derived from
+ * whether the saved `serverUrl` was one of the known default relays.
  */
 private fun ConnectionConfig?.toFormStateOrDefault(): AgentFormState {
     if (this == null) return AgentFormState()
@@ -298,6 +288,7 @@ private fun ConnectionConfig?.toFormStateOrDefault(): AgentFormState {
         serverUrl = serverUrl,
         agentAddress = agentAddress.orEmpty(),
         apiKey = apiKey.orEmpty(),
-        useDirectConnection = !Constants.isDefaultServerUrl(serverUrl)
+        useDirectConnection = connectionMode?.let { it == CONNECTION_MODE_DIRECT }
+            ?: !Constants.isDefaultServerUrl(serverUrl)
     )
 }

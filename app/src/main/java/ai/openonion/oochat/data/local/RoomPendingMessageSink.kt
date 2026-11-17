@@ -47,13 +47,10 @@ class RoomPendingMessageSink(
     private val json = Json { ignoreUnknownKeys = true }
 
     private val lock = Any()
+    private val clearGenerations = mutableMapOf<String, Long>()
 
     override fun enqueue(agentAddress: String, sessionId: String?, prompt: String, images: List<String>?, files: List<FileAttachment>?) {
-        val payload = if (images.isNullOrEmpty() && files.isNullOrEmpty()) {
-            null
-        } else {
-            json.encodeToString(SpilledAttachments(images, files))
-        }
+        val payload = attachmentPayload(images, files)
         synchronized(lock) {
             evictUntilRoomFor(agentAddress, payload?.length?.toLong() ?: 0L)
             val id = dao.insert(
@@ -66,46 +63,53 @@ class RoomPendingMessageSink(
                     createdAt = System.currentTimeMillis()
                 )
             )
-            if (payload != null) {
-                runCatching {
-                    spillDir.mkdirs()
-                    spillFile(id).writeText(payload)
-                }.onFailure { e ->
-                    // The row stays: the text still sends, which beats dropping
-                    // the message outright. Loud, because the attachments the
-                    // user picked are silently not going with it.
-                    FileLogger.e(
-                        LogTags.PENDING_OUTBOX,
-                        "Could not spill attachments for queued message $id — it will send as text only: ${e.message}"
-                    )
-                }
-            }
+            writeSpill(id, payload)
         }
     }
 
-    override fun drain(agentAddress: String, sessionId: String?, send: (QueuedMessage) -> Unit) {
+    override fun drain(
+        agentAddress: String,
+        sessionId: String?,
+        conversationId: String?,
+        send: (QueuedMessage) -> Boolean
+    ) {
         // Snapshot the watermark first: a send racing this flush (an INPUT
         // written while CONNECTED is being processed) enqueues behind it and
         // is left for the next pass rather than being reordered into this one.
         val maxId = synchronized(lock) { dao.newestIdForAgent(agentAddress) } ?: return
         while (true) {
-            val row = synchronized(lock) { dao.claimNextForAgent(agentAddress, sessionId, maxId) } ?: break
+            val claimed = synchronized(lock) {
+                dao.claimNextForAgent(agentAddress, sessionId, conversationId, maxId)
+                    ?.let { it to (clearGenerations[agentAddress] ?: 0L) }
+            } ?: break
+            val row = claimed.first
+            val drainGeneration = claimed.second
             val spilled = readSpill(row.id)
-            send(
-                QueuedMessage(
-                    prompt = row.prompt,
-                    // Columns are the fallback, not the source: rows written
-                    // by a build before the spill still carry theirs inline.
-                    images = spilled?.images ?: row.imagesJson?.let { json.decodeFromString<List<String>>(it) },
-                    files = spilled?.files ?: row.filesJson?.let { json.decodeFromString<List<FileAttachment>>(it) }
-                )
+            val message = QueuedMessage(
+                prompt = row.prompt,
+                // Columns are the fallback, not the source: rows written
+                // by a build before the spill still carry theirs inline.
+                images = spilled?.images ?: row.imagesJson?.let { json.decodeFromString<List<String>>(it) },
+                files = spilled?.files ?: row.filesJson?.let { json.decodeFromString<List<FileAttachment>>(it) }
             )
+            val accepted = runCatching { send(message) }.getOrDefault(false)
+            if (!accepted) {
+                synchronized(lock) {
+                    if ((clearGenerations[agentAddress] ?: 0L) == drainGeneration) {
+                        // Restore the claimed row's id. Calling enqueue() would
+                        // append the failed message after everything behind it.
+                        restore(row, message)
+                    }
+                }
+                break
+            }
         }
         sweepOrphanedSpills()
     }
 
     override fun clear(agentAddress: String) {
         synchronized(lock) {
+            clearGenerations[agentAddress] = (clearGenerations[agentAddress] ?: 0L) + 1
             dao.idsForAgent(agentAddress).forEach { spillFile(it).delete() }
             dao.deleteAllForAgent(agentAddress)
         }
@@ -128,6 +132,33 @@ class RoomPendingMessageSink(
 
     private fun spilledBytes(agentAddress: String): Long =
         dao.idsForAgent(agentAddress).sumOf { spillFile(it).length() }
+
+    private fun attachmentPayload(images: List<String>?, files: List<FileAttachment>?): String? =
+        if (images.isNullOrEmpty() && files.isNullOrEmpty()) null else json.encodeToString(SpilledAttachments(images, files))
+
+    /** Reinsert a rejected message under its original id, ahead of later rows. */
+    private fun restore(row: PendingMessageEntity, message: QueuedMessage) {
+        val payload = attachmentPayload(message.images, message.files)
+        // A newer enqueue may have filled the slot while send() was outside
+        // the lock; keep the outbox within its bounds before restoring it.
+        evictUntilRoomFor(row.agentAddress, payload?.length?.toLong() ?: 0L)
+        dao.insert(row.copy(imagesJson = null, filesJson = null))
+        writeSpill(row.id, payload)
+    }
+
+    private fun writeSpill(id: Long, payload: String?) {
+        if (payload == null) return
+        runCatching {
+            spillDir.mkdirs()
+            spillFile(id).writeText(payload)
+        }.onFailure { e ->
+            // The row stays: text can still send if the spill fails.
+            FileLogger.e(
+                LogTags.PENDING_OUTBOX,
+                "Could not spill attachments for queued message $id — it will send as text only: ${e.message}"
+            )
+        }
+    }
 
     private fun spillFile(id: Long) = File(spillDir, "$id.json")
 

@@ -5,6 +5,8 @@ import ai.openonion.oochat.data.repository.ConnectionConfigRepository
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import android.app.Application
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -36,7 +38,8 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoadingViewModelTest {
 
-    private class FakeConnectToAgentUseCase : ConnectToAgentUseCaseContract {
+    // Internal, not private: LoadingScreenComposeTest drives the screen with the same fakes.
+    internal class FakeConnectToAgentUseCase : ConnectToAgentUseCaseContract {
         val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
         override val connectionState: StateFlow<ConnectionState> = _connectionState
         override val agentProfile: StateFlow<ai.openonion.oochat.domain.model.AgentLiveProfile?> =
@@ -44,9 +47,11 @@ class LoadingViewModelTest {
         override val dashboardHtml: StateFlow<String?> = MutableStateFlow(null)
 
         var connectResult: Boolean = true
+        override var lastConnectNeedsOnboarding: Boolean = false
         var connectInvocations = 0
         var lastAddress: String? = null
         var lastDirectUrl: String? = null
+        var lastRelayUrl: String? = null
         var lastConversationId: String? = null
         /** If set, run before returning [connectResult] — lets a test drive connectionState transitions. */
         var onConnect: (suspend () -> Unit)? = null
@@ -57,11 +62,12 @@ class LoadingViewModelTest {
 
         override fun liveSessionIdFor(agentAddress: String): String? = null
 
-        override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?): Boolean {
+        override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?, relayUrl: String?): Boolean {
             connectInvocations++
             lastAddress = agentAddress
             lastConversationId = conversationId
             lastDirectUrl = directUrl
+            lastRelayUrl = relayUrl
             onConnect?.invoke()
             if (suspendConnectForever) awaitCancellation()
             return connectResult
@@ -76,9 +82,10 @@ class LoadingViewModelTest {
             _events.tryEmit(ChatEvent.ChatItemReceived(item))
         }
         override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?) {}
-        override suspend fun respond(answer: String) {}
+        override suspend fun executeTool(request: ExecRequest): ExecOutcome = ExecOutcome.NotSent("Not used in LoadingViewModel tests")
+        override suspend fun respond(answer: String, requestId: String?) {}
         override suspend fun interrupt() {}
-        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {}
+        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) {}
         override suspend fun respondToOnboard(method: String, inviteCode: String?, payment: Double?) {}
         override suspend fun respondToPlanReview(message: String) {}
         override suspend fun respondToUlwTurnsReached(action: String, turns: Int?, mode: String?) {}
@@ -90,7 +97,11 @@ class LoadingViewModelTest {
         var disconnectCount = 0
             override fun retryNow() {}
         override suspend fun querySessionStatus() {}
-override suspend fun disconnect() { disconnectCount++ }
+        val disconnectKeptOutbox = mutableListOf<Boolean>()
+        override suspend fun disconnect(keepOutbox: Boolean) {
+            disconnectCount++
+            disconnectKeptOutbox += keepOutbox
+        }
 
         var isConnectedResult = false
         override fun isConnected(): Boolean = isConnectedResult
@@ -99,7 +110,7 @@ override suspend fun disconnect() { disconnectCount++ }
         override suspend fun reset() { resetCount++ }
     }
 
-    private class FakeConnectionConfigRepository : ConnectionConfigRepository {
+    internal class FakeConnectionConfigRepository : ConnectionConfigRepository {
         var config: ConnectionConfig? = ConnectionConfig(
             serverUrl = "https://relay.example.com",
             agentAddress = "0xabc123"
@@ -170,6 +181,22 @@ override suspend fun disconnect() { disconnectCount++ }
     }
 
     @Test
+    fun `an agent saved on a self-hosted relay is connected through that relay`() = runTest(testDispatcher) {
+        // W16AAPPLE-56: what the agent list, discovery and onboarding save for a relay the user typed in.
+        configRepository.config = ConnectionConfig(
+            serverUrl = "https://relay.example.com/",
+            agentAddress = "0xabc123",
+            connectionMode = "relay"
+        )
+
+        viewModel.start()
+        advanceUntilIdle()
+
+        assertNull(connectUseCase.lastDirectUrl)
+        assertEquals("https://relay.example.com", connectUseCase.lastRelayUrl)
+    }
+
+    @Test
     fun `a cold start connects on the conversation it is going to resume`() = runTest(testDispatcher) {
         // The probe used to hardcode conversationId = null, so the server minted
         // a session that ChatScreen's connect abandoned a second later — an
@@ -218,7 +245,7 @@ override suspend fun disconnect() { disconnectCount++ }
     }
 
     @Test
-    fun `an ONBOARD_REQUIRED chat event wins the race and abandons connect()`() = runTest(testDispatcher) {
+    fun `an ONBOARD_REQUIRED chat event wins the race, abandons connect() and moves on by itself`() = runTest(testDispatcher) {
         // connect() never resolves on its own — only the event flow can
         // produce a terminal outcome here, proving the race is driven by
         // the event, not by connect() eventually returning.
@@ -233,10 +260,63 @@ override suspend fun disconnect() { disconnectCount++ }
 
         assertEquals(LoadingOutcome.ONBOARD_REQUIRED, viewModel.uiState.value.outcome)
         assertEquals(1.0f, viewModel.uiState.value.progress)
-        assertTrue(
-            "no Failed/Cancelled event should fire when onboarding is required",
-            events.isEmpty()
-        )
+        // Straight on to the invite-code card, with no "Continue" tap to wait
+        // for (W16AAPPLE-111), and no Failed/Cancelled alongside it.
+        assertEquals(listOf<LoadingEvent>(LoadingEvent.OnboardRequired), events.toList())
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `connect() returning because of an invite-code request still goes on with it pending`() = runTest(testDispatcher) {
+        // ConnectToAgentUseCase treats ONBOARD_REQUIRED as success too. Here
+        // its connect() returns before this screen's own listener saw the
+        // event (W16AAPPLE-111): the chat must still be told a code is pending.
+        connectUseCase.connectResult = true
+        connectUseCase.onConnect = { connectUseCase.lastConnectNeedsOnboarding = true }
+        val events = mutableListOf<LoadingEvent>()
+        val collectJob = launch { viewModel.events.toList(events) }
+
+        viewModel.start()
+        advanceUntilIdle()
+
+        assertEquals(LoadingOutcome.ONBOARD_REQUIRED, viewModel.uiState.value.outcome)
+        assertEquals(listOf<LoadingEvent>(LoadingEvent.OnboardRequired), events.toList())
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `connect() that emits the invite-code request and then returns still goes on with it pending`() = runTest(testDispatcher) {
+        connectUseCase.connectResult = true
+        connectUseCase.onConnect = {
+            connectUseCase.emitOnboardRequired()
+            connectUseCase.lastConnectNeedsOnboarding = true
+        }
+        val events = mutableListOf<LoadingEvent>()
+        val collectJob = launch { viewModel.events.toList(events) }
+
+        viewModel.start()
+        advanceUntilIdle()
+
+        assertEquals(listOf<LoadingEvent>(LoadingEvent.OnboardRequired), events.toList())
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `a Cancel after the invite-code prompt changes nothing`() = runTest(testDispatcher) {
+        // The screen is already on its way to the invite-code card; a late
+        // Cancel must not also send it back to Setup or drop the connection.
+        connectUseCase.suspendConnectForever = true
+        connectUseCase.onConnect = { connectUseCase.emitOnboardRequired() }
+        val events = mutableListOf<LoadingEvent>()
+        val collectJob = launch { viewModel.events.toList(events) }
+        viewModel.start()
+        advanceUntilIdle()
+
+        viewModel.cancel()
+        advanceUntilIdle()
+
+        assertEquals(listOf<LoadingEvent>(LoadingEvent.OnboardRequired), events.toList())
+        assertEquals(0, connectUseCase.disconnectCount)
         collectJob.cancel()
     }
 
@@ -394,6 +474,17 @@ override suspend fun disconnect() { disconnectCount++ }
         assertTrue(events.single() is LoadingEvent.Cancelled)
         assertEquals(1, connectUseCase.disconnectCount)
         collectJob.cancel()
+    }
+
+    @Test
+    fun `cancelling the loading screen keeps the messages queued for the agent`() = runTest(testDispatcher) {
+        // W16AAPPLE-102: relaunched offline with messages queued, a user who
+        // gives up on the slow connect must not lose them. Nothing would say
+        // so either: after a restart their bubbles come back looking sent.
+        viewModel.cancel()
+        advanceUntilIdle()
+
+        assertEquals(listOf(true), connectUseCase.disconnectKeptOutbox)
     }
 
     @Test

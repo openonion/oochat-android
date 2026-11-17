@@ -33,18 +33,26 @@ import ai.openonion.oochat.data.repository.SessionRepository
 import ai.openonion.oochat.data.repository.SessionRepositoryImpl
 import ai.openonion.oochat.data.repository.SessionStore
 import ai.openonion.oochat.data.repository.SessionStoreImpl
+import ai.openonion.oochat.data.repository.SessionSyncRepositoryImpl
+import ai.openonion.oochat.data.repository.adoptResolvedAddress
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCase
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.PersistenceTransaction
+import ai.openonion.oochat.domain.usecase.RecentChatsSync
+import ai.openonion.oochat.domain.usecase.SyncRecentChatsUseCase
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.AndroidSpeechRecognitionService
 import ai.openonion.oochat.network.ConnectivityManagerNetworkMonitor
 import ai.openonion.oochat.network.NetworkMonitor
+import ai.openonion.oochat.network.SessionSyncClient
 import ai.openonion.oochat.network.SpeechRecognitionService
 import ai.openonion.oochat.network.VoiceTranscriptionService
 import ai.openonion.oochat.network.VoiceTranscriptionServiceImpl
 import ai.openonion.oochat.notification.AndroidAgentReplyNotifier
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /**
@@ -99,6 +107,7 @@ interface AppContainer {
     val speechRecognitionService: SpeechRecognitionService
     val appSettings: AppSettings
     val persistenceTransaction: PersistenceTransaction
+    val recentChatsSync: RecentChatsSync
 
     /** Posts the "agent replied while you were away" system notification — see [AgentReplyNotifier]'s own doc. */
     val agentReplyNotifier: AgentReplyNotifier
@@ -107,8 +116,8 @@ interface AppContainer {
      * Persisted protocol-session store (session_states), one row per local
      * conversation — the connection restores and saves each conversation's
      * own wire session through it. Memory-gated: with the Memory toggle off
-     * reads return null, so a conversation starts a fresh server session
-     * instead of resuming its own.
+     * reads return null, so each newly opened chat starts a fresh server
+     * session instead of resuming the saved one.
      */
     val sessionStore: SessionStore
 
@@ -173,7 +182,13 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val sessionRepository: SessionRepository by lazy {
-        SessionRepositoryImpl(database.sessionDao())
+        SessionRepositoryImpl(
+            sessionDao = database.sessionDao(),
+            sessionSyncDao = database.sessionSyncDao(),
+            identityAddress = {
+                withContext(Dispatchers.IO) { keyManager.loadOrGenerate().address }
+            }
+        )
     }
 
     override val messageRepository: MessageRepository by lazy {
@@ -222,6 +237,20 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val persistenceTransaction: PersistenceTransaction by lazy {
         PersistenceTransaction(database)
+    }
+
+    override val recentChatsSync: RecentChatsSync by lazy {
+        val client = SessionSyncClient(keyManager)
+        SyncRecentChatsUseCase(
+            repository = SessionSyncRepositoryImpl(database),
+            identityAddress = {
+                withContext(Dispatchers.IO) { keyManager.loadOrGenerate().address }
+            },
+            syncEnabled = { appSettings.memoryEnabled.first() },
+            fetch = { agentAddress, directUrl, relayUrl, cursor ->
+                client.fetch(agentAddress, directUrl, cursor, relayUrl = relayUrl)
+            }
+        )
     }
 
     override val agentReplyNotifier: AgentReplyNotifier by lazy {
@@ -274,7 +303,13 @@ class DefaultAppContainer(context: Context) : AppContainer {
             pendingMessageSink = RoomPendingMessageSink(
                 dao = database.pendingMessageDao(),
                 spillDir = java.io.File(appContext.filesDir, "pending-attachments")
-            )
+            ),
+            // Gates the slow retry against an offline agent to while the app
+            // is visible (W16AAPPLE-79). Read on each try, never cached.
+            isAppVisible = { (appContext as? ai.openonion.oochat.ConnectOnionApplication)?.isInForeground ?: true },
+            // A saved direct server with no agent address gets the one its
+            // /info names, so the next read of the config has it (W16AAPPLE-98).
+            onAddressResolved = { serverUrl, address -> configRepository.adoptResolvedAddress(serverUrl, address) }
         )
     }
 

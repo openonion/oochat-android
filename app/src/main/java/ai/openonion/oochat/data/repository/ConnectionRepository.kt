@@ -5,7 +5,19 @@ import ai.openonion.oochat.domain.model.AgentLiveProfile
 import ai.openonion.oochat.domain.model.ApprovalMode
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ControlCenterApp
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
+import ai.openonion.oochat.domain.model.LEGACY_SESSION_MODES
+import ai.openonion.oochat.domain.model.NO_CONTROL_CENTER_APP
+import ai.openonion.oochat.domain.model.NO_PLAN
 import ai.openonion.oochat.domain.model.OutgoingFileAttachment
+import ai.openonion.oochat.domain.model.PlanEntry
+import ai.openonion.oochat.domain.model.ProviderInput
+import ai.openonion.oochat.domain.model.RemOutcome
+import ai.openonion.oochat.domain.model.ServerSessionStatus
+import ai.openonion.oochat.domain.model.SessionModes
+import ai.openonion.oochat.domain.model.UNKNOWN_SESSION_STATUS
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -24,6 +36,13 @@ interface ConnectionRepository {
      * This is the single source of truth for connection status.
      */
     val connectionState: StateFlow<ConnectionState>
+
+    /**
+     * Whether the current [connect] call has reached CONNECTED, even if the
+     * connection has dropped since. [connectionState] alone can miss a
+     * Connected that lasted less than one look at it (W16AAPPLE-94).
+     */
+    val hasConnectedThisAttempt: Boolean
 
     /**
      * The currently-connected agent's own name card, or null when no
@@ -54,6 +73,27 @@ interface ConnectionRepository {
      */
     val modePending: StateFlow<Boolean>
 
+    /**
+     * Which modes [setMode] may ask for, and who answers. [SessionModes.LEGACY] until a
+     * `CONNECTED` carries `session_modes`, which makes the Host the authority: the catalogue,
+     * the current mode and full access's turn budget come from it, and [setMode] refuses any
+     * mode it did not advertise, so a legacy name never reaches a Host that has no alias for it.
+     * Reset to [SessionModes.LEGACY] at the start of every [connect]; kept across a
+     * conversation switch, which is the same Host.
+     */
+    val sessionModes: StateFlow<SessionModes> get() = LEGACY_SESSION_MODES
+
+    /**
+     * The last thing the Host said about the current session, for display: `CONNECTED`'s
+     * `status`, then each `SESSION_STATUS` reply about this session, then idle
+     * ([ServerSessionStatus.CONNECTED]) once an `OUTPUT` ends a turn, or an `ERROR` that ends one
+     * in its place. Any other `ERROR` while running asks `SESSION_STATUS`, whose reply settles it. Unlike
+     * [ConnectionState.Connected.status] it is never released, because it is shown rather
+     * than acted on. [ServerSessionStatus.UNKNOWN] after [connect], a conversation switch,
+     * and from a Host that says nothing.
+     */
+    val hostSessionStatus: StateFlow<ServerSessionStatus> get() = UNKNOWN_SESSION_STATUS
+
      /**
      * The connected agent's own `dashboard.html`, verbatim, or null when no
      * `DASHBOARD_SNAPSHOT` frame has arrived for the live connection. The
@@ -68,14 +108,43 @@ interface ConnectionRepository {
      */
     val dashboardHtml: StateFlow<String?>
 
+    /**
+     * The connected agent's published Control Center app, or null. Takes the place of
+     * [dashboardHtml] when set, and is reset with it on every [connect].
+     */
+    val controlCenterApp: StateFlow<ControlCenterApp?> get() = NO_CONTROL_CENTER_APP
+
+    /**
+     * The agent's current Todo List for the active conversation, empty when
+     * it has none. Replaced whole by each `plan` frame and by the plan a
+     * session snapshot carries, so a reconnect restores it. Cleared on every
+     * [connect] and conversation switch, like [approvalMode]. See [PlanEntry].
+     */
+    val plan: StateFlow<List<PlanEntry>> get() = NO_PLAN
+
     fun observeEvents(): Flow<ChatEvent>
 
     /**
      * Drop the replayed transcript this connection is holding for late
-     * subscribers, once one has reconciled it. Default no-op so a fake that
-     * never replays one does not have to say so.
+     * subscribers, once one has reconciled it: [merged], the one it
+     * reconciled, and only while that is still the one held. A newer CONNECTED
+     * may have replaced it while it was being merged, and that one is still
+     * owed (W16AAPPLE-104). Default no-op so a fake that never replays one
+     * does not have to say so.
      */
-    fun releaseServerTranscript() {}
+    fun releaseServerTranscript(merged: ChatEvent.ServerTranscriptReceived) {}
+
+    /**
+     * Forget what the Host said about the session just joined
+     * ([ConnectionState.Connected.status] and [ConnectionState.Connected.serverNewer]),
+     * once a screen has acted on it. The answer describes the moment of the CONNECT, but
+     * the state stays Connected for the life of the socket and every screen created on it
+     * starts from that state, so without this a screen opened an hour later would act on a
+     * turn that ended long ago. The connection also forgets it by itself when it moves to
+     * another conversation and when a turn finishes. Default no-op so a fake that never
+     * reports a status does not have to say so.
+     */
+    fun releaseSessionStatus() {}
 
     /**
      * Connect to an agent, resuming [conversationId]'s own server session.
@@ -84,8 +153,15 @@ interface ConnectionRepository {
      * @param conversationId Local conversation this connection is for; null
      *   when it has no persisted row yet, which starts a fresh server session
      * @param directUrl Direct connection URL (optional)
+     * @param relayUrl Relay to go through when not direct; null for the
+     *   repository's own (the default relay)
      */
-    suspend fun connect(agentAddress: String, conversationId: String? = null, directUrl: String? = null)
+    suspend fun connect(
+        agentAddress: String,
+        conversationId: String? = null,
+        directUrl: String? = null,
+        relayUrl: String? = null
+    )
 
     /**
      * Move the live connection onto [conversationId]'s server session,
@@ -106,11 +182,34 @@ interface ConnectionRepository {
     suspend fun sendMessage(content: String, agentAddress: String, images: List<String>? = null, files: List<OutgoingFileAttachment>? = null)
 
     /**
+     * Send one direct tool command and wait for its matching EXEC_RESULT.
+     *
+     * The outcome distinguishes commands that were never sent from commands
+     * whose final state became unknown after transmission.
+     */
+    suspend fun executeTool(request: ExecRequest): ExecOutcome
+
+    /**
+     * Read the connected agent's Rem notebook (W16AAPPLE-69). Owner-only on
+     * the Host; anyone else gets [RemOutcome.NotOwner] and no content.
+     */
+    suspend fun readRem(): RemOutcome = RemOutcome.NotConnected
+
+    /**
+     * Send a message typed into a Work Room (W16AAPPLE-35). False when it did
+     * not go out (no connection that has finished CONNECT); the answer is a
+     * [ai.openonion.oochat.domain.model.ChatEvent.ProviderInputAcked] on
+     * [observeEvents].
+     */
+    suspend fun sendProviderInput(input: ProviderInput): Boolean = false
+
+    /**
      * Respond to ask_user event.
      *
      * @param answer User's answer
+     * @param requestId The ask_user event's id
      */
-    suspend fun respond(answer: String)
+    suspend fun respond(answer: String, requestId: String? = null)
 
     /**
      * Ask the agent to gracefully stop its current run — it finishes the
@@ -128,8 +227,15 @@ interface ConnectionRepository {
      *   "reject_hard", or "reject_explain". Ignored when [approved] is true.
      * @param feedback Free-text reason shown to the LLM when [approved] is
      *   false. Ignored when [approved] is true.
+     * @param requestId The approval_needed event's id
      */
-    suspend fun respondToApproval(approved: Boolean, scope: String = "once", mode: String? = null, feedback: String? = null)
+    suspend fun respondToApproval(
+        approved: Boolean,
+        scope: String = "once",
+        mode: String? = null,
+        feedback: String? = null,
+        requestId: String? = null
+    )
 
     /**
      * Respond to ONBOARD_REQUIRED event with either an invite code
@@ -158,14 +264,18 @@ interface ConnectionRepository {
      * [approvalMode] right away — see [modePending] for how long that
      * request can stay unconfirmed.
      *
+     * A mode outside [sessionModes]' catalogue is not sent at all.
+     *
      * @param turns ULW's autonomous-turn budget. Only meaningful for
-     *   [ApprovalMode.ULW]; the server ignores it on every other branch.
+     *   [ApprovalMode.ULW]; the server ignores it on every other branch, and
+     *   it is never sent to a Host that manages modes itself.
      */
     suspend fun setMode(mode: ApprovalMode, turns: Int? = null)
 
     /**
      * Retry a pending reconnect immediately instead of waiting out its
-     * backoff — see AgentConnection.retryNow. No-op when nothing is pending.
+     * backoff, or with none pending check that the socket still answers and
+     * reconnect if it does not — see AgentConnection.retryNow.
      */
     fun retryNow()
 
@@ -176,7 +286,13 @@ interface ConnectionRepository {
      */
     suspend fun querySessionStatus(sessionId: String)
 
-    suspend fun disconnect()
+    /**
+     * Drop the connection. By default the outbox goes with it: the user chose
+     * to stop. [keepOutbox] is for giving up on an attempt the user did not
+     * end (ConnectToAgentUseCase's timeout), whose queued messages must still
+     * go out on the next connect (W16AAPPLE-102).
+     */
+    suspend fun disconnect(keepOutbox: Boolean = false)
 
     fun isConnected(): Boolean
 

@@ -11,7 +11,11 @@ package ai.openonion.oochat.domain.model
  * frame purely to re-derive booleans that almost never change.
  */
 data class ChatListFlags(
-    /** Any item still in flight — drives the input bar's Send/Stop swap. */
+    /**
+     * Any item still in flight: drives the input bar's Send/Stop swap. Counts
+     * a Claude Code or Codex run that is still working, which [isInProgress]
+     * does not.
+     */
     val hasInProgress: Boolean,
     /** An onboarding prompt is on screen, answered or not. */
     val hasOnboardPrompt: Boolean,
@@ -39,7 +43,10 @@ data class ChatListFlags(
             var onboardSuccess = false
             var pendingGate = false
             for (item in items) {
-                if (!inProgress && item.isInProgress()) inProgress = true
+                // A working Claude Code or Codex run keeps the agent busy (Stop, not Send), but is
+                // left out of isInProgress, which the streaming toggle uses to hide items: hiding
+                // the run's card would hide the only way to follow it.
+                if (!inProgress && (item.isInProgress() || item.isWorkingRun())) inProgress = true
                 when (item) {
                     is ChatItem.OnboardRequired, is ChatItem.OnboardingFailed -> onboardPrompt = true
                     is ChatItem.OnboardSuccess -> onboardSuccess = true
@@ -56,3 +63,5 @@ data class ChatListFlags(
         }
     }
 }
+
+private fun ChatItem.isWorkingRun(): Boolean = this is ChatItem.ProviderInvocation && !status.isTerminal

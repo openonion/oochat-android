@@ -71,6 +71,8 @@ class DashboardDocumentTest {
     fun `the CSP locks down every fetch class an agent could use to phone home`() {
         val csp = DashboardDocument.cspMeta(nonce)
         assertTrue(csp.contains("default-src 'none'"))   // covers connect/frame/script fallbacks
+        assertTrue(csp.contains("form-action 'none'"))  // no POST navigation around WebViewClient
+        assertTrue(csp.contains("base-uri 'none'"))     // agent HTML cannot rewrite URL resolution
         assertTrue(csp.contains("style-src 'unsafe-inline'"))
         assertTrue(csp.contains("img-src data:"))        // no remote pixels
         assertTrue(csp.contains("font-src data:"))
@@ -190,5 +192,25 @@ class DashboardDocumentTest {
     fun `generateNonce is fresh per call - a reused nonce would let one dashboard predict the next`() {
         val nonces = (1..100).map { DashboardDocument.generateNonce() }.toSet()
         assertEquals(100, nonces.size)
+    }
+
+    // ── what the Home page may show (W16AAPPLE-50) ──────────────────────
+
+    @Test
+    fun `the page is shown with its secrets and home folder redacted`() {
+        val html = "<p>Key: OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuv</p><p>Notes in /Users/priya/notes</p>"
+        assertEquals(
+            "<p>Key: OPENAI_API_KEY=[redacted]</p><p>Notes in ~/notes</p>",
+            DashboardDocument.redactForDisplay(html)
+        )
+    }
+
+    @Test
+    fun `a skill button still sends what the agent wrote, while its label is redacted`() {
+        val html = """<button data-ochat-skill="deploy" data-ochat-args="--dir /Users/priya/site">Deploy /Users/priya/site</button>"""
+        assertEquals(
+            """<button data-ochat-skill="deploy" data-ochat-args="--dir /Users/priya/site">Deploy ~/site</button>""",
+            DashboardDocument.redactForDisplay(html)
+        )
     }
 }
