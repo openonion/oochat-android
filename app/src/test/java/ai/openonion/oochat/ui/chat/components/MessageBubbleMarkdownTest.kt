@@ -176,8 +176,10 @@ class MessageBubbleMarkdownTest {
     }
 
     @Test
-    fun `link renders its label and drops the url`() {
-        assertEquals(listOf(InlineSpan(InlineStyle.LINK, "text")), parseInlineSpans("[text](url)"))
+    fun `link shows its label and keeps the url as its target`() {
+        // The target is kept so a caller can make the link open something
+        // (W16AAPPLE-69's Rem pages); the visible text is still the label alone.
+        assertEquals(listOf(InlineSpan(InlineStyle.LINK, "text", target = "url")), parseInlineSpans("[text](url)"))
         assertEquals("see docs now", visibleText("see [docs](https://x.y) now"))
     }
 
