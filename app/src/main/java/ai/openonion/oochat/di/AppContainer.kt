@@ -33,18 +33,24 @@ import ai.openonion.oochat.data.repository.SessionRepository
 import ai.openonion.oochat.data.repository.SessionRepositoryImpl
 import ai.openonion.oochat.data.repository.SessionStore
 import ai.openonion.oochat.data.repository.SessionStoreImpl
+import ai.openonion.oochat.data.repository.SessionSyncRepositoryImpl
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCase
 import ai.openonion.oochat.domain.usecase.ConnectToAgentUseCaseContract
 import ai.openonion.oochat.domain.usecase.PersistenceTransaction
+import ai.openonion.oochat.domain.usecase.RecentChatsSync
+import ai.openonion.oochat.domain.usecase.SyncRecentChatsUseCase
 import ai.openonion.oochat.network.AgentDiscoveryService
 import ai.openonion.oochat.network.AndroidSpeechRecognitionService
 import ai.openonion.oochat.network.ConnectivityManagerNetworkMonitor
 import ai.openonion.oochat.network.NetworkMonitor
+import ai.openonion.oochat.network.SessionSyncClient
 import ai.openonion.oochat.network.SpeechRecognitionService
 import ai.openonion.oochat.network.VoiceTranscriptionService
 import ai.openonion.oochat.network.VoiceTranscriptionServiceImpl
 import ai.openonion.oochat.notification.AndroidAgentReplyNotifier
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /**
@@ -99,6 +105,7 @@ interface AppContainer {
     val speechRecognitionService: SpeechRecognitionService
     val appSettings: AppSettings
     val persistenceTransaction: PersistenceTransaction
+    val recentChatsSync: RecentChatsSync
 
     /** Posts the "agent replied while you were away" system notification — see [AgentReplyNotifier]'s own doc. */
     val agentReplyNotifier: AgentReplyNotifier
@@ -173,7 +180,13 @@ class DefaultAppContainer(context: Context) : AppContainer {
     }
 
     override val sessionRepository: SessionRepository by lazy {
-        SessionRepositoryImpl(database.sessionDao())
+        SessionRepositoryImpl(
+            sessionDao = database.sessionDao(),
+            sessionSyncDao = database.sessionSyncDao(),
+            identityAddress = {
+                withContext(Dispatchers.IO) { keyManager.loadOrGenerate().address }
+            }
+        )
     }
 
     override val messageRepository: MessageRepository by lazy {
@@ -222,6 +235,19 @@ class DefaultAppContainer(context: Context) : AppContainer {
 
     override val persistenceTransaction: PersistenceTransaction by lazy {
         PersistenceTransaction(database)
+    }
+
+    override val recentChatsSync: RecentChatsSync by lazy {
+        val client = SessionSyncClient(keyManager)
+        SyncRecentChatsUseCase(
+            repository = SessionSyncRepositoryImpl(database),
+            identityAddress = {
+                withContext(Dispatchers.IO) { keyManager.loadOrGenerate().address }
+            },
+            fetch = { agentAddress, directUrl, relayUrl, cursor ->
+                client.fetch(agentAddress, directUrl, cursor, relayUrl = relayUrl)
+            }
+        )
     }
 
     override val agentReplyNotifier: AgentReplyNotifier by lazy {
@@ -274,7 +300,10 @@ class DefaultAppContainer(context: Context) : AppContainer {
             pendingMessageSink = RoomPendingMessageSink(
                 dao = database.pendingMessageDao(),
                 spillDir = java.io.File(appContext.filesDir, "pending-attachments")
-            )
+            ),
+            // Gates the slow retry against an offline agent to while the app
+            // is visible (W16AAPPLE-79). Read on each try, never cached.
+            isAppVisible = { (appContext as? ai.openonion.oochat.ConnectOnionApplication)?.isInForeground ?: true }
         )
     }
 
