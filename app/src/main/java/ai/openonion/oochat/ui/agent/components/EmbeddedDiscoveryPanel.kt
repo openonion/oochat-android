@@ -313,7 +313,7 @@ fun EmbeddedDiscoveryPanel(
                                 text = "Tap to ${actionLabel.lowercase()}",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.tertiary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         // Capped + independently scrollable rather than laying

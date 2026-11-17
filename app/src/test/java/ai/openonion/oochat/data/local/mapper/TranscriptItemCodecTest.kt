@@ -2,6 +2,7 @@ package ai.openonion.oochat.data.local.mapper
 
 import ai.openonion.oochat.domain.model.ApprovalDecision
 import ai.openonion.oochat.domain.model.ChatItem
+import ai.openonion.oochat.domain.model.CompactStatus
 import ai.openonion.oochat.domain.model.ReceivedFile
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.ToolStatus
@@ -104,10 +105,24 @@ class TranscriptItemCodecTest {
     }
 
     @Test
+    fun `a refused approval survives a round trip, request id included`() {
+        val item = ChatItem.ApprovalNeeded(
+            id = "a2",
+            tool = "bash",
+            arguments = mapOf("command" to "npm install"),
+            decision = ApprovalDecision(approved = true, scope = "once", mode = null, refused = true),
+            requestId = "req-2"
+        )
+        assertEquals(item, roundTrip(item))
+    }
+
+    @Test
     fun `an approval row from before feedback existed decodes with feedback null`() {
         val raw = """{"kind":"approval","id":"a2","tool":"bash","arguments":{"command":"rm README.md"},"approved":false,"scope":"once","mode":"reject_hard"}"""
         val decoded = TranscriptItemCodec.decode(raw) as ChatItem.ApprovalNeeded
         assertNull(decoded.decision?.feedback)
+        assertEquals(false, decoded.decision?.refused)
+        assertNull(decoded.requestId)
         assertEquals(false, decoded.decision?.approved)
         assertEquals("reject_hard", decoded.decision?.mode)
     }
@@ -132,6 +147,26 @@ class TranscriptItemCodecTest {
         val decoded = TranscriptItemCodec.decode(raw) as ChatItem.ModeChangedItem
         assertEquals("ulw", decoded.mode)
         assertNull(decoded.triggeredBy)
+    }
+
+    @Test
+    fun `a compact item survives a round trip with fractional percentages`() {
+        // A restored chat must still show where the agent's memory was cut.
+        val item = ChatItem.CompactItem(
+            id = "c1",
+            status = CompactStatus.DONE,
+            contextBefore = 90.0,
+            contextAfter = 32.951,
+            contextPercent = 0.3295,
+            message = "compacted"
+        )
+        assertEquals(item, roundTrip(item))
+    }
+
+    @Test
+    fun `a failed compact item survives a round trip with its error`() {
+        val item = ChatItem.CompactItem(id = "c1", status = CompactStatus.ERROR, error = "context too large")
+        assertEquals(item, roundTrip(item))
     }
 
     @Test
@@ -299,5 +334,18 @@ class TranscriptItemCodecTest {
                 ChatItem.Turn(id = "call-7", thinking = ChatItem.Thinking(id = "call-7", status = ThinkingStatus.DONE))
             )
         )
+    }
+
+    @Test
+    fun `a full-access mode_changed item keeps its turn budget through a round trip`() {
+        val item = ChatItem.ModeChangedItem(id = "m2", mode = "full-access", triggeredBy = "user", turnsLeft = 12)
+        assertEquals(item, roundTrip(item))
+    }
+
+    @Test
+    fun `a mode_changed row from before turnsLeft existed decodes with it null`() {
+        val decoded = TranscriptItemCodec.decode("""{"kind":"mode_changed","id":"m1","mode":"plan","triggeredBy":"agent"}""")
+            as ChatItem.ModeChangedItem
+        assertNull(decoded.turnsLeft)
     }
 }

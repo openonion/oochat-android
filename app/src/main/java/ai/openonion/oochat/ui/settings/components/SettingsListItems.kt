@@ -238,6 +238,7 @@ internal fun ThemeModeRow(current: ThemeMode, onChange: (ThemeMode) -> Unit) {
             ) {
                 OutlinedButton(
                     onClick = { onChange(mode) },
+                    shape = MaterialTheme.shapes.large,
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant

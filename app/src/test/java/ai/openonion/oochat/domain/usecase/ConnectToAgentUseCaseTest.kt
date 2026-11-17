@@ -6,6 +6,8 @@ import ai.openonion.oochat.data.repository.ConnectionRepository
 import ai.openonion.oochat.domain.model.ChatEvent
 import ai.openonion.oochat.domain.model.ChatItem
 import ai.openonion.oochat.domain.model.ConnectionState
+import ai.openonion.oochat.domain.model.ExecOutcome
+import ai.openonion.oochat.domain.model.ExecRequest
 import ai.openonion.oochat.network.AgentDiscoveryService
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +43,7 @@ class ConnectToAgentUseCaseTest {
     private class FakeConnectionRepository : ConnectionRepository {
         val state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
         override val connectionState: StateFlow<ConnectionState> = state
+        override var hasConnectedThisAttempt = false
         override val agentProfile: StateFlow<ai.openonion.oochat.domain.model.AgentLiveProfile?> =
             MutableStateFlow(null)
         override val dashboardHtml: StateFlow<String?> = MutableStateFlow(null)
@@ -49,14 +52,20 @@ class ConnectToAgentUseCaseTest {
         val connectedAddresses = mutableListOf<String>()
         /** One behavior per successive connect() call, applied after setting state to Connecting. Last entry repeats if calls exceed the list. */
         val connectBehaviors = mutableListOf<() -> Unit>()
+        val connectedConversations = mutableListOf<String?>()
 
         val switchedConversations = mutableListOf<String?>()
         override suspend fun switchConversation(conversationId: String?) { switchedConversations += conversationId }
         override fun liveSessionIdFor(agentAddress: String): String? = null
 
-        override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?) {
+        val connectedRelays = mutableListOf<String?>()
+
+        override suspend fun connect(agentAddress: String, conversationId: String?, directUrl: String?, relayUrl: String?) {
             connectCount++
+            connectedRelays += relayUrl
             connectedAddresses += agentAddress
+            connectedConversations += conversationId
+            hasConnectedThisAttempt = false
             state.value = ConnectionState.Connecting
             val behavior = connectBehaviors.getOrNull(connectCount - 1) ?: connectBehaviors.lastOrNull()
             behavior?.invoke()
@@ -70,9 +79,15 @@ class ConnectToAgentUseCaseTest {
         val events = MutableSharedFlow<ChatEvent>(extraBufferCapacity = 8)
         override fun observeEvents(): Flow<ChatEvent> = events
         override suspend fun sendMessage(content: String, agentAddress: String, images: List<String>?, files: List<ai.openonion.oochat.domain.model.OutgoingFileAttachment>?) {}
-        override suspend fun respond(answer: String) {}
+        var lastExecRequest: ExecRequest? = null
+        var execOutcome: ExecOutcome = ExecOutcome.Success("completed")
+        override suspend fun executeTool(request: ExecRequest): ExecOutcome {
+            lastExecRequest = request
+            return execOutcome
+        }
+        override suspend fun respond(answer: String, requestId: String?) {}
         override suspend fun interrupt() {}
-        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?) {}
+        override suspend fun respondToApproval(approved: Boolean, scope: String, mode: String?, feedback: String?, requestId: String?) {}
         override suspend fun respondToOnboard(method: String, inviteCode: String?, payment: Double?) {}
         override suspend fun respondToPlanReview(message: String) {}
         override suspend fun respondToUlwTurnsReached(action: String, turns: Int?, mode: String?) {}
@@ -94,8 +109,10 @@ class ConnectToAgentUseCaseTest {
             querySessionStatusCalls += sessionId
         }
 
-override suspend fun disconnect() {
+        val disconnectKeptOutbox = mutableListOf<Boolean>()
+        override suspend fun disconnect(keepOutbox: Boolean) {
             disconnectCount++
+            disconnectKeptOutbox += keepOutbox
             state.value = ConnectionState.Disconnected
         }
 
@@ -153,6 +170,41 @@ override suspend fun disconnect() {
     }
 
     @Test
+    fun `a self-hosted relay reaches the repository on every attempt`() = runTest(testDispatcher) {
+        // W16AAPPLE-56: the second, same-session attempt must not fall back to the default relay.
+        val useCase = newUseCase()
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.state.value = ConnectionState.Error("Connection failed")
+        }
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.state.value = ConnectionState.Connected(address = validAddress)
+        }
+
+        useCase.connect(validAddress, relayUrl = "https://relay.example.com")
+
+        assertEquals(listOf("https://relay.example.com", "https://relay.example.com"), fakeRepository.connectedRelays)
+    }
+
+    @Test
+    fun `a connection that drops right after connecting is not retried as a failed attempt`() = runTest(testDispatcher) {
+        // W16AAPPLE-94: CONNECTED, then a normal close before the use case
+        // next looks at the state. The attempt worked; a second one would
+        // open a connection the user never asked for, without last_msg_id.
+        val useCase = newUseCase()
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.hasConnectedThisAttempt = true
+            fakeRepository.state.value = ConnectionState.Connected(address = validAddress)
+            fakeRepository.state.value = ConnectionState.Disconnected
+        }
+
+        val connected = useCase.connect(validAddress)
+
+        assertTrue(connected)
+        assertEquals("no second attempt", 1, fakeRepository.connectCount)
+        assertEquals(0, fakeRepository.resetCount)
+    }
+
+    @Test
     fun `connect resolves a plain hex address without discovery HTTP and forwards it verbatim`() = runTest(testDispatcher) {
         val useCase = newUseCase()
         fakeRepository.connectBehaviors.add {
@@ -168,6 +220,7 @@ override suspend fun disconnect() {
 
     @Test
     fun `connect fast-fails a stale-session error on attempt 1 then retries and succeeds on attempt 2`() = runTest(testDispatcher) {
+        // Recovering the session itself is AgentConnection's job (recoverFromStaleSession).
         val useCase = newUseCase()
         fakeRepository.connectBehaviors.add {
             fakeRepository.state.value =
@@ -181,7 +234,9 @@ override suspend fun disconnect() {
 
         assertTrue(connected)
         assertEquals(2, fakeRepository.connectCount)
-        assertEquals(1, fakeRepository.resetCount)
+        assertEquals(0, fakeRepository.resetCount)
+        // The error ends attempt 1 at once; it does not sit out the 30 s timeout.
+        assertTrue("took ${testScheduler.currentTime} ms", testScheduler.currentTime < 1_000L)
     }
 
     // ── Definitive verdict vs. transient failure ──────────────────────
@@ -220,6 +275,25 @@ override suspend fun disconnect() {
         assertEquals(2, fakeRepository.connectCount)
     }
 
+    @Test
+    fun `a refused protocol version does not spend a second attempt`() = runTest(testDispatcher) {
+        // W16AAPPLE-12: attempt 2 would send the same OIP descriptor, be
+        // refused again, and put a second copy of the error in front of the user.
+        val useCase = newUseCase()
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.state.value = ConnectionState.Error(
+                message = ServerErrorText.incompatibleProtocol(hostProtocol = "oip/0.2", clientProtocol = "oip/0.1"),
+                retryable = false
+            )
+        }
+
+        val connected = useCase.connect(validAddress)
+
+        assertFalse(connected)
+        assertEquals("one CONNECT, one refusal", 1, fakeRepository.connectCount)
+        assertEquals(0, fakeRepository.resetCount)
+    }
+
     // ── Both attempts fail ────────────────────────────────────────────
 
     @Test
@@ -236,7 +310,26 @@ override suspend fun disconnect() {
 
         assertFalse(connected)
         assertEquals(2, fakeRepository.connectCount)
-        assertEquals(1, fakeRepository.resetCount)
+        assertEquals(0, fakeRepository.resetCount)
+    }
+
+    @Test
+    fun `the second attempt reuses the conversation's session and clears nothing`() = runTest(testDispatcher) {
+        // W16AAPPLE-84: reset() deleted the stored session and the messages queued
+        // offline, for a retry that then sent the same session id anyway.
+        val useCase = newUseCase()
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.state.value = ConnectionState.Error(message = "Network unreachable")
+        }
+        fakeRepository.connectBehaviors.add {
+            fakeRepository.state.value = ConnectionState.Connected(address = validAddress)
+        }
+
+        val connected = useCase.connect(validAddress, conversationId = "conv-1", directUrl = null)
+
+        assertTrue(connected)
+        assertEquals(listOf<String?>("conv-1", "conv-1"), fakeRepository.connectedConversations)
+        assertEquals("nothing may be cleared between attempts", 0, fakeRepository.resetCount)
     }
 
     // ── Onboard-required short-circuit ─────────────────────────────────
@@ -290,6 +383,31 @@ override suspend fun disconnect() {
         assertTrue(fakeRepository.disconnectCount >= 1)
     }
 
+    @Test
+    fun `a timeout gives up on the attempt but keeps the messages queued while it ran`() = runTest(testDispatcher) {
+        // W16AAPPLE-102: offline at startup this timeout is the normal outcome,
+        // and the outbox is what has to survive it.
+        val useCase = newUseCase(connectionTimeoutMs = 200L)
+
+        useCase.connect(validAddress)
+
+        assertTrue(fakeRepository.disconnectKeptOutbox.isNotEmpty())
+        assertTrue(
+            "every timeout disconnect must keep the outbox: ${fakeRepository.disconnectKeptOutbox}",
+            fakeRepository.disconnectKeptOutbox.all { it }
+        )
+    }
+
+    @Test
+    fun `a user disconnect still drops the outbox`() = runTest(testDispatcher) {
+        val useCase = newUseCase(connectionTimeoutMs = 200L)
+        useCase.connect(validAddress)
+
+        useCase.disconnect()
+
+        assertEquals(false, fakeRepository.disconnectKeptOutbox.last())
+    }
+
     // ── Forwarders / lifecycle ────────────────────────────────────────
 
     @Test
@@ -341,4 +459,26 @@ override suspend fun disconnect() {
         // the use case doesn't discard and recreate on every access.
         assertEquals(1, fakeRepository.connectCount)
     }
+
+    @Test
+    fun `executeTool forwards request and returns repository outcome`() =
+        runTest(testDispatcher) {
+            val useCase = newUseCase()
+            val request = ExecRequest(
+                execId = "exec-1",
+                tool = "shell",
+                argsJson = """{"command":"pwd"}""",
+                agentAddress = validAddress
+            )
+            val expected = ExecOutcome.Error(
+                message = "Command failed",
+                durationMs = 15.0
+            )
+            fakeRepository.execOutcome = expected
+
+            val actual = useCase.executeTool(request)
+
+            assertEquals(request, fakeRepository.lastExecRequest)
+            assertEquals(expected, actual)
+        }
 }

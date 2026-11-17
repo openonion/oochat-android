@@ -1,7 +1,7 @@
 package ai.openonion.oochat.ui.dashboard
 
-import ai.openonion.oochat.ui.components.BackTopAppBar
 import ai.openonion.oochat.ui.components.EmptyStateMessage
+import ai.openonion.oochat.ui.home.HomeTopBar
 import ai.openonion.oochat.ui.theme.spacing
 import ai.openonion.oochat.util.FileLogger
 import ai.openonion.oochat.util.LogTags
@@ -27,10 +27,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,6 +39,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The connected agent's Home page: the `dashboard.html` it wrote for itself,
@@ -58,8 +61,12 @@ import androidx.compose.ui.unit.dp
  * @param agentName Titles the bar. This is *an agent's* page, and its name is
  *   the only thing that can say which — "Home" alone named nothing.
  * @param chatAwaitsUser The conversation is parked on something only the user
- *   can answer. This screen replaces the chat, so without saying so the run
- *   stalls out of sight — see [ChatViewModel.chatAwaitsUser].
+ *   can answer. On a screen of its own this replaces the chat, so without
+ *   saying so the run stalls out of sight — see [ChatViewModel.chatAwaitsUser].
+ * @param besideChat The page is next to the chat, not in place of it. There is
+ *   then no way back to show, and no waiting notice, since the chat is in view.
+ * @param buildDispatcher Where a snapshot is wrapped. For tests, which hold
+ *   it back to see the screen draw before the document is ready.
  */
 @Composable
 fun DashboardScreen(
@@ -69,7 +76,9 @@ fun DashboardScreen(
     onNavigateBack: () -> Unit,
     agentName: String? = null,
     chatAwaitsUser: Boolean = false,
-    modifier: Modifier = Modifier
+    besideChat: Boolean = false,
+    modifier: Modifier = Modifier,
+    buildDispatcher: CoroutineDispatcher = DashboardBuildDispatcher
 ) {
     // A fallback for pages that declare no background of their own; one that
     // does still wins, since its rule comes later in the document. Resolved
@@ -80,15 +89,25 @@ fun DashboardScreen(
     // A new snapshot is a new document with a new nonce; an unchanged snapshot
     // keeps the one already loaded, so a run that didn't touch the dashboard
     // leaves it exactly as it was.
-    val document = remember(html, surfaceCss, onSurfaceCss) {
-        html?.let {
-            DashboardDocument.build(it, DashboardDocument.generateNonce(), surfaceCss, onSurfaceCss)
+    //
+    // Built off the main thread: a snapshot can be 2 MiB, and copying it into
+    // the wrapper must not cost frames. Until the new document is ready the
+    // previous one stays in place, so a newer snapshot replaces an older one
+    // with no empty state in between.
+    val built by produceState<String?>(initialValue = null, html, surfaceCss, onSurfaceCss) {
+        value = html?.let {
+            withContext(buildDispatcher) {
+                DashboardDocument.build(it, DashboardDocument.generateNonce(), surfaceCss, onSurfaceCss)
+            }
         }
     }
+    // A cleared snapshot is cleared now, not one frame later.
+    val document = if (html == null) null else built
     var navigationBlocked by remember(document) { mutableStateOf(false) }
 
     DashboardScreenContent(
         document = document,
+        building = html != null && document == null,
         allowedSkills = allowedSkills,
         onRunSkill = onRunSkill,
         onNavigateBack = onNavigateBack,
@@ -97,9 +116,16 @@ fun DashboardScreen(
         navigationBlocked = navigationBlocked,
         onNavigationBlocked = { navigationBlocked = true },
         onDismissNavigationBlocked = { navigationBlocked = false },
+        besideChat = besideChat,
         modifier = modifier
     )
 }
+
+/**
+ * Where [DashboardScreen] wraps a snapshot unless told otherwise. Never the
+ * main thread: a snapshot can be 2 MiB.
+ */
+internal val DashboardBuildDispatcher: CoroutineDispatcher = Dispatchers.Default
 
 /**
  * The presentational half of [DashboardScreen] — every bit of state hoisted
@@ -117,18 +143,18 @@ internal fun DashboardScreenContent(
     navigationBlocked: Boolean,
     onNavigationBlocked: () -> Unit,
     onDismissNavigationBlocked: () -> Unit,
-    modifier: Modifier = Modifier
+    besideChat: Boolean = false,
+    modifier: Modifier = Modifier,
+    building: Boolean = false
 ) {
     Scaffold(
         modifier = modifier,
         topBar = {
             Column {
-                BackTopAppBar(
+                HomeTopBar(
                     title = agentName?.takeIf { it.isNotBlank() } ?: "Agent home",
-                    onNavigateBack = onNavigateBack,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    besideChat = besideChat,
+                    onNavigateBack = onNavigateBack
                 )
                 // Both bars are pinned here, not inside the scrollable content:
                 // the page is arbitrary HTML of any length, and a notice that
@@ -139,7 +165,7 @@ internal fun DashboardScreenContent(
                 // The nav-blocked notice is merely informational and
                 // dismissible, so it stacks below rather than displacing the
                 // bar that actually matters.
-                if (chatAwaitsUser) ChatAwaitsUserBar(onNavigateBack = onNavigateBack)
+                if (chatAwaitsUser && !besideChat) ChatAwaitsUserBar(onNavigateBack = onNavigateBack)
                 if (navigationBlocked) NavigationBlockedBar(onDismiss = onDismissNavigationBlocked)
                 // The page below is the agent's own document and usually
                 // brings its own palette, so its edge against our chrome is a
@@ -151,6 +177,10 @@ internal fun DashboardScreenContent(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
+                // The first snapshot is still being wrapped. Usually a frame
+                // or two; claiming there is no page would be wrong.
+                document == null && building -> Unit
+
                 document == null -> DashboardNotice(
                     // Nothing on the wire says "this agent has no dashboard" —
                     // the host simply never sends one. Reaching this screen at
@@ -185,7 +215,7 @@ internal fun DashboardScreenContent(
  * not to read.
  */
 @Composable
-private fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
+internal fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -222,7 +252,7 @@ private fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
  * link. The page stays visible underneath.
  */
 @Composable
-private fun NavigationBlockedBar(onDismiss: () -> Unit) {
+internal fun NavigationBlockedBar(onDismiss: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
