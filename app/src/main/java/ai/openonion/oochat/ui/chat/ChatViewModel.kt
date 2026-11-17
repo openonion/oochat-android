@@ -21,6 +21,7 @@ import ai.openonion.oochat.domain.model.ConnectionState
 import ai.openonion.oochat.domain.model.SessionUsageTotals
 import ai.openonion.oochat.domain.model.ThinkingStatus
 import ai.openonion.oochat.domain.model.UserMessageState
+import ai.openonion.oochat.domain.model.canonicalAgentAddress
 import ai.openonion.oochat.domain.model.createError
 import ai.openonion.oochat.domain.model.dedupeUI
 import ai.openonion.oochat.domain.model.isInProgress
@@ -627,8 +628,12 @@ open class ChatViewModel @JvmOverloads constructor(
                         // not a server-sent ERROR frame (those route to
                         // ChatEvent.ConnectionErrorOccurred instead).
                         // Stale-session errors auto-recovery is invisible, so
-                        // skip persisting the transient error.
-                        if (!StaleSessionDetector.isStaleSessionError(state.message)) {
+                        // skip persisting the transient error. Only a retryable
+                        // one can be that: a non-retryable error is final and is
+                        // the one thing the user must see, and its text can carry
+                        // the Host's own words (the OIP version rejection), which
+                        // must not be able to match the detector and hide it.
+                        if (!state.retryable || !StaleSessionDetector.isStaleSessionError(state.message)) {
                             if (!failRunningThinking(content = state.message)) {
                                 appendStandaloneError(state.message)
                             }
@@ -909,7 +914,11 @@ open class ChatViewModel @JvmOverloads constructor(
         val forceNew = startFreshOnNextConnect
         startFreshOnNextConnect = false
         restoreLocalSession(agentAddress, forceNew)
-        _awaitingOnboardCode.value = false
+        // Only once the agent has let us in. connect() also returns true when
+        // ONBOARD_REQUIRED won its race, and clearing this then put the banner
+        // back to "Connecting to agent…" over a gate still waiting for a code
+        // (W16AAPPLE-80). The Connected transition reaches here again.
+        if (connectionState.value is ConnectionState.Connected) _awaitingOnboardCode.value = false
     }
 
     /**
@@ -922,7 +931,20 @@ open class ChatViewModel @JvmOverloads constructor(
     private suspend fun restoreLocalSession(agentAddress: String, forceNew: Boolean) {
         when (val resume = conversationHistory.ensureActiveSession(agentAddress, viewModelScope, forceNew)) {
             is SessionResume.Unchanged -> {}
-            is SessionResume.Started -> _uiState.update { it.copy(chatItems = emptyList()) }
+            // A new conversation starts empty, except for an onboarding gate
+            // still waiting on the user. It belongs to the connection, not
+            // the conversation: the agent answers nothing until it is
+            // answered. On a first connect to an agent not saved yet, the
+            // card lands before this runs, and wiping it left no way to enter
+            // the code (W16AAPPLE-80).
+            is SessionResume.Started -> _uiState.update { state ->
+                val openGate = if (state.listFlags.hasOnboardSuccess) {
+                    emptyList()
+                } else {
+                    state.chatItems.filter { it is ChatItem.OnboardRequired || it is ChatItem.OnboardingFailed }
+                }
+                state.copy(chatItems = openGate)
+            }
             is SessionResume.Resumed -> {
                 val merged = trimToRetentionWindow(
                     (resume.items + _uiState.value.chatItems).dedupeUI()
@@ -1270,7 +1292,11 @@ open class ChatViewModel @JvmOverloads constructor(
         launchScoped { conversationHistory.persistMessage(item) }
     }
 
-    private suspend fun saveAgentIfNeeded(address: String, directUrl: String?) {
+    private suspend fun saveAgentIfNeeded(agentAddress: String, directUrl: String?) {
+        // Saved in the same form as every other path saves it. The lookup
+        // ignores case anyway, but a row saved as typed kept capitals the
+        // rest of the app no longer writes (W16AAPPLE-57).
+        val address = canonicalAgentAddress(agentAddress)
         runCatchingCancellable {
             val existing = agentRepository.getAgentByAddress(address)
             if (existing == null) {
