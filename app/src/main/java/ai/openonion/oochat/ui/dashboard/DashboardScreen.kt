@@ -21,12 +21,14 @@ import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -69,6 +71,7 @@ fun DashboardScreen(
     onNavigateBack: () -> Unit,
     agentName: String? = null,
     chatAwaitsUser: Boolean = false,
+    besideChat: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     // A fallback for pages that declare no background of their own; one that
@@ -97,6 +100,7 @@ fun DashboardScreen(
         navigationBlocked = navigationBlocked,
         onNavigationBlocked = { navigationBlocked = true },
         onDismissNavigationBlocked = { navigationBlocked = false },
+        besideChat = besideChat,
         modifier = modifier
     )
 }
@@ -117,18 +121,17 @@ internal fun DashboardScreenContent(
     navigationBlocked: Boolean,
     onNavigationBlocked: () -> Unit,
     onDismissNavigationBlocked: () -> Unit,
+    besideChat: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
         modifier = modifier,
         topBar = {
             Column {
-                BackTopAppBar(
+                HomeTopBar(
                     title = agentName?.takeIf { it.isNotBlank() } ?: "Agent home",
-                    onNavigateBack = onNavigateBack,
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
+                    besideChat = besideChat,
+                    onNavigateBack = onNavigateBack
                 )
                 // Both bars are pinned here, not inside the scrollable content:
                 // the page is arbitrary HTML of any length, and a notice that
@@ -139,7 +142,7 @@ internal fun DashboardScreenContent(
                 // The nav-blocked notice is merely informational and
                 // dismissible, so it stacks below rather than displacing the
                 // bar that actually matters.
-                if (chatAwaitsUser) ChatAwaitsUserBar(onNavigateBack = onNavigateBack)
+                if (chatAwaitsUser && !besideChat) ChatAwaitsUserBar(onNavigateBack = onNavigateBack)
                 if (navigationBlocked) NavigationBlockedBar(onDismiss = onDismissNavigationBlocked)
                 // The page below is the agent's own document and usually
                 // brings its own palette, so its edge against our chrome is a
@@ -179,13 +182,28 @@ internal fun DashboardScreenContent(
 }
 
 /**
+ * The Home page's title bar. On its own screen it has the way back to the chat; beside the chat
+ * there is nothing to go back to, so it is only the title.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun HomeTopBar(title: String, besideChat: Boolean, onNavigateBack: () -> Unit) {
+    val colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+    if (besideChat) {
+        TopAppBar(title = { Text(title) }, colors = colors)
+    } else {
+        BackTopAppBar(title = title, onNavigateBack = onNavigateBack, colors = colors)
+    }
+}
+
+/**
  * The one thing on this screen that is about the conversation rather than the
  * page. Tinted rather than plain because a stalled run is the reader's problem
  * to resolve, and the whole row is the tap target — the point is to get back,
  * not to read.
  */
 @Composable
-private fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
+internal fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -222,7 +240,7 @@ private fun ChatAwaitsUserBar(onNavigateBack: () -> Unit) {
  * link. The page stays visible underneath.
  */
 @Composable
-private fun NavigationBlockedBar(onDismiss: () -> Unit) {
+internal fun NavigationBlockedBar(onDismiss: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
