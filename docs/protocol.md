@@ -31,7 +31,9 @@ After a transient socket failure or close, `AgentConnection` retries up to five
 times with exponential delays of 2, 4, 8, 16, and 32 seconds. It emits a
 `ConnectionEvent.Reconnecting` while retrying. A pending onboarding gate
 suppresses automatic reconnects until the user acts, and a rejected onboarding
-submission opens a fresh connection so the server can send a new gate.
+submission opens a fresh connection so the server can send a new gate. A Host
+that refuses the client's OIP version ends the cycle with no reconnect at all;
+see [Incompatible protocol version](#incompatible-protocol-version).
 
 ## Client to server frames
 
@@ -47,6 +49,7 @@ They are `@Serializable` Kotlin data classes and are encoded with
 | Field | Meaning |
 | --- | --- |
 | `type` | Always `"CONNECT"`. |
+| `protocol` | The OIP protocol descriptor, `OipProtocol.DESCRIPTOR`. See below. |
 | `payload` | `ConnectPayload(timestamp, to)`; this is the signed payload. |
 | `from` | The local Ed25519 address. |
 | `signature` | Hex Ed25519 signature over the canonical payload JSON. |
@@ -59,6 +62,80 @@ They are `@Serializable` Kotlin data classes and are encoded with
 `KeyManager.canonicalJson()` followed by `KeyManager.sign()` to create the
 signature. Keeping one timestamp for the signed payload and envelope avoids a
 signature mismatch.
+
+#### Protocol descriptor
+
+Every `CONNECT`, including the one re-sent after an onboarding gate, declares
+the OIP version the client speaks:
+
+```json
+"protocol": {"name": "oip", "version": "0.1", "min_version": "0.1", "max_version": "0.1"}
+```
+
+The descriptor is defined once, in
+`app/src/main/java/ai/openonion/oochat/data/protocol/OipProtocol.kt`, and
+matches `OIP_PROTOCOL` in `connectonion-react`'s `src/connect/protocol.ts`.
+It sits at the top level of the envelope and is not signed. The Host reads
+`data.get("protocol")` from the envelope and verifies the signature over
+`payload` alone, so adding the descriptor does not change the signed bytes.
+
+The Host compares only `name` and `version`, in `supports_oip()` in
+`connectonion/network/host/protocol.py`. It accepts a `CONNECT` with no
+descriptor only during the rolling compatibility window. That window covers
+1.7.x and may close no earlier than 1.8.0a1 (2026-09-15). If the Host does not
+support the declared version, it answers with a non-retryable
+`{"type":"ERROR","code":-32010,"message":"Unsupported OIP protocol","retryable":false,"protocol":{…}}`.
+The client treats that as final; see
+[Incompatible protocol version](#incompatible-protocol-version).
+
+Covered by `OutgoingMessagesTest`, which checks the serialised `CONNECT`
+frame, and by `AgentConnectionRobolectricTest`, which checks the frame sent
+when the socket opens, the frame re-sent after onboarding, and that the
+descriptor is not part of the signed payload.
+
+#### Incompatible protocol version
+
+When the Host refuses the descriptor, the client shows one error and does not
+reconnect on its own. Retrying would send the same descriptor and be refused
+the same way, so each attempt would cost battery and add another copy of the
+error.
+
+1. `ProtocolParser` turns an `ERROR` whose `code` is `-32010`
+   (`OipProtocol.UNSUPPORTED_VERSION_CODE`) into
+   `ConnectionEvent.ProtocolRejected`. The event carries the Host's version
+   from the frame's `protocol` descriptor, for example `oip/0.2`, or null if
+   the descriptor is missing or malformed. The name and version are
+   peer-controlled and end up in `app.log` and in the error text, so anything
+   other than a short token (letters, digits, `.`, `_`, `+`, `-`, at most 32
+   characters) also reads as null. Every other `ERROR`, including ones with a
+   string `code`, stays a `ConnectionError`.
+2. `AgentConnection` marks the cycle as rejected, cancels any scheduled
+   reconnect, and closes the socket itself. The Host leaves the socket open
+   after its `ERROR`, and a later drop would otherwise start the reconnect
+   ladder. While the cycle is rejected, `attemptReconnect()`, `retryNow()` and
+   the socket reopen behind a conversation switch do nothing. That covers
+   socket drops, the network coming back, the app returning to the
+   foreground, and a switch that raced the refusal. Only a new `connect()`,
+   meaning the user trying again, clears the flag.
+3. `ConnectionRepositoryImpl` publishes
+   `ConnectionState.Error(retryable = false)` with the message from
+   `ServerErrorText.incompatibleProtocol()`, for example: "This agent uses a
+   different version of the chat protocol (oip/0.2) than this app (oip/0.1).
+   Update the app or the agent, then reconnect." It does this even if the
+   attempt had already connected, because an auto-reconnect after a Host
+   upgrade can be the `CONNECT` that is refused.
+4. `ConnectToAgentUseCase` does not make its usual second attempt after a
+   non-retryable error.
+5. `ChatViewModel` adds the message to the chat once. Its stale-session
+   suppression applies only to retryable errors, so a Host version that
+   happens to read like a stale-session error cannot hide the message.
+   `ConnectionBanner` titles the error "Incompatible version" rather than
+   "Connection failed", and keeps its Reconnect action: nothing recovers on its
+   own, and once the app or the agent is updated, that is the user's way back.
+
+Covered by `ProtocolParserVersionRejectionTest`, by the W16AAPPLE-12 section of
+`AgentConnectionRobolectricTest`, and by `ConnectionRepositoryImplTest`,
+`ConnectToAgentUseCaseTest`, `ServerErrorTextTest`, `ChatViewModelTest`, and `ConnectionBannerTest`.
 
 When reconnecting, `ConnectionRepositoryImpl` restores the saved
 `SessionState` through `SessionStore`, calls `AgentConnection.setSession()`,
@@ -140,8 +217,9 @@ types are returned as `ConnectionEvent.Unknown` and do not alter the chat.
 | `plan_review` | `id`, `plan_content` | Creates a `ChatItem.PlanReviewItem` and enters a waiting state until the user answers with `PLAN_REVIEW_RESPONSE`. |
 | `files_received` | `id`, `files[].name`, `files[].path` | Creates a `ChatItem.FilesReceivedItem` listing files the agent returned; an absent `files` array yields an empty list. |
 | `ulw_turns_reached` | `id`, `turns_used`, `max_turns` | Creates a `ChatItem.UlwTurnsReachedItem` and enters a waiting state until the user answers with `ULW_RESPONSE`. Both counters default to `0`. |
+| `RUNTIME_INPUT_ACK` | `session_id`, `id` | Emits `ConnectionEvent.RuntimeInputAcknowledged`: the host queued an `INPUT` that arrived mid-turn for the running turn's next iteration. `id` is the host's own UUID for the queued item, **not** the `input_id` we sent, so it cannot name the message it answers — see [Runtime input](#runtime-input). Not an `OUTPUT`: it does not end the turn. |
 | `OUTPUT` | `input_id`, `result`, `session` | Emits the final output when it belongs to the current input, or for any direct connection; updates the session snapshot. |
-| `ERROR` | `message`, `error` | Emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
+| `ERROR` | `code`, `protocol`, `retryable`, `session_id`, `message`, `error` | With `code` `-32010`, emits `ProtocolRejected` (see [Incompatible protocol version](#incompatible-protocol-version)). With `code` `"RUNTIME_INPUT_REJECTED"`, emits `RuntimeInputRejected` instead of an error: the socket and the running turn are healthy, and `ConnectionError` could start the reconnect ladder (see [Runtime input](#runtime-input)). `retryable` is read as true only for a literal boolean `true`. Every other `ERROR` emits `ConnectionError` using `message`, then `error`, then `"Unknown error"`. |
 
 For `assistant`, `thinking` text, `agent_image`, and `session_sync`, the parser
 uses `stableAssistantId()` to make replayed messages idempotent. This prevents
@@ -152,6 +230,67 @@ omits it the parser generates a UUID, so that frame cannot be correlated with a
 later update for the same item. `llm_result` and `tool_result` are stricter:
 with no `id` (or `tool_id`) there is nothing to update, so they parse to
 `ConnectionEvent.Unknown` rather than inventing one.
+
+## Runtime input
+
+An `INPUT` that reaches a host while that session's agent is running is treated
+as *runtime input* instead of starting a second turn. The host replies at once,
+on the same socket, with one of two frames:
+
+| Host reply | Meaning | Wire shape |
+| --- | --- | --- |
+| `RUNTIME_INPUT_ACK` | Queued for the running turn. | `{"type":"RUNTIME_INPUT_ACK","session_id":"…","id":"<host uuid>"}` |
+| `ERROR` + `RUNTIME_INPUT_REJECTED` | Not taken (the turn is sealed, or the agent lacks the `runtime_input` plugin). Nothing was queued. | `{"type":"ERROR","code":"RUNTIME_INPUT_REJECTED","message":"…","session_id":"…","retryable":true}` |
+
+Source of truth: `ws_router/session.py` in openonion/connectonion, which sends
+the ACK only after `push_runtime_input` accepted the text.
+
+**Linking a reply to its message.** Neither frame carries the `input_id` we
+sent: the ACK's `id` is minted by the host. A reply can therefore only be
+linked by there being exactly one candidate. `ChatViewModel` allows one message
+awaiting an answer at a time (`pendingRuntimeInput`) and holds its send lock
+until that answer arrives or `RUNTIME_INPUT_REPLY_TIMEOUT_MS` passes, so the next
+message cannot go out while one is owed. A reply can never be handed to the wrong
+message, even when the client was wrong about a turn running and the host never
+answers.
+
+The message is registered *before* the `INPUT` leaves: the host answers the
+moment it reads it, and a reply that beat the registration would find nobody
+waiting. Only mid-turn sends are registered; an `INPUT` to an idle agent starts a
+turn and gets no such reply.
+
+**Bubble state (`UserMessageState`).** A message sent into a running turn shows
+`AWAITING_ACK` ("Sending…") until the host answers:
+
+| Event | Result |
+| --- | --- |
+| `RUNTIME_INPUT_ACK` | `SENT` |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (first time) | `QUEUED`, then held until the turn's `OUTPUT` and sent again as an ordinary `INPUT`. The same bubble is reused and the same payload is sent, images and files included. |
+| `RUNTIME_INPUT_REJECTED`, `retryable: true` (second time) | `FAILED` (tap to resend). A message is repeated once, never in a loop. |
+| `RUNTIME_INPUT_REJECTED`, not retryable | `FAILED` (tap to resend) |
+| `OUTPUT` with no reply | `SENT`. The host answers a runtime `INPUT` immediately, so silence until `OUTPUT` means the message reached an agent that had just gone idle and started its own turn. |
+| No reply within `RUNTIME_INPUT_REPLY_TIMEOUT_MS` | `SENT`, for the same reason. |
+| Any other `ERROR` frame | No change. It says nothing about whether the host took this message; the host's own refusal arrives as its own event. |
+| Disconnect / reconnect | `FAILED`. No reply can arrive on a dead socket and whether the host queued it is unknown. |
+
+**When this happens at all.** `ChatViewModel.sendWhenTheAgentIsIdle` still holds
+ordinary messages until the running turn ends (see `architecture.md`), so a
+message only goes out mid-turn when that hold times out
+(`ChatViewModel.TURN_WAIT_TIMEOUT_MS`) or the client's view of the turn was
+stale. The ACK handling is what makes that path honest rather than silent.
+A message with images or files is never sent into a running turn, because the
+host’s runtime-input queue keeps only the text. It is held until the turn ends.
+If the turn is still running after 2 minutes, the message is marked failed
+(tap to resend) rather than sent or held forever.
+
+**Known gaps.**
+
+- A reply that arrives with nothing awaiting it is logged and ignored. If a
+  refusal crossed the turn's `OUTPUT` on the wire, the `OUTPUT` has already
+  settled the message as `SENT` and the refusal cannot be attributed, so that
+  message is not resent.
+- Hosts older than the change that made the ACK truthful acknowledge input they
+  never drain. Nothing on the wire identifies such a host.
 
 ## Session state and recovery
 

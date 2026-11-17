@@ -1,5 +1,6 @@
 package ai.openonion.oochat.network
 
+import ai.openonion.oochat.data.protocol.OipProtocol
 import ai.openonion.oochat.data.protocol.ServerEvent
 import ai.openonion.oochat.data.protocol.SessionState
 import ai.openonion.oochat.data.protocol.SkillWire
@@ -18,7 +19,9 @@ import ai.openonion.oochat.util.LogSanitizer
 import ai.openonion.oochat.util.LogTags
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * Pure function for parsing WebSocket messages into ConnectionEvents.
@@ -466,11 +469,46 @@ object ProtocolParser {
                 }
             }
 
-            "ERROR" -> ParseResult(
-                event = ConnectionEvent.ConnectionError(
-                    message = event.message ?: event.error ?: "Unknown error"
+            // The host took an INPUT that arrived mid-turn as runtime input and
+            // queued it for the running turn's next iteration — see
+            // ws_router/session.py, which sends this only when
+            // `push_runtime_input` accepted it. `id` is a UUID the *host*
+            // minted for the queued item, not the `input_id` we sent, so it
+            // cannot name which of our messages this answers. The frame is
+            // sent immediately and in order, so the caller links it by order;
+            // see ConnectionEvent.RuntimeInputAcknowledged.
+            "RUNTIME_INPUT_ACK" -> ParseResult(
+                event = ConnectionEvent.RuntimeInputAcknowledged(
+                    sessionId = event.sessionId,
+                    hostInputId = event.id
                 )
             )
+
+            "ERROR" -> when (event.code) {
+                // The Host refused our OIP version: final for the connection.
+                OipProtocol.UNSUPPORTED_VERSION_CODE ->
+                    ParseResult(event = ConnectionEvent.ProtocolRejected(hostProtocol = describeProtocol(event.protocol)))
+
+                // A runtime input the running turn would not take. Not a
+                // ConnectionError: the socket is healthy and the agent is still
+                // working; ConnectionError clears outstanding input ids and can
+                // start the reconnect ladder.
+                RUNTIME_INPUT_REJECTED ->
+                    ParseResult(
+                        event = ConnectionEvent.RuntimeInputRejected(
+                            sessionId = event.sessionId,
+                            retryable = event.isRetryable,
+                            message = event.message
+                        )
+                    )
+
+                else ->
+                    ParseResult(
+                        event = ConnectionEvent.ConnectionError(
+                            message = event.message ?: event.error ?: "Unknown error"
+                        )
+                    )
+            }
 
             // Plugin-initiated mode switch (ULW enter/exit, tool_approval's
             // _set_mode, plan_mode enter/exit) — see ServerEvent.mode's own
@@ -580,7 +618,26 @@ object ProtocolParser {
      */
     const val MAX_DASHBOARD_HTML_CHARS = 2 * 1024 * 1024
 
+    /** `code` of the ERROR frame a host sends when a running turn refuses runtime input. */
+    const val RUNTIME_INPUT_REJECTED = "RUNTIME_INPUT_REJECTED"
+
     private fun generateId(): String = java.util.UUID.randomUUID().toString()
+
+    /**
+     * "oip/0.2" from a Host descriptor, or null when it names no version.
+     *
+     * Peer-controlled text bound for app.log and for an error the app words
+     * as its own, so only a short protocol token is echoed; anything else
+     * reads as undeclared. The Host's own compatibility log refuses to copy
+     * these strings for the same reason (protocol.py).
+     */
+    private fun describeProtocol(descriptor: JsonElement?): String? {
+        val fields = descriptor as? JsonObject ?: return null
+        val version = (fields["version"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val name = (fields["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: OipProtocol.NAME
+        if (!PROTOCOL_TOKEN.matches(name) || !PROTOCOL_TOKEN.matches(version)) return null
+        return "$name/$version"
+    }
 
     /**
      * Wire skills to domain skills. Nameless entries are dropped — there is
@@ -608,6 +665,9 @@ object ProtocolParser {
 
     /** What the host emits for a skill whose file has no summary — see [toAgentSkills]. */
     private const val NO_DESCRIPTION_PLACEHOLDER = "No description"
+
+    /** A protocol name or version short and plain enough to echo — see [describeProtocol]. */
+    private val PROTOCOL_TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,31}")
 
     /**
      * Drops the entries of a nested wire list that carry nothing renderable,
@@ -707,7 +767,38 @@ sealed class ConnectionEvent {
      * values come from.
      */
     data class SessionStatusReceived(val sessionId: String?, val status: String) : ConnectionEvent()
+
+    /**
+     * `RUNTIME_INPUT_ACK` — the host accepted an INPUT that arrived while the
+     * agent was running and queued it for the running turn.
+     *
+     * [hostInputId] is the host's own id for the queued item. It is **not**
+     * the `input_id` of the INPUT that was sent, so it cannot be matched to a
+     * message by value. The host answers each runtime INPUT immediately and in
+     * the order received, so the oldest message still awaiting an answer is
+     * the one this acknowledges.
+     */
+    data class RuntimeInputAcknowledged(val sessionId: String?, val hostInputId: String?) : ConnectionEvent()
+
+    /**
+     * `ERROR` with `code: RUNTIME_INPUT_REJECTED` — the running turn is not
+     * taking runtime input (it is sealed, or the agent lacks the
+     * `runtime_input` plugin). Nothing was queued. [retryable] is the host's
+     * word that the same text will be accepted as an ordinary INPUT once the
+     * turn's OUTPUT lands. Answers the oldest awaiting message, like
+     * [RuntimeInputAcknowledged].
+     */
+    data class RuntimeInputRejected(val sessionId: String?, val retryable: Boolean, val message: String?) : ConnectionEvent()
     data class ConnectionError(val message: String) : ConnectionEvent()
+    /**
+     * The Host rejected this client's OIP version (ERROR code -32010). Final
+     * for the connection: retrying sends the same descriptor and is refused
+     * the same way, so nothing reconnects automatically after it.
+     *
+     * @param hostProtocol the version the Host speaks, as "oip/0.2", or null
+     *   when its descriptor was missing or unreadable.
+     */
+    data class ProtocolRejected(val hostProtocol: String?) : ConnectionEvent()
     data object Disconnected : ConnectionEvent()
     data object Reconnecting : ConnectionEvent()
     data object Waiting : ConnectionEvent()
